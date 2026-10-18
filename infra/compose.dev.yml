@@ -1,0 +1,26 @@
+# ════════════════════════════════════════════════════════
+# infra/compose.dev.yml — PostgreSQL محلية للتطوير فقط
+# التشغيل: docker compose -f infra/compose.dev.yml up -d
+# الإيقاف: docker compose -f infra/compose.dev.yml down
+# ════════════════════════════════════════════════════════
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: qemma_dev_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-qemma_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_local_only}
+      POSTGRES_DB: ${POSTGRES_DB:-qemma_erp_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qemma_dev} -d ${POSTGRES_DB:-qemma_erp_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# مجلد data/ مُضاف في .gitignore — لا يُرفع إلى Git
