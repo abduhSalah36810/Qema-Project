@@ -1,7 +1,14 @@
 import '@/styles/index.css';
 import { OperationsBoard } from '@/features/operations-board/OperationsBoard';
 
-const NAV_ITEMS = ['التشغيل اليومي', 'المخازن', 'دفعات الإنتاج', 'الطلبات والتسليم', 'التقارير'];
+const NAV_ITEMS = [
+  'لوحة التشغيل',
+  'المخازن',
+  'الإنتاج والدفعات',
+  'المبيعات والطلبات',
+  'العملاء',
+  'التقارير',
+];
 
 export default function App() {
   return (
