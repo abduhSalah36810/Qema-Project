@@ -39,6 +39,16 @@ export interface DeliveryRow {
   statusLabel: string;
 }
 
+export interface MetricCard {
+  id: string;
+  title: string;
+  value: string;
+  sub: string;
+  badge?: string;
+  badgeVariant?: 'success' | 'warning' | 'info';
+  icon: string;
+}
+
 export interface AlertItem {
   id: string;
   iconVariant: 'red' | 'amber' | 'green' | 'blue';
@@ -48,6 +58,46 @@ export interface AlertItem {
   value: string;
   valueVariant?: 'amber' | 'muted';
 }
+
+// ─── كروت المؤشرات العلوية ────────────────────────────────────────
+export const DEMO_METRICS: MetricCard[] = [
+  {
+    id: 'm-1',
+    title: 'رصيد الخامات النشطة',
+    value: '١٢٤ صنفًا',
+    sub: '٣ خامات تقترب من حد الأمان',
+    badge: '٣ نواقص',
+    badgeVariant: 'warning',
+    icon: '🧵',
+  },
+  {
+    id: 'm-2',
+    title: 'الدفعات قيد التشغيل',
+    value: '٤ دفعات',
+    sub: '٥١٤ قطعة مستهدفة بالوردية',
+    badge: 'تعمل الآن',
+    badgeVariant: 'success',
+    icon: '⚡',
+  },
+  {
+    id: 'm-3',
+    title: 'المنتج التام الجاهز',
+    value: '٣ دفعات',
+    sub: 'جاهزة بمخزن التسليم والتعبئة',
+    badge: 'جاهز للاستلام',
+    badgeVariant: 'info',
+    icon: '📦',
+  },
+  {
+    id: 'm-4',
+    title: 'طلبات العملاء المستحقة',
+    value: '٥ طلبات',
+    sub: 'أقرب تسليم غدًا لشركة الندى',
+    badge: 'هذا الأسبوع',
+    badgeVariant: 'info',
+    icon: '🚚',
+  },
+];
 
 // ─── خط مراحل التشغيل ───────────────────────────────────────────
 export const DEMO_FLOW_STEPS: FlowStep[] = [
