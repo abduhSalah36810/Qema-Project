@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import '@/styles/index.css';
 import { OperationsBoard } from '@/features/operations-board/OperationsBoard';
 import { apiClient, ApiError } from '@/lib/api';
+import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
+import { SignInModal } from '@/features/auth/SignInModal';
 
 type ServerConnectionState =
   | { status: 'loading' }
@@ -26,12 +28,15 @@ const SIDEBAR_NAV: NavItem[] = [
   { id: 'settings',   name: 'إعدادات المصنع',    icon: '⚙️' },
 ];
 
-export default function App() {
+function AppContent() {
   const [activeNav, setActiveNav] = useState('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const [serverState, setServerState] = useState<ServerConnectionState>({
     status: 'loading',
   });
+
+  const { authState, user, isConfigured } = useAuth();
 
   const checkServerHealth = useCallback(async () => {
     setServerState({ status: 'loading' });
@@ -120,12 +125,35 @@ export default function App() {
         {/* ملف المستخدم أسفل الشريط الجانبي */}
         <div className="sidebar__footer">
           <div className="sidebar__user">
-            <div className="sidebar__avatar" aria-hidden>م</div>
+            <div className="sidebar__avatar" aria-hidden>
+              {user?.email ? user.email.charAt(0).toUpperCase() : '؟'}
+            </div>
             <div className="sidebar__user-details">
-              <span className="sidebar__user-name">محمود حسن</span>
-              <span className="sidebar__user-role">مدير المصنع · حساب تجريبي</span>
+              <span className="sidebar__user-name">
+                {user?.email || 'حساب تجريبي (غير مسجل)'}
+              </span>
+              <span className="sidebar__user-role">
+                {user
+                  ? `معرّف موثق: ${user.id.slice(0, 8)}...`
+                  : authState === 'unverified'
+                  ? 'جلسة غير مؤكدة من الخادم'
+                  : 'بيئة تجريبية · غير متصل بالمصنع'}
+              </span>
             </div>
           </div>
+          <button
+            type="button"
+            className="sidebar__auth-btn"
+            onClick={() => setAuthModalOpen(true)}
+          >
+            {user
+              ? 'إدارة الجلسة / الخروج'
+              : authState === 'unverified'
+              ? 'تأكيد الجلسة / الخروج'
+              : isConfigured
+              ? 'تسجيل الدخول'
+              : 'إعداد Supabase'}
+          </button>
         </div>
       </aside>
 
@@ -180,6 +208,35 @@ export default function App() {
               )}
             </div>
 
+            {/* شارة حالة المصادقة */}
+            <button
+              type="button"
+              className={`top-header__auth-badge ${
+                user
+                  ? 'top-header__auth-badge--active'
+                  : authState === 'unverified'
+                  ? 'top-header__auth-badge--amber'
+                  : ''
+              }`}
+              onClick={() => setAuthModalOpen(true)}
+              title={
+                user
+                  ? `مستخدم موثق (${user.email})`
+                  : authState === 'unverified'
+                  ? 'جلسة غير مؤكدة خادمياً'
+                  : 'تسجيل الدخول للنظام'
+              }
+            >
+              <span aria-hidden>{user ? '✓' : authState === 'unverified' ? '⚠️' : '🔒'}</span>
+              <span>
+                {user
+                  ? user.email || 'مستخدم موثق'
+                  : authState === 'unverified'
+                  ? 'جلسة غير مؤكدة'
+                  : 'تسجيل الدخول'}
+              </span>
+            </button>
+
             {/* شارة الوردية الحالية */}
             <div className="shift-indicator">
               <span className="shift-indicator__pulse" aria-hidden />
@@ -229,7 +286,9 @@ export default function App() {
           <div className="demo-strip" role="status">
             <span className="demo-strip__icon" aria-hidden>🔶</span>
             <span className="demo-strip__text">
-              بيئة تطوير ومعاينة تجريبية — جميع البيانات والأرقام المعروضة هي نماذج للعرض البصري فقط وليست بيانات تشغيل حقيقية.
+              {user
+                ? `جلسة عمل موثقة عبر Supabase & API — جميع بيانات الدفعات والمخازن أدناه هي نماذج للعرض البصري فقط، وليست محفوظة أو مرتبطة بقاعدة بيانات المصنع.`
+                : `بيئة معاينة تجريبية محلية — لم يتم تسجيل الدخول، وجميع البيانات والأرقام المعروضة هي نماذج بصرية غير محفوظة ولا تتصل بالمصنع.`}
             </span>
             {serverState.status === 'connected' && (
               <span className="demo-strip__api-tag">
@@ -241,6 +300,17 @@ export default function App() {
           <OperationsBoard />
         </main>
       </div>
+
+      {/* نافذة تسجيل الدخول وحالة الجلسة */}
+      <SignInModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

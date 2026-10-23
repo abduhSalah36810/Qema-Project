@@ -54,6 +54,9 @@ export const API_BASE_URL = getApiBaseUrl();
  * بناء الرابط الكامل للمسار المطلوب
  */
 export function buildApiUrl(path: string): string {
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return path;
+  }
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return API_BASE_URL ? `${API_BASE_URL}${cleanPath}` : cleanPath;
 }
@@ -77,10 +80,51 @@ export interface RequestOptions extends RequestInit {
   timeoutMs?: number;
 }
 
+let activeAccessToken: string | null = null;
+
+/**
+ * ضبط توكن الوصول (Access Token) الصادر من Supabase لاستخدامه تلقائياً في الترويسات
+ */
+export function setAccessToken(token: string | null): void {
+  activeAccessToken = token;
+}
+
+/**
+ * استرجاع توكن الوصول الحالي
+ */
+export function getAccessToken(): string | null {
+  return activeAccessToken;
+}
+
+export interface UserIdentity {
+  id: string;
+  email: string | null;
+}
+
+/**
+ * التحقق الأمني من أن الرابط المستهدف يتبع نطاق الـ API المعتمد حصراً
+ * لمنع تسريب توكن الوصول إلى أي روابط خارجية أو نطاقات أخرى
+ */
+export function isApiTarget(targetUrl: string): boolean {
+  if (targetUrl.startsWith('/') && !targetUrl.startsWith('//')) {
+    return true;
+  }
+  try {
+    const originFallback = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    const parsedTarget = new URL(targetUrl, originFallback);
+    const configuredApiOrigin = API_BASE_URL
+      ? new URL(API_BASE_URL, originFallback).origin
+      : originFallback;
+    return parsedTarget.origin === configuredApiOrigin;
+  } catch {
+    return false;
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 5000;
 
 /**
- * دالة الاستدعاء الشبكي المركزية مع دعم المهلة والتحقق من الأخطاء
+ * دالة الاستدعاء الشبكي المركزية مع دعم المهلة والتحقق من الأخطاء وتضمين التوكن المحمي
  */
 export async function apiRequest<T = unknown>(
   path: string,
@@ -92,11 +136,18 @@ export async function apiRequest<T = unknown>(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  // إرفاق التوكن حصراً للطلبات الموجهة لخادم الـ API المعتمد
+  const authHeaders: Record<string, string> = {};
+  if (activeAccessToken && isApiTarget(url)) {
+    authHeaders['Authorization'] = `Bearer ${activeAccessToken}`;
+  }
+
   try {
     const response = await fetch(url, {
       ...restOptions,
       headers: {
         Accept: 'application/json',
+        ...authHeaders,
         ...headers,
       },
       signal: controller.signal,
@@ -158,8 +209,29 @@ export async function getHealth(options?: { timeoutMs?: number }): Promise<Healt
   return data;
 }
 
+/**
+ * استدعاء مسار استرجاع الهوية الأدنى GET /api/v1/auth/me
+ */
+export async function getAuthMe(options?: { token?: string; timeoutMs?: number }): Promise<UserIdentity> {
+  const customHeaders: Record<string, string> = {};
+  if (options?.token) {
+    customHeaders['Authorization'] = `Bearer ${options.token}`;
+  }
+
+  return apiRequest<UserIdentity>('/api/v1/auth/me', {
+    method: 'GET',
+    headers: customHeaders,
+    timeoutMs: options?.timeoutMs,
+  });
+}
+
 export const apiClient = {
   getHealth,
+  getAuthMe,
+  setAccessToken,
+  getAccessToken,
+  isApiTarget,
   request: apiRequest,
   getBaseUrl: () => API_BASE_URL,
 };
+

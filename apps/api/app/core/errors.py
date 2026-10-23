@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -87,6 +88,21 @@ VALIDATION_TYPE_MESSAGES: Dict[str, str] = {
     "url_parsing": "رابط URL غير صالح.",
     "email_parsing": "صيغة البريد الإلكتروني غير صالحة.",
 }
+
+
+class ErrorResponse(BaseModel):
+    """
+    نموذج الاستجابة الموحدة للأخطاء (Safe API Error Schema).
+    يضمن توثيق بنية أخطاء HTTP الآمنة في OpenAPI دون كشف أي أسرار أو نصوص استثناءات داخلية.
+    """
+    code: str = Field(..., description="رمز تصنيف الخطأ الثابت (مثل UNAUTHORIZED أو NOT_FOUND)")
+    message: str = Field(..., description="رسالة الخطأ الآمنة باللغة العربية")
+    detail: str = Field(..., description="نص توضيحي متوافق مع معايير FastAPI العامة")
+    request_id: str = Field(..., description="معرّف تتبع الطلب الفريد (X-Request-ID)")
+    details: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="تفاصيل إضافية عن الحقول في حال أخطاء التحقق فقط دون كشف قيم حساسة",
+    )
 
 
 def get_status_code_identifier(status_code: int) -> str:

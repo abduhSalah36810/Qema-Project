@@ -36,14 +36,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# سياسة CORS مع إتاحة ترويسة X-Request-ID للواجهة الأمامية
+# سياسة CORS المقواة:
+# - نطاقات صريحة ومقيدة مستمدة من الإعدادات الخادمية (مع حظر النطاقات العامة '*' والاعتمادات)
+# - تحديد صريح للطرق المسموحة للواجهة الأمامية
+# - تحديد صريح للترويسات المدعومة (بما فيها Authorization وContent-Type وX-Request-ID)
+# - إتاحة ترويسة X-Request-ID للواجهة الأمامية
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "Origin"],
     expose_headers=["X-Request-ID"],
+    max_age=600,
 )
 
 # برمجية تتبع الطلبات ومعرّف الطلب (تُضاف بعد CORS لتكون الغلاف الخارجي لجميع الطلبات بما فيها preflight)
