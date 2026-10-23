@@ -72,9 +72,11 @@ alembic upgrade head
 # من داخل apps/api:
 uvicorn app.main:app --reload --port 8000
 
-# فحص صحة الخادم (مستقل عن قاعدة البيانات):
-# المتصفح أو PowerShell:
+# فحص صحة العملية (Liveness - مستقل تماماً عن قاعدة البيانات):
 # Invoke-RestMethod http://localhost:8000/api/v1/health
+
+# فحص جاهزية الخادم والاتصال بقاعدة البيانات (Readiness):
+# Invoke-RestMethod http://localhost:8000/api/v1/ready
 ```
 
 ### 5. تشغيل واجهة المستخدم (Web)

@@ -68,7 +68,7 @@ jobs:
           alembic upgrade head
           alembic current
 
-      - name: Verify API startup and health endpoint
+      - name: Verify API startup, health, and database readiness
         env:
           DATABASE_URL: postgresql+asyncpg://qemma_dev:changeme_local_only@localhost:5432/qemma_erp_dev
           APP_ENV: development
@@ -76,21 +76,41 @@ jobs:
           python -m uvicorn app.main:app --port 8000 &
           UVICORN_PID=$!
           echo "Waiting for API to respond on http://localhost:8000/api/v1/health..."
+          API_STARTED=0
           for i in {1..15}; do
             if curl -s -f http://localhost:8000/api/v1/health > health.json; then
               echo "Health check succeeded:"
               cat health.json
               echo ""
-              grep -q '"status":"ok"' health.json || { echo "Invalid health payload"; exit 1; }
-              kill $UVICORN_PID
-              wait $UVICORN_PID 2>/dev/null || true
-              exit 0
+              grep -q '"status":"ok"' health.json || { echo "Invalid health payload"; kill $UVICORN_PID; exit 1; }
+              API_STARTED=1
+              break
             fi
             sleep 1
           done
-          echo "API failed to start within timeout"
-          kill $UVICORN_PID 2>/dev/null || true
-          exit 1
+
+          if [ $API_STARTED -ne 1 ]; then
+            echo "API failed to start within timeout"
+            kill $UVICORN_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Verifying database readiness on http://localhost:8000/api/v1/ready..."
+          if curl -s -f http://localhost:8000/api/v1/ready > ready.json; then
+            echo "Readiness check succeeded:"
+            cat ready.json
+            echo ""
+            grep -q '"status":"ready"' ready.json || { echo "Invalid readiness status"; kill $UVICORN_PID; exit 1; }
+            grep -q '"database":"connected"' ready.json || { echo "Invalid database readiness payload"; kill $UVICORN_PID; exit 1; }
+          else
+            echo "Readiness check failed"
+            kill $UVICORN_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          kill $UVICORN_PID
+          wait $UVICORN_PID 2>/dev/null || true
+          exit 0
 
   web:
     name: Frontend Web Checks
