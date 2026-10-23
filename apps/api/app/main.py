@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.v1.router import api_router
+from app.db.session import engine
 
 logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger("qemma.api")
@@ -20,7 +21,8 @@ logger = logging.getLogger("qemma.api")
 async def lifespan(app: FastAPI):
     logger.info("🚀 Qemma ERP API starting — env=%s", settings.app_env)
     yield
-    logger.info("🛑 Qemma ERP API shutting down")
+    logger.info("🛑 Qemma ERP API shutting down — disposing database engine")
+    await engine.dispose()
 
 
 app = FastAPI(

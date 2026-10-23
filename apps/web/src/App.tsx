@@ -1,6 +1,12 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import '@/styles/index.css';
 import { OperationsBoard } from '@/features/operations-board/OperationsBoard';
+import { apiClient, ApiError } from '@/lib/api';
+
+type ServerConnectionState =
+  | { status: 'loading' }
+  | { status: 'connected'; version: string; app: string }
+  | { status: 'error'; message: string };
 
 interface NavItem {
   id: string;
@@ -23,6 +29,34 @@ const SIDEBAR_NAV: NavItem[] = [
 export default function App() {
   const [activeNav, setActiveNav] = useState('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [serverState, setServerState] = useState<ServerConnectionState>({
+    status: 'loading',
+  });
+
+  const checkServerHealth = useCallback(async () => {
+    setServerState({ status: 'loading' });
+    try {
+      const health = await apiClient.getHealth();
+      setServerState({
+        status: 'connected',
+        version: health.version,
+        app: health.app,
+      });
+    } catch (err: unknown) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : 'تعذر الاتصال بالخادم الخلفي.';
+      setServerState({
+        status: 'error',
+        message,
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkServerHealth();
+  }, [checkServerHealth]);
 
   return (
     <div className="app-shell" dir="rtl">
@@ -114,6 +148,38 @@ export default function App() {
           </div>
 
           <div className="top-header__tools">
+            {/* مؤشر حالة اتصال الخادم */}
+            <div
+              className={`server-status server-status--${serverState.status}`}
+              role="status"
+              aria-live="polite"
+              title={
+                serverState.status === 'connected'
+                  ? `الخادم متصل (${serverState.app} v${serverState.version})`
+                  : serverState.status === 'loading'
+                  ? 'جاري فحص الاتصال بالخادم...'
+                  : serverState.message
+              }
+            >
+              <span className="server-status__pulse" aria-hidden />
+              <span className="server-status__label">
+                {serverState.status === 'connected' && `الخادم متصل · v${serverState.version}`}
+                {serverState.status === 'loading' && 'جاري فحص الخادم...'}
+                {serverState.status === 'error' && 'الخادم غير متصل'}
+              </span>
+              {serverState.status === 'error' && (
+                <button
+                  type="button"
+                  className="server-status__retry"
+                  onClick={() => void checkServerHealth()}
+                  title="إعادة فحص الاتصال بالخادم"
+                  aria-label="إعادة فحص الاتصال بالخادم"
+                >
+                  ↻
+                </button>
+              )}
+            </div>
+
             {/* شارة الوردية الحالية */}
             <div className="shift-indicator">
               <span className="shift-indicator__pulse" aria-hidden />
@@ -137,12 +203,39 @@ export default function App() {
 
         {/* مساحة لوحة التشغيل الفسيحة (Spacious Dashboard Area) */}
         <main className="dashboard-canvas">
+          {/* شريط تنبيه تعذر الاتصال بالخادم الخلفي */}
+          {serverState.status === 'error' && (
+            <div className="api-error-strip" role="alert">
+              <div className="api-error-strip__content">
+                <span className="api-error-strip__icon" aria-hidden>⚠️</span>
+                <div className="api-error-strip__body">
+                  <strong>تنبيه اتصال الـ API:</strong> {serverState.message}
+                  <span className="api-error-strip__hint">
+                    تعمل الواجهة حاليًا في وضع العرض المحلي المستقل، ويمكنك الاستمرار في تصفح لوحة التشغيل بأمان.
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="api-error-strip__btn"
+                onClick={() => void checkServerHealth()}
+              >
+                إعادة المحاولة
+              </button>
+            </div>
+          )}
+
           {/* إشعار البيئة التجريبية الهادئ */}
           <div className="demo-strip" role="status">
             <span className="demo-strip__icon" aria-hidden>🔶</span>
             <span className="demo-strip__text">
               بيئة تطوير ومعاينة تجريبية — جميع البيانات والأرقام المعروضة هي نماذج للعرض البصري فقط وليست بيانات تشغيل حقيقية.
             </span>
+            {serverState.status === 'connected' && (
+              <span className="demo-strip__api-tag">
+                ✓ متصل بالـ API (v{serverState.version})
+              </span>
+            )}
           </div>
 
           <OperationsBoard />

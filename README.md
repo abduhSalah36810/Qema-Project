@@ -30,53 +30,74 @@ qemma-erp/
 
 ---
 
-## البدء السريع
+## البدء السريع (بيئة التطوير المحلية)
 
-### 1. تحضير ملف البيئة
+> **تنبيه أمني وبيئي:** هذه الخطوات مخصصة للتطوير المحلي فقط عبر Docker Compose. لا تُستخدم هذه الإعدادات أو كلمات المرور في بيئة الإنتاج السحابية، حيث تتطلب بيئة الإنتاج اتصالات مشفرة وأسراراً تُدار عبر لوحة المزود المعتمد وراية تأكيد صريحة للترحيلات (`ALLOW_PROD_MIGRATIONS=1`).
+
+### 1. تحضير ملف البيئة المحلي (.env)
+
+الخادم يتطلب تعريفاً صريحاً لرابط قاعدة البيانات `DATABASE_URL` في ملف `.env` (لا توجد كلمة مرور افتراضية مدمجة في الكود):
 
 ```powershell
-cp .env.example .env
-# عدّل القيم في .env إن احتجت تغيير كلمة المرور المحلية
+Copy-Item .env.example .env
+# ملف .env محمي ومدرج في .gitignore ولن يُرفع إلى Git
 ```
 
-### 2. تشغيل قاعدة البيانات (Docker مطلوب)
+### 2. تشغيل قاعدة البيانات المحلية (PostgreSQL 16 عبر Docker)
 
 ```powershell
 docker compose -f infra/compose.dev.yml up -d
-# التحقق من التشغيل:
+# التحقق من حالة الحاوية:
 docker compose -f infra/compose.dev.yml ps
 ```
 
-### 3. تشغيل الـ API
+### 3. إعداد بيئة الـ API وتشغيل الترحيلات
 
 ```powershell
 cd apps/api
-python -m venv .venv
-.venv\Scripts\activate            # Windows
+# تفعيل البيئة الافتراضية (Windows):
+.\.venv\Scripts\activate
+# تثبيت الحزم التأسيسية:
 pip install -e ".[dev]"
-uvicorn app.main:app --reload --port 8000
-# فحص الصحة: GET http://localhost:8000/api/v1/health
+
+# التحقق من حالة ترحيلات Alembic (لا توجد جداول أعمال حالياً بانتظار اعتماد قرارات المصنع):
+alembic current
+# تطبيق الترحيلات عند توفرها:
+alembic upgrade head
 ```
 
-### 4. تشغيل الواجهة
+### 4. تشغيل خادم الـ API المحلي
 
 ```powershell
+# من داخل apps/api:
+uvicorn app.main:app --reload --port 8000
+
+# فحص صحة الخادم (مستقل عن قاعدة البيانات):
+# المتصفح أو PowerShell:
+# Invoke-RestMethod http://localhost:8000/api/v1/health
+```
+
+### 5. تشغيل واجهة المستخدم (Web)
+
+```powershell
+# في نافذة PowerShell جديدة:
 cd apps/web
 npm install
 npm run dev
 # المتصفح: http://localhost:5173
 ```
 
-### 5. تشغيل فحوص الـ API
+### 6. تشغيل فحوصات الـ API الآلية
 
 ```powershell
 cd apps/api
 pytest tests/ -v
 ```
 
-### 6. إيقاف البيئة المحلية
+### 7. إيقاف البيئة المحلية
 
 ```powershell
+# إيقاف حاوية قاعدة البيانات بعد انتهاء العمل:
 docker compose -f infra/compose.dev.yml down
 ```
 

@@ -416,6 +416,92 @@ button {
   font-size: 11px;
 }
 
+/* ── مؤشر حالة اتصال الخادم (Server Status Indicator) ────────── */
+.server-status {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-alt);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+
+.server-status__pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.server-status__label {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.server-status__retry {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: 13px;
+  padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  transition: transform 0.2s ease;
+}
+
+.server-status__retry:hover {
+  transform: rotate(90deg);
+}
+
+/* حالة الاتصال الناجح */
+.server-status--connected {
+  border-color: #a7f3d0;
+  background: #f0fdf4;
+  color: #065f46;
+}
+
+.server-status--connected .server-status__pulse {
+  background: var(--status-green);
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.2);
+}
+
+/* حالة فحص الاتصال الجاري */
+.server-status--loading {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.server-status--loading .server-status__pulse {
+  background: #94a3b8;
+  animation: pulse-loading 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse-loading {
+  0%, 100% { opacity: 0.3; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* حالة تعذر الاتصال بالخادم */
+.server-status--error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.server-status--error .server-status__pulse {
+  background: var(--status-red);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.18);
+}
+
 /* زر اختيار المخزن */
 .tool-dropdown {
   height: 38px;
@@ -493,6 +579,87 @@ button {
 
 .demo-strip__icon {
   font-size: 14px;
+}
+
+.demo-strip__text {
+  flex: 1;
+}
+
+.demo-strip__api-tag {
+  margin-right: auto;
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── شريط تنبيه تعذر الاتصال بالخادم ──────────────────────────── */
+.api-error-strip {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: var(--radius-sm);
+  padding: 12px 18px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 13px;
+  color: #9a3412;
+  box-shadow: var(--shadow-sm);
+  animation: fadeIn 0.25s ease-out;
+}
+
+.api-error-strip__content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.api-error-strip__icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.api-error-strip__body {
+  line-height: 1.5;
+}
+
+.api-error-strip__hint {
+  display: block;
+  font-size: 11px;
+  color: #c2410c;
+  margin-top: 2px;
+}
+
+.api-error-strip__btn {
+  background: #ffffff;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.api-error-strip__btn:hover {
+  background: #ffedd5;
+  border-color: #fb923c;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ── كروت المؤشرات العلوية الأربعة (Clean White Metric Cards) ──── */
