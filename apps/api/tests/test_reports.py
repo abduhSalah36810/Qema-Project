@@ -43,22 +43,6 @@ def _uid():
     return str(uuid.uuid4())
 
 
-# مسار قاعدة البيانات الحقيقية للاختبارات المعزولة
-db_url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
-if not db_url or "qemma_test_db" in db_url:
-    db_url = "postgresql+asyncpg://qemma_dev:changeme_local_only@127.0.0.1:5432/qemma_erp_dev"
-
-
-@pytest.fixture
-async def session():
-    """جلسة معزولة متصلة بقاعدة بيانات PostgreSQL الفعلية."""
-    engine = create_async_engine(db_url, poolclass=NullPool, echo=False)
-    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    async with session_factory() as sess:
-        yield sess
-    await engine.dispose()
-
-
 @pytest.fixture
 def auth_general_manager(session):
     user = AuthenticatedUser(

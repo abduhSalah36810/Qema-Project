@@ -21,11 +21,6 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 
 import app.db.base  # noqa: F401 - ensures all ORM mappers and relationships are registered
 
-# Determine DB URL: prefer active environment if not default dummy test DB
-db_url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
-if not db_url or "qemma_test_db" in db_url:
-    db_url = "postgresql+asyncpg://qemma_dev:changeme_local_only@127.0.0.1:5432/qemma_erp_dev"
-
 from app.modules.production.models import (
     CatalogItem,
     ItemCategory,
@@ -36,16 +31,6 @@ from app.modules.production.models import (
     ProductVariant,
 )
 from app.modules.production.service import get_or_create_finished_goods_item
-
-
-@pytest.fixture
-async def session():
-    """Provides an isolated async SQLAlchemy session connected to the real PostgreSQL DB."""
-    engine = create_async_engine(db_url, poolclass=NullPool, echo=False)
-    session_factory = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    async with session_factory() as sess:
-        yield sess
-    await engine.dispose()
 
 
 @pytest.mark.asyncio

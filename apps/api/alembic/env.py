@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.db.base import Base  # noqa: E402
 from app.core.config import settings  # noqa: E402
+from app.core.migration_guard import validate_migration_target  # noqa: E402
 
 config = context.config
 
@@ -19,12 +20,8 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# فحص أمني: حماية بيئة الإنتاج من تشغيل الترحيلات دون تصريح مسبق ومقصود
-if settings.app_env.lower() == "production" and os.environ.get("ALLOW_PROD_MIGRATIONS") != "1":
-    raise RuntimeError(
-        "حظر أمني: ترحيلات قاعدة البيانات معطلة في بيئة الإنتاج افتراضياً.\n"
-        "لتشغيل الترحيلات في الإنتاج، يجب ضبط المتغير ALLOW_PROD_MIGRATIONS=1 بدقة بعد مراجعة خطة النشر والنسخ الاحتياطي."
-    )
+# التحقق الأمني المركزي من وجهة الترحيل حسب سياسة البيئة (Test / Dev / Prod)
+validate_migration_target(settings.database_url, settings.app_env)
 
 # استخدام رابط قاعدة البيانات من إعدادات Pydantic
 config.set_main_option("sqlalchemy.url", settings.database_url)
@@ -35,6 +32,10 @@ target_metadata = Base.metadata
 def run_migrations_offline() -> None:
     """تشغيل الترحيلات في الوضع غير المتصل (توليد SQL فقط)."""
     url = config.get_main_option("sqlalchemy.url")
+    if url:
+        # تأكيد عدم تجاوز سياسة أمان الترحيلات في الوضع غير المتصل
+        validate_migration_target(url, settings.app_env)
+
     if url and url.startswith("postgresql+asyncpg://"):
         url = url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
