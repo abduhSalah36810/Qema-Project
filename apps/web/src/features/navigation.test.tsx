@@ -199,6 +199,45 @@ describe('Navigation and Sidebar Restructuring Tests', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 2, name: 'التقارير المالية ومؤشرات الأداء' })).toBeInTheDocument();
     });
+
+    // 9. Warehouse Inventory Reports
+    fireEvent.click(screen.getByRole('button', { name: 'تقرير أرصدة المخزون' }));
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /تقرير أرصدة المخزون/i })).toBeInTheDocument();
+    });
+  });
+
+  it('hides financial reports from sidebar when authenticated as warehouse_manager', async () => {
+    // Generate base64 JWT payload with warehouse_manager role
+    const payload = btoa(JSON.stringify({ sub: 'wh-user-1', email: 'warehouse@qemma.com', role: 'warehouse_manager' }));
+    const mockToken = `header.${payload}.sig`;
+
+    vi.spyOn(apiClient, 'getAccessToken').mockReturnValue(mockToken);
+    vi.spyOn(apiClient, 'getAuthMe').mockResolvedValue({ id: 'wh-user-1', email: 'warehouse@qemma.com' });
+
+    // Mock supabase session with warehouse_manager token
+    const supabaseMock = await import('@/lib/supabase');
+    vi.spyOn(supabaseMock.supabase!.auth, 'getSession').mockResolvedValue({
+      data: {
+        session: {
+          access_token: mockToken,
+          token_type: 'bearer',
+          user: { id: 'wh-user-1', email: 'warehouse@qemma.com' } as any,
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+        } as any,
+      },
+      error: null,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      // Warehouse manager CAN see inventory reports link
+      expect(screen.getByRole('button', { name: 'تقرير أرصدة المخزون' })).toBeInTheDocument();
+      // Warehouse manager CANNOT see finance reports link in sidebar
+      expect(screen.queryByRole('button', { name: 'التقارير المالية' })).not.toBeInTheDocument();
+    });
   });
 });
+
 

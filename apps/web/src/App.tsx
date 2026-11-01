@@ -32,6 +32,7 @@ type NavEntry =
       icon: string;
       badge?: string;
       badgeVariant?: 'teal' | 'amber' | 'slate';
+      requiredPermission?: string;
     }
   | {
       type: 'group';
@@ -40,12 +41,14 @@ type NavEntry =
       icon: string;
       badge?: string;
       badgeVariant?: 'teal' | 'amber' | 'slate';
+      requiredPermission?: string;
       children: Array<{
         id: string;
         name: string;
         icon?: string;
         badge?: string;
         badgeVariant?: 'teal' | 'amber' | 'slate';
+        requiredPermission?: string;
       }>;
     };
 
@@ -61,6 +64,7 @@ const SIDEBAR_ITEMS: NavEntry[] = [
       { id: 'warehouse-machinery', name: 'الماكينات والمعدات' },
       { id: 'warehouse-finished', name: 'مخزن المنتجات التامة' },
       { id: 'warehouse-catalog', name: 'دليل الأصناف والتصنيفات' },
+      { id: 'warehouse-reports', name: 'تقرير أرصدة المخزون', requiredPermission: 'inventory:view' },
     ],
   },
   { type: 'item', id: 'batches', name: 'دفعات الإنتاج', icon: '⚡', badge: '٤ نشطة', badgeVariant: 'teal' },
@@ -79,7 +83,7 @@ const SIDEBAR_ITEMS: NavEntry[] = [
       { id: 'finance-suppliers', name: 'الموردون' },
       { id: 'finance-payments', name: 'المدفوعات والتحصيلات' },
       { id: 'finance-payroll', name: 'الرواتب المالية' },
-      { id: 'finance-reports', name: 'التقارير المالية' },
+      { id: 'finance-reports', name: 'التقارير المالية', requiredPermission: 'finance:reports:view' },
     ],
   },
   { type: 'item', id: 'settings', name: 'إعدادات المصنع', icon: '⚙️' },
@@ -101,6 +105,8 @@ function getHeaderInfo(nav: string): { kicker: string; title: string } {
       return { kicker: 'المخازن · معدات التشغيل وخطوط الإنتاج', title: 'الماكينات ومعدات التشغيل' };
     case 'warehouse-finished':
       return { kicker: 'المخازن · المنتجات الجاهزة للتسليم النهائي', title: 'مخزن المنتجات التامة' };
+    case 'warehouse-reports':
+      return { kicker: 'المخازن · التحليل وأرصدة الدفاتر', title: 'تقرير حركة وأرصدة المخزون' };
     case 'finance-treasury':
     case 'finance':
       return { kicker: 'المالية · الخزنة الرئيسية وحركات النقدية', title: 'الخزنة والحسابات النقدية' };
@@ -143,7 +149,20 @@ function AppContent() {
     status: 'loading',
   });
 
-  const { authState, authMode, user, isConfigured, isDevAuthAvailable } = useAuth();
+  const { authState, authMode, user, isConfigured, isDevAuthAvailable, hasPermission, roles } = useAuth();
+
+  const canAccessFinanceReports =
+    authMode === 'local_dev' ||
+    !user ||
+    roles.length === 0 ||
+    hasPermission('finance:reports:view') ||
+    hasPermission('reports:view');
+
+  const canAccessInventoryReports =
+    authMode === 'local_dev' ||
+    !user ||
+    roles.length === 0 ||
+    hasPermission('inventory:view');
 
   const checkServerHealth = useCallback(async () => {
     setServerState({ status: 'loading' });
@@ -239,7 +258,15 @@ function AppContent() {
 
               // Dropdown Group Item (المخازن / المالية)
               const isOpen = openGroups[entry.id] ?? false;
-              const hasActiveChild = entry.children.some(
+              const visibleChildren = entry.children.filter((sub) => {
+                if (!sub.requiredPermission) return true;
+                if (authMode === 'local_dev' || !user || roles.length === 0) return true;
+                return hasPermission(sub.requiredPermission);
+              });
+
+              if (visibleChildren.length === 0) return null;
+
+              const hasActiveChild = visibleChildren.some(
                 (child) => activeNav === child.id || (entry.id === 'finance' && activeNav === 'customers' && child.id === 'finance-customers')
               );
 
@@ -262,10 +289,11 @@ function AppContent() {
 
                   {isOpen && (
                     <ul className="sidebar__sub-menu">
-                      {entry.children.map((sub) => {
+                      {visibleChildren.map((sub) => {
                         const isSubActive =
                           activeNav === sub.id ||
                           (sub.id === 'warehouse-raw' && activeNav === 'inventory') ||
+                          (sub.id === 'warehouse-reports' && activeNav === 'inventory-reports') ||
                           (sub.id === 'finance-treasury' && activeNav === 'finance') ||
                           (sub.id === 'finance-customers' && activeNav === 'customers') ||
                           (sub.id === 'finance-payroll' && activeNav === 'payroll') ||
@@ -537,6 +565,44 @@ function AppContent() {
             <MachineryView />
           ) : activeNav === 'warehouse-finished' ? (
             <FinishedGoodsView />
+          ) : activeNav === 'warehouse-reports' ? (
+            canAccessInventoryReports ? (
+              <FinancialReportsView initialTab="inventory" />
+            ) : (
+              <section className="warehouse-page" dir="rtl">
+                <header className="warehouse-page__header">
+                  <div>
+                    <span className="warehouse-page__eyebrow">الصلاحيات والتفويض</span>
+                    <h2>تم رفض الوصول (403 Forbidden)</h2>
+                    <p>حسابك لا يمتلك الصلاحية المطلوبة لعرض تقرير أرصدة المخزون.</p>
+                  </div>
+                </header>
+                <div
+                  className="warehouse-alert"
+                  role="alert"
+                  style={{
+                    backgroundColor: '#fff1f2',
+                    borderColor: '#fecdd3',
+                    color: '#9f1239',
+                    padding: '2rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🔒</div>
+                  <h3 style={{ margin: '0 0 0.5rem', color: '#9f1239' }}>صلاحية الوصول غير كافية</h3>
+                  <p style={{ margin: '0 0 1rem', color: '#881337', fontSize: '0.9rem' }}>
+                    يتطلب عرض هذه الشاشة الحصول على صلاحية <code>inventory:view</code>.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn--secondary"
+                    onClick={() => setActiveNav('dashboard')}
+                  >
+                    العودة إلى لوحة التشغيل
+                  </button>
+                </div>
+              </section>
+            )
           ) : activeNav === 'finance-treasury' || activeNav === 'finance' ? (
             <TreasuryView />
           ) : activeNav === 'finance-revenues' ? (
@@ -554,7 +620,43 @@ function AppContent() {
           ) : activeNav === 'finance-payroll' || activeNav === 'payroll' ? (
             <PayrollFinanceView />
           ) : activeNav === 'finance-reports' || activeNav === 'reports' ? (
-            <FinancialReportsView />
+            canAccessFinanceReports ? (
+              <FinancialReportsView initialTab="summary" />
+            ) : (
+              <section className="warehouse-page" dir="rtl">
+                <header className="warehouse-page__header">
+                  <div>
+                    <span className="warehouse-page__eyebrow">الصلاحيات والتفويض</span>
+                    <h2>تم رفض الوصول (403 Forbidden)</h2>
+                    <p>حسابك لا يمتلك الصلاحية المطلوبة لعرض التقارير المالية ومؤشرات السيولة.</p>
+                  </div>
+                </header>
+                <div
+                  className="warehouse-alert"
+                  role="alert"
+                  style={{
+                    backgroundColor: '#fff1f2',
+                    borderColor: '#fecdd3',
+                    color: '#9f1239',
+                    padding: '2rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🔒</div>
+                  <h3 style={{ margin: '0 0 0.5rem', color: '#9f1239' }}>صلاحية الوصول غير كافية</h3>
+                  <p style={{ margin: '0 0 1rem', color: '#881337', fontSize: '0.9rem' }}>
+                    يتطلب عرض هذه الشاشة الحصول على صلاحية <code>finance:reports:view</code> أو <code>reports:view</code>.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn--secondary"
+                    onClick={() => setActiveNav('dashboard')}
+                  >
+                    العودة إلى لوحة التشغيل
+                  </button>
+                </div>
+              </section>
+            )
           ) : (
             <OperationsBoard />
           )}

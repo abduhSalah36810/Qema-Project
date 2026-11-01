@@ -24,11 +24,110 @@ export type AuthMode = 'supabase' | 'local_dev' | 'none';
 
 export const LOCAL_DEV_STORAGE_KEY = 'qemma_local_dev_token';
 
+export const ROLE_PERMISSIONS_MAP: Record<string, string[]> = {
+  general_manager: [
+    'reports:view',
+    'finance:reports:view',
+    'inventory:view',
+    'inventory:manage',
+    'catalog:view',
+    'production:orders:view',
+    'production:orders:manage',
+    'production:stages:manage',
+    'production:templates:manage',
+    'customers:view',
+    'customers:manage',
+    'customers:deliveries:manage',
+    'finance:manage',
+    'finance:cash:view',
+    'suppliers:view',
+    'suppliers:manage',
+    'suppliers:receive',
+    'pricing:manage',
+  ],
+  finance_manager: [
+    'reports:view',
+    'finance:reports:view',
+    'finance:cash:view',
+    'finance:cash:manage',
+    'finance:expenses:manage',
+    'finance:payroll:manage',
+    'finance:payments:manage',
+    'suppliers:view',
+    'suppliers:manage',
+    'customers:view',
+    'production:orders:view',
+  ],
+  warehouse_manager: [
+    'inventory:view',
+    'inventory:manage',
+    'catalog:view',
+    'warehouse:confirm_receipt',
+    'warehouse:dispatch',
+    'production:orders:view',
+    'customers:deliveries:manage',
+    'suppliers:view',
+    'suppliers:receive',
+  ],
+};
+
+export function extractRolesFromToken(token: string | null): string[] {
+  if (!token || typeof token !== 'string') return [];
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return [];
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonStr = decodeURIComponent(
+      atob(base64)
+        .split('')
+        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+        .join('')
+    );
+    const payload = JSON.parse(jsonStr) as Record<string, unknown>;
+    const roles: string[] = [];
+
+    if (typeof payload.role === 'string') {
+      roles.push(payload.role.toLowerCase());
+    }
+    if (Array.isArray(payload.roles)) {
+      payload.roles.forEach((r) => {
+        if (typeof r === 'string') roles.push(r.toLowerCase());
+      });
+    }
+    const appMeta = payload.app_metadata as Record<string, unknown> | undefined;
+    if (appMeta) {
+      if (typeof appMeta.role === 'string') roles.push(appMeta.role.toLowerCase());
+      if (Array.isArray(appMeta.roles)) {
+        appMeta.roles.forEach((r) => {
+          if (typeof r === 'string') roles.push(r.toLowerCase());
+        });
+      }
+    }
+    const userMeta = payload.user_metadata as Record<string, unknown> | undefined;
+    if (userMeta) {
+      if (typeof userMeta.role === 'string') roles.push(userMeta.role.toLowerCase());
+      if (Array.isArray(userMeta.roles)) {
+        userMeta.roles.forEach((r) => {
+          if (typeof r === 'string') roles.push(r.toLowerCase());
+        });
+      }
+    }
+
+    return Array.from(new Set(roles));
+  } catch {
+    return [];
+  }
+}
+
 interface AuthContextValue {
   authState: AuthState;
   authMode: AuthMode;
   user: UserIdentity | null;
   session: Session | null;
+  roles: string[];
+  hasPermission: (permission: string) => boolean;
+  hasRole: (role: string) => boolean;
   error: string | null;
   isConfigured: boolean;
   isDevAuthAvailable: boolean;
@@ -360,11 +459,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [authMode]);
 
+  const roles = React.useMemo(() => {
+    if (authMode === 'local_dev') {
+      return ['general_manager'];
+    }
+    const token = session?.access_token || apiClient.getAccessToken();
+    return extractRolesFromToken(token);
+  }, [authMode, session, authState]);
+
+  const hasRole = useCallback((role: string) => {
+    return roles.includes(role.toLowerCase());
+  }, [roles]);
+
+  const hasPermission = useCallback((permission: string) => {
+    if (authMode === 'local_dev') {
+      return true;
+    }
+    for (const r of roles) {
+      const perms = ROLE_PERMISSIONS_MAP[r] || [];
+      if (perms.includes(permission)) {
+        return true;
+      }
+    }
+    return false;
+  }, [authMode, roles]);
+
   const value: AuthContextValue = {
     authState,
     authMode,
     user,
     session,
+    roles,
+    hasPermission,
+    hasRole,
     error,
     isConfigured: isSupabaseConfigured(),
     isDevAuthAvailable,
