@@ -512,3 +512,116 @@ class DailyExpense(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="pending")
+
+
+class IdempotentRequest(Base):
+    __tablename__ = "idempotent_requests"
+    __table_args__ = (
+        Index("uq_idempotent_requests_op_key", "operation_type", "idempotency_key", unique=True),
+        Index("ix_idempotent_requests_created_at", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="in_progress", nullable=False)
+    response_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StocktakeSession(Base):
+    __tablename__ = "stocktake_sessions"
+    __table_args__ = (
+        Index("uq_stocktake_session_number", "session_number", unique=True),
+        Index("ix_stocktake_sessions_warehouse_status", "warehouse_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    warehouse_id: Mapped[str] = mapped_column(String(36), ForeignKey("warehouses.id"), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), default="full_warehouse", nullable=False)  # full_warehouse, specific_items
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)  # draft, counting, submitted, under_review, approved, posted, cancelled
+    description: Mapped[str] = mapped_column(String(255), default="")
+    counting_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    snapshot_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    submitted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    posted_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+    warehouse: Mapped["Warehouse"] = relationship("Warehouse")
+    lines: Mapped[list["StocktakeLine"]] = relationship("StocktakeLine", back_populates="stocktake", cascade="all, delete-orphan", order_by="StocktakeLine.created_at")
+    audit_logs: Mapped[list["StocktakeAuditLog"]] = relationship("StocktakeAuditLog", back_populates="stocktake", cascade="all, delete-orphan", order_by="StocktakeAuditLog.timestamp")
+
+
+class StocktakeLine(Base):
+    __tablename__ = "stocktake_lines"
+    __table_args__ = (
+        Index("uq_stocktake_lines_session_item", "stocktake_id", "item_id", unique=True),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    stocktake_id: Mapped[str] = mapped_column(String(36), ForeignKey("stocktake_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id: Mapped[str] = mapped_column(String(36), ForeignKey("catalog_items.id"), nullable=False, index=True)
+    unit_id: Mapped[str] = mapped_column(String(36), ForeignKey("units.id"), nullable=False)
+    book_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    counted_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)  # None = not counted, 0.0 = zero count!
+    variance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="uncounted", nullable=False)  # uncounted, counted, recount_required, disputed, verified
+    counter_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    counted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    stocktake: Mapped["StocktakeSession"] = relationship("StocktakeSession", back_populates="lines")
+    item: Mapped["CatalogItem"] = relationship("CatalogItem")
+    unit: Mapped["Unit"] = relationship("Unit")
+    count_history: Mapped[list["StocktakeCountHistory"]] = relationship("StocktakeCountHistory", back_populates="line", cascade="all, delete-orphan", order_by="StocktakeCountHistory.counted_at")
+
+
+class StocktakeCountHistory(Base):
+    __tablename__ = "stocktake_count_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    line_id: Mapped[str] = mapped_column(String(36), ForeignKey("stocktake_lines.id", ondelete="CASCADE"), nullable=False, index=True)
+    stocktake_id: Mapped[str] = mapped_column(String(36), ForeignKey("stocktake_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    counted_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    previous_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    counter_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    counted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    reason: Mapped[str] = mapped_column(String(255), default="initial_count")
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    line: Mapped["StocktakeLine"] = relationship("StocktakeLine", back_populates="count_history")
+
+
+class StocktakeAuditLog(Base):
+    __tablename__ = "stocktake_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    stocktake_id: Mapped[str] = mapped_column(String(36), ForeignKey("stocktake_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)  # create, start_counting, record_count, submit, request_recount, approve, reject, post, cancel
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_role: Mapped[str] = mapped_column(String(64), default="")
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    stocktake: Mapped["StocktakeSession"] = relationship("StocktakeSession", back_populates="audit_logs")

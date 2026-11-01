@@ -55,6 +55,7 @@ from app.modules.production.schemas import OrderCreate
 from app.modules.production.service import (
     create_production_order,
     get_or_create_finished_goods_item,
+    lock_stock_balance,
 )
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -344,6 +345,7 @@ async def record_customer_delivery(
             .where(CatalogItem.id == catalog_item.id)
             .with_for_update()
         )
+        await lock_stock_balance(db, catalog_item.id, fg_wh.id)
 
         bucket_ref = f"private_label:{customer_id}" if order.order_type == "custom_manufacturing" else "factory_brand"
 

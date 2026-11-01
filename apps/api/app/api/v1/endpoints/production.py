@@ -13,15 +13,19 @@
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.idempotency import execute_idempotent_operation
 from app.core.permissions import require_permission
 from app.db.session import get_db
-from app.modules.production.service import get_or_create_finished_goods_item
+from app.modules.production.service import (
+    get_or_create_finished_goods_item,
+    lock_stock_balance,
+)
 from app.modules.production.models import (
     CatalogItem,
     Customer,
@@ -40,17 +44,22 @@ from app.modules.production.models import (
     Unit,
     Warehouse,
     WarehouseTransfer,
+    WarehouseTransferLine,
 )
 from app.modules.production.schemas import (
     CatalogItemRead,
     FinishedGoodsReceiptCreate,
     FinishedGoodsReceiptRead,
     MaterialShortageItem,
+    OrderCloseRequest,
+    OrderCloseResponse,
     OrderCreate,
     OrderMaterialSnapshotRead,
     OrderMaterialCreate,
+    OrderMaterialWipItem,
     OrderRead,
     OrderShortagesReport,
+    OrderWipSummary,
     ProductRead,
     ProductVariantRead,
     ProductionOrderItemRead,
@@ -631,25 +640,52 @@ async def remove_order_material(
 async def dispatch_materials(
     order_id: str,
     notes: str = Query(default=""),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     current_user: AuthenticatedUser = Depends(require_permission("warehouse:dispatch")),
     db: AsyncSession = Depends(get_db),
 ):
-    """صرف خامات أمر التشغيل وتسجيلها كـ in-transit (متاح لأمين المخزن والمدير العام)."""
-    transfer = await dispatch_order_materials(db, order_id=order_id, dispatcher_id=current_user.id, notes=notes)
-    # جلب تفاصيل التحويل
-    return await get_transfer_details(transfer.id, db=db)
+    """صرف خامات أمر التشغيل وتسجيلها كـ in-transit مع حماية Idempotency من التكرار."""
+    async def _execute():
+        transfer = await dispatch_order_materials(
+            db, order_id=order_id, dispatcher_id=current_user.id, notes=notes, commit=False
+        )
+        return await get_transfer_details(transfer.id, db=db)
+
+    return await execute_idempotent_operation(
+        db=db,
+        idempotency_key=idempotency_key,
+        operation_type="production.dispatch_order_materials",
+        resource_id=order_id,
+        user_id=current_user.id,
+        payload={"order_id": order_id, "notes": notes},
+        execute_fn=_execute,
+    )
 
 
 @router.post("/orders/{order_id}/receive", response_model=WarehouseTransferRead)
 async def receive_materials(
     order_id: str,
     data: ReceiptConfirmRequest,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     current_user: AuthenticatedUser = Depends(require_permission("warehouse:confirm_receipt")),
     db: AsyncSession = Depends(get_db),
 ):
-    """تأكيد استلام الخامات بمخزن تحت التشغيل وتسجيل الفروقات (متاح لأمين المخزن والمدير العام)."""
-    transfer = await confirm_warehouse_receipt(db, order_id=order_id, data=data, receiver_id=current_user.id)
-    return await get_transfer_details(transfer.id, db=db)
+    """تأكيد استلام الخامات بمخزن تحت التشغيل وتسجيل الفروقات مع حماية Idempotency من التكرار."""
+    async def _execute():
+        transfer = await confirm_warehouse_receipt(
+            db, order_id=order_id, data=data, receiver_id=current_user.id, commit=False
+        )
+        return await get_transfer_details(transfer.id, db=db)
+
+    return await execute_idempotent_operation(
+        db=db,
+        idempotency_key=idempotency_key,
+        operation_type="production.confirm_warehouse_receipt",
+        resource_id=order_id,
+        user_id=current_user.id,
+        payload={"order_id": order_id, "data": data.model_dump()},
+        execute_fn=_execute,
+    )
 
 
 async def get_transfer_details(transfer_id: str, db: AsyncSession) -> WarehouseTransferRead:
@@ -818,91 +854,106 @@ async def receive_finished_goods(
     data: FinishedGoodsReceiptCreate,
     current_user: AuthenticatedUser = Depends(require_permission("warehouse:confirm_receipt")),
     db: AsyncSession = Depends(get_db),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
 ):
-    """استلام وتأكيد المنتج التام بمخزن المنتج التام بعد انتهاء مراحل التشغيل، مع تمييز براند المصنع عن التصنيع للغير."""
-    stmt = (
-        select(ProductionOrder)
-        .options(
-            selectinload(ProductionOrder.order_items),
-            selectinload(ProductionOrder.stage_events),
+    """استلام وتأكيد المنتج التام بمخزن المنتج التام مع قفل التزامن وحماية Idempotency من التكرار."""
+    async def _execute():
+        stmt = (
+            select(ProductionOrder)
+            .options(
+                selectinload(ProductionOrder.order_items),
+                selectinload(ProductionOrder.stage_events),
+            )
+            .where(ProductionOrder.id == order_id)
+            .with_for_update()
         )
-        .where(ProductionOrder.id == order_id)
-        .with_for_update()
-    )
-    order = (await db.execute(stmt)).scalar_one_or_none()
-    if not order:
-        raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
+        order = (await db.execute(stmt)).scalar_one_or_none()
+        if not order:
+            raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
 
-    if order.status not in ("in_production", "completed"):
-        raise HTTPException(status_code=409, detail="لا يمكن استلام المنتج التام قبل بدء الإنتاج وتقدم مراحله.")
+        if order.status not in ("in_production", "manufacturing_completed", "receipt_completed", "completed"):
+            raise HTTPException(status_code=409, detail="لا يمكن استلام المنتج التام قبل بدء الإنتاج وتقدم مراحله.")
 
-    fg_wh = (await db.execute(select(Warehouse).where(Warehouse.code == "finished_goods"))).scalar_one_or_none()
-    if not fg_wh:
-        raise HTTPException(status_code=503, detail="مخزن المنتج التام غير مهيأ.")
+        fg_wh = (await db.execute(select(Warehouse).where(Warehouse.code == "finished_goods"))).scalar_one_or_none()
+        if not fg_wh:
+            raise HTTPException(status_code=503, detail="مخزن المنتج التام غير مهيأ.")
 
-    # منع التكرار والتأكد من عدم تجاوز الكمية المستهدفة للأمر
-    existing_receipts = await db.scalar(
-        select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
-        .where(
-            StockLedgerEntry.reference_doc_type == "production_order_finished_receipt",
-            StockLedgerEntry.reference_doc_id == order.id,
-            StockLedgerEntry.entry_type == "finished_goods_receipt",
+        # منع التكرار والتأكد من عدم تجاوز الكمية المستهدفة للأمر
+        existing_receipts = await db.scalar(
+            select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
+            .where(
+                StockLedgerEntry.reference_doc_type == "production_order_finished_receipt",
+                StockLedgerEntry.reference_doc_id == order.id,
+                StockLedgerEntry.entry_type == "finished_goods_receipt",
+            )
         )
-    )
-    already_received = float(existing_receipts or 0.0)
-    if already_received >= order.target_quantity:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="تم استلام كامل كمية أمر التشغيل مسبقاً بمخزن المنتجات التامة.",
+        already_received = float(existing_receipts or 0.0)
+        if already_received >= order.target_quantity:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="تم استلام كامل كمية أمر التشغيل مسبقاً بمخزن المنتجات التامة.",
+            )
+        if already_received + data.accepted_quantity > order.target_quantity:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"الكمية المستلمة الإجمالية ({already_received + data.accepted_quantity}) تتجاوز الكمية المستهدفة لأمر التشغيل ({order.target_quantity}).",
+            )
+
+        # استدعاء المعرّف المعياري الموحد لصنف المنتج التام (Product + ProductVariant)
+        catalog_item = await get_or_create_finished_goods_item(db, order.product_id, order.variant_id)
+
+        # قفل رصيد الصنف التام بمخزن التام لضمان التزامن
+        await lock_stock_balance(db, catalog_item.id, fg_wh.id)
+
+        first_item = order.order_items[0] if order.order_items else None
+        bucket_ref = (
+            f"private_label:{first_item.customer_id}"
+            if first_item and first_item.product_type == "private_label" and first_item.customer_id
+            else "factory_brand"
         )
-    if already_received + data.accepted_quantity > order.target_quantity:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"الكمية المستلمة الإجمالية ({already_received + data.accepted_quantity}) تتجاوز الكمية المستهدفة لأمر التشغيل ({order.target_quantity}).",
+
+        entry = StockLedgerEntry(
+            id=str(uuid.uuid4()),
+            item_id=catalog_item.id,
+            unit_id=catalog_item.unit_id,
+            warehouse_id=fg_wh.id,
+            location_type="warehouse",
+            bucket_reference=bucket_ref,
+            quantity=data.accepted_quantity,
+            reference_doc_type="production_order_finished_receipt",
+            reference_doc_id=order.id,
+            entry_type="finished_goods_receipt",
+            created_by=current_user.id,
+        )
+        db.add(entry)
+
+        if already_received + data.accepted_quantity >= order.target_quantity:
+            order.status = "receipt_completed"
+
+        await db.flush()
+
+        return FinishedGoodsReceiptRead(
+            order_id=order.id,
+            order_number=order.order_number,
+            target_quantity=order.target_quantity,
+            received_quantity=data.received_quantity,
+            accepted_quantity=data.accepted_quantity,
+            rejected_quantity=data.rejected_quantity,
+            warehouse_name=fg_wh.name_ar,
+            receipt_status="complete" if already_received + data.accepted_quantity >= order.target_quantity else "partial",
+            confirmed_at=datetime.now(timezone.utc),
+            confirmed_by=current_user.id,
+            notes=data.notes,
         )
 
-    # استدعاء المعرّف المعياري الموحد لصنف المنتج التام (Product + ProductVariant)
-    catalog_item = await get_or_create_finished_goods_item(db, order.product_id, order.variant_id)
-
-    first_item = order.order_items[0] if order.order_items else None
-    bucket_ref = (
-        f"private_label:{first_item.customer_id}"
-        if first_item and first_item.product_type == "private_label" and first_item.customer_id
-        else "factory_brand"
-    )
-
-    entry = StockLedgerEntry(
-        id=str(uuid.uuid4()),
-        item_id=catalog_item.id,
-        unit_id=catalog_item.unit_id,
-        warehouse_id=fg_wh.id,
-        location_type="warehouse",
-        bucket_reference=bucket_ref,
-        quantity=data.accepted_quantity,
-        reference_doc_type="production_order_finished_receipt",
-        reference_doc_id=order.id,
-        entry_type="finished_goods_receipt",
-        created_by=current_user.id,
-    )
-    db.add(entry)
-
-    if already_received + data.accepted_quantity >= order.target_quantity:
-        order.status = "completed"
-
-    await db.commit()
-
-    return FinishedGoodsReceiptRead(
-        order_id=order.id,
-        order_number=order.order_number,
-        target_quantity=order.target_quantity,
-        received_quantity=data.received_quantity,
-        accepted_quantity=data.accepted_quantity,
-        rejected_quantity=data.rejected_quantity,
-        warehouse_name=fg_wh.name_ar,
-        receipt_status="complete" if already_received + data.accepted_quantity >= order.target_quantity else "partial",
-        confirmed_at=datetime.now(timezone.utc),
-        confirmed_by=current_user.id,
-        notes=data.notes,
+    return await execute_idempotent_operation(
+        db=db,
+        idempotency_key=idempotency_key,
+        operation_type="production.receive_finished_goods",
+        resource_id=order_id,
+        user_id=current_user.id,
+        payload={"order_id": order_id, "data": data.model_dump()},
+        execute_fn=_execute,
     )
 
 
@@ -930,8 +981,8 @@ async def get_production_performance_summary(
         )
     )).scalars().all()
 
-    active_orders = [o for o in orders if o.status in ("in_production", "materials_dispatched")]
-    completed_orders = [o for o in orders if o.status == "completed"]
+    active_orders = [o for o in orders if o.status in ("in_production", "materials_dispatched", "manufacturing_completed", "receipt_completed")]
+    completed_orders = [o for o in orders if o.status in ("completed", "closed")]
 
     stage_stats: dict[str, dict] = {
         st: {"total_events": 0, "completed": 0, "durations": [], "delayed": 0}
@@ -978,3 +1029,294 @@ async def get_production_performance_summary(
         stages=stage_items,
         delayed_orders=[],
     )
+
+
+# ─── 10. ملخص خامات تحت التشغيل وإغلاق أمر التشغيل بأمان ────────────────────────
+
+@router.get("/orders/{order_id}/wip-summary", response_model=OrderWipSummary)
+async def get_order_wip_summary(
+    order_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("production:orders:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعلام ملخص ورصيد خامات تحت التشغيل (WIP) للأمر والتحقق من جاهزية الإغلاق."""
+    stmt = (
+        select(ProductionOrder)
+        .options(
+            selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.item),
+            selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.unit),
+            selectinload(ProductionOrder.stage_events),
+        )
+        .where(ProductionOrder.id == order_id)
+    )
+    order = (await db.execute(stmt)).scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
+
+    # 1. حالة مراحل الإنتاج
+    stages_completed = (
+        len(order.stage_events) == 5
+        and all(e.status == "completed" for e in order.stage_events)
+    )
+
+    # 2. مستندات التحويل والفروقات
+    transfers = (await db.execute(
+        select(WarehouseTransfer)
+        .options(selectinload(WarehouseTransfer.lines))
+        .where(WarehouseTransfer.order_id == order_id)
+    )).scalars().all()
+
+    pending_transfers_count = sum(1 for t in transfers if t.status == "in_transit")
+    unresolved_discrepancies_count = 0
+    for t in transfers:
+        for line in t.lines:
+            if line.discrepancy_quantity != 0.0:
+                unresolved_discrepancies_count += 1
+
+    # 3. إجمالي المستلم من المنتج التام
+    existing_receipts = await db.scalar(
+        select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
+        .where(
+            StockLedgerEntry.reference_doc_type == "production_order_finished_receipt",
+            StockLedgerEntry.reference_doc_id == order.id,
+            StockLedgerEntry.entry_type == "finished_goods_receipt",
+        )
+    )
+    total_received_goods = float(existing_receipts or 0.0)
+    if total_received_goods >= order.target_quantity:
+        goods_receipt_status = "complete"
+    elif total_received_goods > 0:
+        goods_receipt_status = "partial"
+    else:
+        goods_receipt_status = "pending"
+
+    # 4. أرصدة خامات الورشة (WIP Stock Ledger)
+    wip_entries = (await db.execute(
+        select(StockLedgerEntry)
+        .where(
+            StockLedgerEntry.bucket_reference == f"order:{order.id}",
+            StockLedgerEntry.location_type == "warehouse",
+        )
+    )).scalars().all()
+
+    wip_balance_by_item: dict[str, float] = {}
+    for entry in wip_entries:
+        wip_balance_by_item[entry.item_id] = round(
+            wip_balance_by_item.get(entry.item_id, 0.0) + entry.quantity, 4
+        )
+
+    # تفصيل الخامات
+    materials_summary: list[OrderMaterialWipItem] = []
+    net_wip_balance = 0.0
+
+    transfer_lines_by_item: dict[str, dict] = {}
+    for t in transfers:
+        for line in t.lines:
+            cur = transfer_lines_by_item.setdefault(line.item_id, {"dispatched": 0.0, "received": 0.0, "discrepancy": 0.0})
+            cur["dispatched"] += line.dispatched_quantity
+            cur["received"] += line.received_quantity
+            cur["discrepancy"] += line.discrepancy_quantity
+
+    for mat in order.materials:
+        t_data = transfer_lines_by_item.get(mat.item_id, {"dispatched": mat.dispatched_quantity, "received": mat.received_quantity, "discrepancy": mat.discrepancy_quantity})
+        dispatched = t_data["dispatched"]
+        received = t_data["received"]
+        discrepancy = t_data["discrepancy"]
+        in_transit = max(0.0, dispatched - received - abs(discrepancy)) if any(t.status == "in_transit" for t in transfers) else 0.0
+        wip_bal = wip_balance_by_item.get(mat.item_id, 0.0)
+
+        item_code = mat.item.code if mat.item else ""
+        item_name = mat.item.name_ar if mat.item else mat.item_name_snapshot
+        unit_name = mat.unit.name_ar if mat.unit else ""
+
+        materials_summary.append(
+            OrderMaterialWipItem(
+                item_id=mat.item_id,
+                item_code=item_code,
+                item_name_ar=item_name,
+                unit_id=mat.unit_id,
+                unit_name_ar=unit_name,
+                planned_quantity=mat.planned_quantity,
+                dispatched_quantity=dispatched,
+                received_quantity=received,
+                discrepancy_quantity=discrepancy,
+                in_transit_quantity=in_transit,
+                current_wip_balance=wip_bal,
+                status=mat.status,
+            )
+        )
+
+    # إجمالي رصيد خامات تحت التشغيل الفعلي المعزول لسلة هذا الأمر
+    net_wip_balance = round(sum(wip_balance_by_item.values()), 4)
+
+    # 5. أسباب منع الإغلاق
+    blocking_reasons: list[str] = []
+    if order.status == "closed":
+        can_close = False
+        blocking_reasons.append("أمر التشغيل مغلق بالفعل.")
+    else:
+        if not stages_completed:
+            blocking_reasons.append("لم تكتمل كافة مراحل الإنتاج الفنية (5 مراحل).")
+        if pending_transfers_count > 0:
+            blocking_reasons.append(f"يوجد {pending_transfers_count} مستند تحويل خامات لا يزال بالطريق.")
+        if unresolved_discrepancies_count > 0:
+            blocking_reasons.append(f"يوجد {unresolved_discrepancies_count} فروقات استلام بالورشة يلزم اعتماد إقرارها.")
+        if goods_receipt_status != "complete":
+            blocking_reasons.append(f"الكمية المستلمة ({total_received_goods}) أقل من المستهدفة ({order.target_quantity}).")
+        if net_wip_balance != 0.0:
+            blocking_reasons.append(f"يوجد رصيد خامات معلق بالورشة ({net_wip_balance}) لم تتم تسويته دفترياً ومخزنياً.")
+        can_close = len(blocking_reasons) == 0
+
+    return OrderWipSummary(
+        order_id=order.id,
+        order_number=order.order_number,
+        status=order.status,
+        target_quantity=order.target_quantity,
+        total_received_goods=total_received_goods,
+        goods_receipt_status=goods_receipt_status,
+        stages_completed=stages_completed,
+        pending_transfers_count=pending_transfers_count,
+        unresolved_discrepancies_count=unresolved_discrepancies_count,
+        net_wip_balance=round(net_wip_balance, 4),
+        can_close=can_close,
+        blocking_reasons=blocking_reasons,
+        materials=materials_summary,
+    )
+
+
+@router.post("/orders/{order_id}/close", response_model=OrderCloseResponse)
+async def close_production_order(
+    order_id: str,
+    data: OrderCloseRequest = OrderCloseRequest(),
+    current_user: AuthenticatedUser = Depends(require_permission("production:orders:manage")),
+    db: AsyncSession = Depends(get_db),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+):
+    """إغلاق أمر التشغيل نهائياً وتسوية ملفه بعد التحقق الصارم من شروط الأمان."""
+    async def _execute():
+        stmt = (
+            select(ProductionOrder)
+            .options(
+                selectinload(ProductionOrder.materials),
+                selectinload(ProductionOrder.stage_events),
+            )
+            .where(ProductionOrder.id == order_id)
+            .with_for_update()
+        )
+        order = (await db.execute(stmt)).scalar_one_or_none()
+        if not order:
+            raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
+
+        if order.status == "closed":
+            raise HTTPException(status_code=409, detail="أمر التشغيل مغلق نهائياً مسبقاً.")
+
+        # 1. التحقق من مراحل الإنتاج
+        stages_completed = (
+            len(order.stage_events) == 5
+            and all(e.status == "completed" for e in order.stage_events)
+        )
+        if not stages_completed:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="لا يمكن إغلاق أمر التشغيل قبل اكتمال كافة مراحل الإنتاج الفنية الخمس.",
+            )
+
+        # 2. التحقق من التحويلات المعلقة بالطريق
+        transfers = (await db.execute(
+            select(WarehouseTransfer)
+            .options(selectinload(WarehouseTransfer.lines))
+            .where(WarehouseTransfer.order_id == order_id)
+        )).scalars().all()
+
+        in_transit_transfers = [t for t in transfers if t.status == "in_transit"]
+        if in_transit_transfers:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="لا يمكن إغلاق الأمر لوجود مستندات تحويل خامات لا تزال قيد النقل بالطريق (in_transit).",
+            )
+
+        # 3. التحقق من فروقات الاستلام واعتمادها
+        discrepancy_lines = [
+            line for t in transfers for line in t.lines if line.discrepancy_quantity != 0.0
+        ]
+        if discrepancy_lines and not data.discrepancy_signoff:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"يوجد عدد ({len(discrepancy_lines)}) فروقات استلام بالورشة غير معتمدة. يلزم تفعيل إقرار الفروقات (discrepancy_signoff) مع بيان الأسباب.",
+            )
+
+        # 4. التحقق من استلام المنتج التام
+        existing_receipts = await db.scalar(
+            select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
+            .where(
+                StockLedgerEntry.reference_doc_type == "production_order_finished_receipt",
+                StockLedgerEntry.reference_doc_id == order.id,
+                StockLedgerEntry.entry_type == "finished_goods_receipt",
+            )
+        )
+        total_received_goods = float(existing_receipts or 0.0)
+        if total_received_goods < order.target_quantity and not (data.under_production_reason and data.under_production_reason.strip()):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"الكمية المستلمة ({total_received_goods}) أقل من المستهدفة ({order.target_quantity}). يلزم تقديم سبب العجز الإنتاجي (under_production_reason) للاعتماد.",
+            )
+
+        # 5. التحقق الصارم من تصفير وتسوية رصيد خامات تحت التشغيل (WIP Balance)
+        wip_balance = await db.scalar(
+            select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
+            .where(
+                StockLedgerEntry.bucket_reference == f"order:{order.id}",
+                StockLedgerEntry.location_type == "warehouse",
+            )
+        )
+        remaining_wip = round(float(wip_balance or 0.0), 4)
+        if remaining_wip != 0.0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"لا يمكن إغلاق أمر التشغيل لوجود رصيد خامات معلق بالورشة ({remaining_wip}) لم تتم تسويته مخزنياً ومالياً. تسجيل مصير الخامات نصياً لا يغني عن حركات التسوية الدفترية الفعلية.",
+            )
+
+        # 6. تحديث حالة الأمر وإثبات الإغلاق
+        now = datetime.now(timezone.utc)
+        order.status = "closed"
+        closure_log = f"\n[تم الإغلاق النهائي بواسطة {current_user.id} في {now.isoformat()}]"
+        if data.wip_disposition:
+            closure_log += f" | مصير الخامات: {data.wip_disposition}"
+            if data.wip_disposition_notes:
+                closure_log += f" ({data.wip_disposition_notes})"
+        if data.discrepancy_signoff:
+            closure_log += " | تم اعتماد فروقات الاستلام"
+            if data.discrepancy_notes:
+                closure_log += f": {data.discrepancy_notes}"
+        if data.under_production_reason:
+            closure_log += f" | مبرر نقص الإنتاج: {data.under_production_reason}"
+        if data.notes:
+            closure_log += f" | ملاحظات: {data.notes}"
+
+        order.notes = (order.notes or "") + closure_log
+        await db.flush()
+
+        return OrderCloseResponse(
+            order_id=order.id,
+            order_number=order.order_number,
+            status=order.status,
+            closed_at=now,
+            closed_by=current_user.id,
+            target_quantity=order.target_quantity,
+            total_received_goods=total_received_goods,
+            remaining_wip_balance=round(remaining_wip, 4),
+            discrepancy_count=len(discrepancy_lines),
+            wip_disposition=data.wip_disposition,
+            notes=data.notes,
+        )
+
+    return await execute_idempotent_operation(
+        db=db,
+        idempotency_key=idempotency_key,
+        operation_type="production.order_close",
+        resource_id=order_id,
+        user_id=current_user.id,
+        payload={"order_id": order_id, "data": data.model_dump()},
+        execute_fn=_execute,
+    )
+

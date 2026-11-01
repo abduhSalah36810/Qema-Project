@@ -238,7 +238,7 @@ async def test_production_completion_posts_stock_ledger_entry(base_entities, moc
     assert response.order_id == "order-p1"
     assert response.received_quantity == 50.0
     assert response.receipt_status == "complete"
-    assert order.status == "completed"
+    assert order.status == "receipt_completed"
 
     # التحقق من القيد الدفتري المضاف
     added_entry = None

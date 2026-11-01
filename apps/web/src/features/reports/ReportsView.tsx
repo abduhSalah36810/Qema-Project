@@ -6,6 +6,7 @@ import {
   type InventoryReport,
   type ReportPeriod,
 } from './reportsApi';
+import { CashFlowChart } from '@/features/operations-board/components/CashFlowChart';
 import { useAuth } from '@/features/auth/AuthContext';
 import { ApiError } from '@/lib/api';
 
@@ -410,7 +411,7 @@ export function ReportsView({ initialTab = 'summary' }: ReportsViewProps) {
                   </article>
 
                   <article>
-                    <span>إجمالي النقدية المتاحة</span>
+                    <span>إجمالي السيولة النقدية المتاحة</span>
                     <strong style={{ color: '#0f172a' }}>
                       {formatEgp(summaryData.treasury.balance + summaryData.treasury.petty_cash_total)}
                     </strong>
@@ -422,11 +423,11 @@ export function ReportsView({ initialTab = 'summary' }: ReportsViewProps) {
                     <strong style={{ color: '#16a34a' }}>
                       +{formatEgp(summaryData.treasury.revenues_period)}
                     </strong>
-                    <small style={{ color: '#64748b' }}>تدفقات نقدية داخلة معتمدة</small>
+                    <small style={{ color: '#64748b' }}>تدفقات تشغيلية داخلة معتمدة</small>
                   </article>
 
                   <article>
-                    <span>المدفوعات النقدية للفترة</span>
+                    <span>المصروفات النقدية للفترة</span>
                     <strong style={{ color: '#dc2626' }}>
                       -{formatEgp(summaryData.treasury.expenses_period)}
                     </strong>
@@ -504,69 +505,16 @@ export function ReportsView({ initialTab = 'summary' }: ReportsViewProps) {
                 </div>
               </div>
 
-              {/* مقارنة بصرية لميزان التدفق النقدي للفترة */}
-              <div
-                style={{
-                  backgroundColor: '#ffffff',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '12px',
-                  padding: '1.25rem',
-                  marginTop: '1rem',
-                }}
-              >
-                <h4 style={{ margin: '0 0 0.75rem', fontSize: '1rem', color: '#0f172a' }}>
-                  ميزان التدفق النقدي للفترة ({getPeriodLabel(summaryPeriod)})
-                </h4>
-                {summaryData.treasury.revenues_period === 0 && summaryData.treasury.expenses_period === 0 ? (
-                  <p style={{ margin: 0, color: '#64748b', fontSize: '0.88rem' }}>
-                    لا توجد حركات مقبوضات أو مدفوعات نقدية مسجلة خلال الفترة المختارة (الرصيد الفعلي ٠ ج.م).
-                  </p>
-                ) : (
-                  <div>
-                    <div
-                      style={{
-                        height: '14px',
-                        display: 'flex',
-                        borderRadius: '999px',
-                        overflow: 'hidden',
-                        backgroundColor: '#f1f5f9',
-                        marginBottom: '0.6rem',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${
-                            (summaryData.treasury.revenues_period /
-                              (summaryData.treasury.revenues_period + summaryData.treasury.expenses_period || 1)) *
-                            100
-                          }%`,
-                          backgroundColor: '#16a34a',
-                        }}
-                        title={`المقبوضات: ${formatEgp(summaryData.treasury.revenues_period)}`}
-                      />
-                      <div
-                        style={{
-                          width: `${
-                            (summaryData.treasury.expenses_period /
-                              (summaryData.treasury.revenues_period + summaryData.treasury.expenses_period || 1)) *
-                            100
-                          }%`,
-                          backgroundColor: '#dc2626',
-                        }}
-                        title={`المدفوعات: ${formatEgp(summaryData.treasury.expenses_period)}`}
-                      />
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem' }}>
-                      <span style={{ color: '#16a34a', fontWeight: 600 }}>
-                        ● مقبوضات نقدية: {formatEgp(summaryData.treasury.revenues_period)}
-                      </span>
-                      <span style={{ color: '#dc2626', fontWeight: 600 }}>
-                        ● مدفوعات نقدية: {formatEgp(summaryData.treasury.expenses_period)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
+              {/* ميزان ورسم بياني للتدفق النقدي والسيولة */}
+              <CashFlowChart
+                revenues={summaryData.treasury.revenues_period}
+                expenses={summaryData.treasury.expenses_period}
+                net={summaryData.treasury.net_period}
+                treasuryBalance={summaryData.treasury.balance}
+                pettyCashTotal={summaryData.treasury.petty_cash_total}
+                periodLabel={getPeriodLabel(summaryPeriod)}
+                loading={false}
+              />
             </>
           ) : null}
         </div>
@@ -758,6 +706,67 @@ export function ReportsView({ initialTab = 'summary' }: ReportsViewProps) {
                     خلال آخر {financialData.since_days} يومًا
                   </small>
                 </article>
+              </div>
+
+              {/* شريط المقارنة البصرية للمستندات النقدية */}
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '1.25rem',
+                  marginBottom: '1.5rem',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#0f172a' }}>
+                    ميزان المقبوضات والمصروفات النقدية (آخر {financialData.since_days} يومًا)
+                  </span>
+                  <span style={{ fontSize: '0.82rem', color: '#64748b' }}>
+                    صافي الحركة: <strong style={{ color: financialData.net >= 0 ? '#16a34a' : '#dc2626' }}>{financialData.net >= 0 ? '+' : ''}{formatEgp(financialData.net)}</strong>
+                  </span>
+                </div>
+                {financialData.revenues.total === 0 && financialData.expenses.total === 0 ? (
+                  <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem' }}>
+                    لا توجد سندات مقبوضات أو مصروفات مسجلة خلال الفترة (صافي الحركة ٠٫٠٠ ج.م).
+                  </p>
+                ) : (
+                  <div>
+                    <div
+                      style={{
+                        height: '12px',
+                        display: 'flex',
+                        borderRadius: '999px',
+                        overflow: 'hidden',
+                        backgroundColor: '#f1f5f9',
+                        marginBottom: '0.5rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${(financialData.revenues.total / (financialData.revenues.total + financialData.expenses.total || 1)) * 100}%`,
+                          backgroundColor: '#16a34a',
+                        }}
+                        title={`المقبوضات: ${formatEgp(financialData.revenues.total)}`}
+                      />
+                      <div
+                        style={{
+                          width: `${(financialData.expenses.total / (financialData.revenues.total + financialData.expenses.total || 1)) * 100}%`,
+                          backgroundColor: '#dc2626',
+                        }}
+                        title={`المصروفات: ${formatEgp(financialData.expenses.total)}`}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem' }}>
+                      <span style={{ color: '#16a34a', fontWeight: 600 }}>
+                        ● المقبوضات: +{formatEgp(financialData.revenues.total)} ({financialData.revenues.count.toLocaleString('ar-EG')} سند)
+                      </span>
+                      <span style={{ color: '#dc2626', fontWeight: 600 }}>
+                        ● المصروفات: -{formatEgp(financialData.expenses.total)} ({financialData.expenses.count.toLocaleString('ar-EG')} سند)
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* جدول سندات المقبوضات النقدية */}
@@ -975,6 +984,65 @@ export function ReportsView({ initialTab = 'summary' }: ReportsViewProps) {
                   </strong>
                   <small style={{ color: '#64748b' }}>رصيد صفر أو سالب يستدعي الشراء</small>
                 </article>
+              </div>
+
+              {/* شريط المؤشر البصري لسلامة المخزون */}
+              <div
+                style={{
+                  backgroundColor: '#ffffff',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '10px',
+                  padding: '1.25rem',
+                  marginBottom: '1.5rem',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#0f172a' }}>
+                    مؤشر كفاية المخزون ونسبة الأصناف الحرجة
+                  </span>
+                  <span style={{ fontSize: '0.82rem', color: '#64748b' }}>
+                    إجمالي الأصناف: <strong>{inventoryData.total_items.toLocaleString('ar-EG')} صنفًا</strong>
+                  </span>
+                </div>
+                {inventoryData.total_items === 0 ? (
+                  <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem' }}>
+                    لا توجد أصناف مسجلة في هذا المخزن حالياً.
+                  </p>
+                ) : (
+                  <div>
+                    {(() => {
+                      const availableCount = inventoryData.items.filter((it) => !it.low_stock).length;
+                      const lowCount = inventoryData.items.filter((it) => it.low_stock).length;
+                      const availPct = Math.round((availableCount / (inventoryData.total_items || 1)) * 100);
+                      const lowPct = 100 - availPct;
+                      return (
+                        <>
+                          <div
+                            style={{
+                              height: '12px',
+                              display: 'flex',
+                              borderRadius: '999px',
+                              overflow: 'hidden',
+                              backgroundColor: '#f1f5f9',
+                              marginBottom: '0.5rem',
+                            }}
+                          >
+                            <div style={{ width: `${availPct}%`, backgroundColor: '#0f766e' }} />
+                            <div style={{ width: `${lowPct}%`, backgroundColor: '#ea580c' }} />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem' }}>
+                            <span style={{ color: '#0f766e', fontWeight: 600 }}>
+                              ● أصناف متوفرة للتشغيل: {availableCount.toLocaleString('ar-EG')} ({availPct}%)
+                            </span>
+                            <span style={{ color: '#ea580c', fontWeight: 600 }}>
+                              ● أصناف نافدة أو حرجة: {lowCount.toLocaleString('ar-EG')} ({lowPct}%)
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
 
               {/* جدول الأرصدة */}

@@ -323,7 +323,10 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                 {order.status === 'draft' && 'مسودة جديدة'}
                 {order.status === 'materials_dispatched' && 'خامات بالطريق'}
                 {order.status === 'in_production' && 'قيد الإنتاج'}
+                {order.status === 'manufacturing_completed' && 'اكتمل التصنيع الميداني'}
+                {order.status === 'receipt_completed' && 'تم استلام المنتج التام'}
                 {order.status === 'completed' && 'مكتملة التجهيز'}
+                {order.status === 'closed' && 'مغلق ومسوى نهائياً'}
               </span>
             </div>
             <h2 className="modal-title">
@@ -461,7 +464,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                   </div>
                 )}
 
-                {order.status === 'in_production' && (
+                {['in_production', 'manufacturing_completed', 'receipt_completed', 'completed', 'closed'].includes(order.status) && (
                   <div className="action-box action-box--success">
                     <div>
                       <strong>✓ الخامات مستلمة في مخزن تحت التشغيل</strong>

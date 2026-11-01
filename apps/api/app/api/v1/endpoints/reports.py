@@ -84,11 +84,20 @@ async def get_summary(
 
     # ─── الإنتاج ──────────────────────────────────────────────────────────────
     active_orders = await db.scalar(
-        select(func.count(ProductionOrder.id)).where(ProductionOrder.status.in_(["pending", "in_progress"]))
+        select(func.count(ProductionOrder.id)).where(
+            ProductionOrder.status.in_([
+                "pending",
+                "in_progress",
+                "materials_dispatched",
+                "in_production",
+                "manufacturing_completed",
+                "receipt_completed",
+            ])
+        )
     ) or 0
     completed_orders_period = await db.scalar(
         select(func.count(ProductionOrder.id)).where(
-            ProductionOrder.status == "completed",
+            ProductionOrder.status.in_(["completed", "closed"]),
             ProductionOrder.created_at >= since,
         )
     ) or 0

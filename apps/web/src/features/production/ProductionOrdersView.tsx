@@ -89,8 +89,8 @@ export const ProductionOrdersView: React.FC = () => {
       statusFilter === 'all' ||
       (statusFilter === 'draft' && o.status === 'draft') ||
       (statusFilter === 'dispatched' && o.status === 'materials_dispatched') ||
-      (statusFilter === 'in_production' && o.status === 'in_production') ||
-      (statusFilter === 'completed' && o.status === 'completed');
+      (statusFilter === 'in_production' && (o.status === 'in_production' || o.status === 'manufacturing_completed')) ||
+      (statusFilter === 'completed' && ['completed', 'receipt_completed', 'closed'].includes(o.status));
 
     const matchesSearch =
       searchQuery.trim() === '' ||
@@ -105,8 +105,8 @@ export const ProductionOrdersView: React.FC = () => {
   const totalOrders = orders.length;
   const draftOrders = orders.filter((o) => o.status === 'draft').length;
   const inTransitOrders = orders.filter((o) => o.status === 'materials_dispatched').length;
-  const inProdOrders = orders.filter((o) => o.status === 'in_production').length;
-  const completedOrders = orders.filter((o) => o.status === 'completed').length;
+  const inProdOrders = orders.filter((o) => o.status === 'in_production' || o.status === 'manufacturing_completed').length;
+  const completedOrders = orders.filter((o) => ['completed', 'receipt_completed', 'closed'].includes(o.status)).length;
 
   return (
     <div className="production-view-container" dir="rtl">
@@ -294,7 +294,10 @@ export const ProductionOrdersView: React.FC = () => {
                           {ord.status === 'draft' && 'مسودة'}
                           {ord.status === 'materials_dispatched' && 'خامات بالطريق'}
                           {ord.status === 'in_production' && 'قيد التشغيل'}
+                          {ord.status === 'manufacturing_completed' && 'اكتمل التصنيع'}
+                          {ord.status === 'receipt_completed' && 'تم استلام التام'}
                           {ord.status === 'completed' && 'مكتمل'}
+                          {ord.status === 'closed' && 'مغلق ومسوى'}
                         </span>
                       </div>
 

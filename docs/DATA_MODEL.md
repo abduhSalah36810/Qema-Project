@@ -264,3 +264,54 @@
 - يمكن ربط عدة أوامر تشغيل ببند تصنيع واحد على دفعات؛ لا يتجاوز مجموع كمياتها كمية الطلب. الصرف المخزني يظل ضمن دورة الإنتاج الحالية.
 - المدفوعات تُحفظ كإيصالات تشغيلية ويحسب منها رصيد مبدئي للطلب؛ لا تنشئ قيودًا أو حركات نقدية محاسبية.
 - هذه الافتراضات مؤقتة للمراجعة مع المصنع، ولا تمثل اعتمادًا نهائيًا لسياسة البيع أو الخصم أو الائتمان.
+
+
+---
+
+## 9. الجرد والتسويات المخزنية (Stocktake & Inventory Adjustments - Phase 4)
+
+تمت إضافة منظومة الجرد والتسويات المخزنية عبر ترحيل Alembic رقم `20261102_0015_add_stocktake_and_adjustments.py`:
+
+### الجداول الأساسية
+1. `stocktake_sessions`:
+   - `id`: المعرف الفريد للجلسة (UUID).
+   - `session_number`: رقم الجلسة الفريد المتسلسل (مثل `STK-20261102-0001`).
+   - `warehouse_id`: معرف المخزن المجرد (Foreign Key to `warehouses.id`).
+   - `status`: حالة الجلسة (`draft`, `counting`, `under_review`, `recounting`, `approved`, `posted`, `cancelled`).
+   - `scope_type`: نطاق الجرد (`full_warehouse`, `specific_items`).
+   - `description`: بيان أو سبب الجرد.
+   - `total_lines`, `counted_lines`, `shortage_lines`, `surplus_lines`, `exact_lines`: مؤشرات إحصائية تلخيصية.
+   - `net_variance_cost`: صافي الأثر المالي لفروقات الجرد.
+   - `created_by`, `reviewer_id`, `review_decision`, `review_notes`, `posted_by`, `cancelled_by`, `cancellation_reason`: الفاعلون وقرارات الاعتماد (Maker-Checker).
+   - التواريخ الزمنية: `created_at`, `counting_started_at`, `submitted_at`, `reviewed_at`, `posted_at`, `cancelled_at`.
+
+2. `stocktake_lines`:
+   - `id`: معرف السطر (UUID).
+   - `session_id`: معرف جلسة الجرد (FK to `stocktake_sessions.id` مع `ON DELETE CASCADE`).
+   - `item_id`, `unit_id`: الصنف والوحدة المعتمدة.
+   - `book_quantity`: اللقطة الدفترية للأرصدة لحظة فتح الجلسة (Book Snapshot).
+   - `counted_quantity`: الكمية المعدودة فعلياً (يقبل `NULL` للدلالة على غير معدود، مع تمييز الصفر الفعلي `0.0`).
+   - `variance_quantity`: الفرق المحسوب (`counted_quantity - book_quantity`).
+   - `variance_type`: تصنيف الفرق (`pending`, `exact`, `shortage`, `surplus`).
+   - `unit_cost`: تكلفة الوحدة المقدرة وقت الجرد.
+   - `total_variance_cost`: أثر تكلفة الفرق الإجمالي (`variance_quantity * unit_cost`).
+   - `needs_recount`: راية طلب إعادة العد الميداني.
+   - `last_counted_by`, `last_counted_at`, `notes`.
+
+3. `stocktake_count_history`:
+   - سجل تاريخي تدقيقي تراكمي (Append-Only) لحفظ كل محاولة عد أو إعادة عد للصنف:
+   - `id`, `line_id`: ربط بسطر الجرد.
+   - `count_sequence`: رقم الترتيب التتابعي للمحاولة (1, 2, 3...).
+   - `counted_quantity`: الكمية المسجلة في تلك المحاولة.
+   - `counter_id`, `counter_role`, `counter_notes`, `recorded_at`.
+
+4. `stocktake_audit_logs`:
+   - سجل تدقيق زمني شامل لأحداث جلسة الجرد (Audit Trail):
+   - `id`, `session_id`, `event_type`, `event_name_ar`, `actor_id`, `actor_role`, `details` (JSONB), `created_at`.
+
+### ضمانات السلامة المخزنية المطبقة
+- **عدم المساس المباشر بالأرصدة:** لا يتم تعديل أي رصيد مخزني مباشرة، بل تُنشأ قيود ليدجر حقيقية (`StockLedgerEntry`) نوعها `inventory_adjustment_shortage` (خصم سالب) أو `inventory_adjustment_surplus` (إضافة موجبة)، ولا يُنشأ قيد للتطابق التام.
+- **حظر تعديل أو مسح القيود:** قيود الليدجر محمية بتريجر قاعدة البيانات الصارم `trg_prevent_stock_ledger_mutation` لمنع `UPDATE` و`DELETE`.
+- **حماية تعارض اللقطة (Snapshot Drift Protection):** قبل ترحيل التسويات، يتحقق النظام من تطابق رصيد المخزن الفعلي الحي مع اللقطة الدفترية `book_quantity`. وفي حال حدوث حركات مخزنية متداخلة غير مصرح بها أثناء فترة الجرد، يُرفض الترحيل بـ `HTTP 409 Conflict`.
+- **منع التكرار (Idempotency Engine):** مسار الترحيل محمي بترويسة `Idempotency-Key` وتطبيق أقفال حصرية موجهة (`lock_stock_balance`).
+- **فصل الصلاحيات (Maker-Checker RBAC):** يحق لأمين المخزن (`warehouse_manager`) إنشاء الجلسة، والعد، ورفعها للمراجعة، بينما يقتصر حق طلب إعادة العد، والاعتماد، والترحيل النهائي على المدير العام (`general_manager`).

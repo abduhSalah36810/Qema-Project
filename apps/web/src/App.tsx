@@ -6,6 +6,7 @@ import { CustomersView } from '@/features/customers/CustomersView';
 import { MainWarehouseView } from '@/features/inventory/MainWarehouseView';
 import { MachineryView } from '@/features/inventory/MachineryView';
 import { FinishedGoodsView } from '@/features/inventory/FinishedGoodsView';
+import { StocktakeView } from '@/features/inventory/StocktakeView';
 import { CatalogManagementView } from '@/features/catalog/CatalogManagementView';
 import { TreasuryView } from '@/features/finance/TreasuryView';
 import { RevenuesView } from '@/features/finance/RevenuesView';
@@ -64,6 +65,7 @@ const SIDEBAR_ITEMS: NavEntry[] = [
       { id: 'warehouse-machinery', name: 'الماكينات والمعدات' },
       { id: 'warehouse-finished', name: 'مخزن المنتجات التامة' },
       { id: 'warehouse-catalog', name: 'دليل الأصناف والتصنيفات' },
+      { id: 'warehouse-stocktake', name: 'الجرد والتسويات المخزنية', requiredPermission: 'inventory:stocktake:view' },
       { id: 'warehouse-reports', name: 'تقرير أرصدة المخزون', requiredPermission: 'inventory:view' },
     ],
   },
@@ -105,6 +107,8 @@ function getHeaderInfo(nav: string): { kicker: string; title: string } {
       return { kicker: 'المخازن · معدات التشغيل وخطوط الإنتاج', title: 'الماكينات ومعدات التشغيل' };
     case 'warehouse-finished':
       return { kicker: 'المخازن · المنتجات الجاهزة للتسليم النهائي', title: 'مخزن المنتجات التامة' };
+    case 'warehouse-stocktake':
+      return { kicker: 'المخازن · الجرد الميداني وتثبيت الدفاتر والتسويات المعتمدة', title: 'إدارة الجرد والتسويات المخزنية' };
     case 'warehouse-reports':
       return { kicker: 'المخازن · التحليل وأرصدة الدفاتر', title: 'تقرير حركة وأرصدة المخزون' };
     case 'finance-treasury':
@@ -162,6 +166,13 @@ function AppContent() {
     authMode === 'local_dev' ||
     !user ||
     roles.length === 0 ||
+    hasPermission('inventory:view');
+
+  const canAccessStocktake =
+    authMode === 'local_dev' ||
+    !user ||
+    roles.length === 0 ||
+    hasPermission('inventory:stocktake:view') ||
     hasPermission('inventory:view');
 
   const checkServerHealth = useCallback(async () => {
@@ -565,6 +576,44 @@ function AppContent() {
             <MachineryView />
           ) : activeNav === 'warehouse-finished' ? (
             <FinishedGoodsView />
+          ) : activeNav === 'warehouse-stocktake' ? (
+            canAccessStocktake ? (
+              <StocktakeView />
+            ) : (
+              <section className="warehouse-page" dir="rtl">
+                <header className="warehouse-page__header">
+                  <div>
+                    <span className="warehouse-page__eyebrow">الصلاحيات والتفويض</span>
+                    <h2>تم رفض الوصول (403 Forbidden)</h2>
+                    <p>حسابك لا يمتلك الصلاحية المطلوبة لعرض شاشة الجرد والتسويات المخزنية.</p>
+                  </div>
+                </header>
+                <div
+                  className="warehouse-alert"
+                  role="alert"
+                  style={{
+                    backgroundColor: '#fff1f2',
+                    borderColor: '#fecdd3',
+                    color: '#9f1239',
+                    padding: '2rem',
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🔒</div>
+                  <h3 style={{ margin: '0 0 0.5rem', color: '#9f1239' }}>صلاحية الوصول غير كافية</h3>
+                  <p style={{ margin: '0 0 1rem', color: '#881337', fontSize: '0.9rem' }}>
+                    يتطلب عرض هذه الشاشة الحصول على صلاحية <code>inventory:stocktake:view</code>.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn--secondary"
+                    onClick={() => setActiveNav('dashboard')}
+                  >
+                    العودة للوحة التشغيل
+                  </button>
+                </div>
+              </section>
+            )
           ) : activeNav === 'warehouse-reports' ? (
             canAccessInventoryReports ? (
               <FinancialReportsView initialTab="inventory" />

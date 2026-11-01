@@ -126,6 +126,7 @@ describe('Reports Experience — Frontend Unit Tests', () => {
       expect(screen.getByText(/الأساس النقدي الفعلي/i)).toBeInTheDocument();
       expect(screen.getByText(/المقبوضات النقدية للفترة/i)).toBeInTheDocument();
       expect(screen.getByText(/صافي التدفق النقدي للفترة/i)).toBeInTheDocument();
+      expect(screen.getByText(/إجمالي السيولة النقدية المتاحة/i)).toBeInTheDocument();
     });
 
     // Check numbers and currency formatting
@@ -140,6 +141,9 @@ describe('Reports Experience — Frontend Unit Tests', () => {
     expect(screen.getAllByText(new RegExp(netStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length).toBeGreaterThan(0);
     expect(screen.getAllByText(new RegExp(payStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length).toBeGreaterThan(0);
     expect(screen.getByText(new RegExp(`${rawItemsStr} صنفًا`))).toBeInTheDocument();
+
+    // Chart presence
+    expect(screen.getByText(/ميزان التدفق النقدي التشغيلي والسيولة/i)).toBeInTheDocument();
   });
 
   it('switches period filter and triggers updated API request', async () => {
@@ -206,7 +210,29 @@ describe('Reports Experience — Frontend Unit Tests', () => {
       expect(screen.getByText(/دفعة نقدية من شركة الأمل/i)).toBeInTheDocument();
       expect(screen.getByText(/CSH-PAY-2026-001/i)).toBeInTheDocument();
       expect(screen.getByText(/سداد دفعة نقدية لمورد الأقمشة المصرية/i)).toBeInTheDocument();
+      expect(screen.getByText(/ميزان المقبوضات والمصروفات النقدية/i)).toBeInTheDocument();
     });
+  });
+
+  it('filters financial documents by type (inflow vs outflow)', async () => {
+    vi.mocked(reportsApi.getFinancialReport).mockResolvedValue(mockFinancialData);
+
+    renderWithAuth(<ReportsView initialTab="financial" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/CSH-REC-2026-001/i)).toBeInTheDocument();
+      expect(screen.getByText(/CSH-PAY-2026-001/i)).toBeInTheDocument();
+    });
+
+    // Filter by inflow only
+    fireEvent.click(screen.getByRole('button', { name: 'مقبوضات فقط' }));
+    expect(screen.getByText(/CSH-REC-2026-001/i)).toBeInTheDocument();
+    expect(screen.queryByText(/CSH-PAY-2026-001/i)).not.toBeInTheDocument();
+
+    // Filter by outflow only
+    fireEvent.click(screen.getByRole('button', { name: 'مصروفات فقط' }));
+    expect(screen.queryByText(/CSH-REC-2026-001/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/CSH-PAY-2026-001/i)).toBeInTheDocument();
   });
 
   it('renders Stock Balances in Inventory tab distinguishing real zero from missing data', async () => {
@@ -224,6 +250,25 @@ describe('Reports Experience — Frontend Unit Tests', () => {
       expect(screen.getByText(/BTN-PEARL-18/i)).toBeInTheDocument();
       expect(screen.getByText((0).toLocaleString('ar-EG'))).toBeInTheDocument();
       expect(screen.getByText(/رصيد نافد أو حرج/i)).toBeInTheDocument();
+      // Visual indicator present
+      expect(screen.getByText(/مؤشر كفاية المخزون ونسبة الأصناف الحرجة/i)).toBeInTheDocument();
+    });
+  });
+
+  it('triggers warehouse filter switch in Inventory tab', async () => {
+    vi.mocked(reportsApi.getInventoryReport).mockResolvedValue(mockInventoryData);
+
+    renderWithAuth(<ReportsView initialTab="inventory" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/المخزن المستهدف:/i)).toBeInTheDocument();
+    });
+
+    // Change warehouse dropdown
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'finished_goods' } });
+
+    await waitFor(() => {
+      expect(reportsApi.getInventoryReport).toHaveBeenCalledWith('finished_goods');
     });
   });
 
@@ -241,6 +286,35 @@ describe('Reports Experience — Frontend Unit Tests', () => {
     await waitFor(() => {
       expect(screen.getByText(/لا توجد سندات مقبوضات نقدية مسجلة/i)).toBeInTheDocument();
       expect(screen.getByText(/لا توجد سندات مدفوعات أو مصروفات نقدية مسجلة/i)).toBeInTheDocument();
+    });
+  });
+
+  it('isolates tab failures so failure of financial report does not crash other tabs', async () => {
+    vi.mocked(reportsApi.getSummary).mockResolvedValueOnce(mockSummaryData);
+    vi.mocked(reportsApi.getFinancialReport).mockRejectedValueOnce(
+      new ApiError('خطأ في تحميل التقرير المالي', { status: 500 })
+    );
+
+    renderWithAuth(<ReportsView initialTab="summary" />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/المقبوضات النقدية للفترة/i)).toBeInTheDocument();
+    });
+
+    // Switch to financial tab
+    fireEvent.click(screen.getByRole('tab', { name: /المقبوضات والمصروفات النقدية/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/خطأ تحميل:/i)).toBeInTheDocument();
+      expect(screen.getByText(/خطأ في تحميل التقرير المالي/i)).toBeInTheDocument();
+    });
+
+    // Switch back to summary tab — remains functional!
+    vi.mocked(reportsApi.getSummary).mockResolvedValueOnce(mockSummaryData);
+    fireEvent.click(screen.getByRole('tab', { name: /الملخص التشغيلي والسيولة/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/المقبوضات النقدية للفترة/i)).toBeInTheDocument();
     });
   });
 });

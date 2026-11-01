@@ -632,3 +632,175 @@ class ProductionPerformanceSummary(BaseModel):
     overall_cycle_avg_hours: float
     stages: List[StagePerformanceItem]
     delayed_orders: List[dict]
+
+
+# ─── تسوية خامات تحت التشغيل وإغلاق أمر التشغيل (WIP Lifecycle & Closure) ─────
+
+class OrderMaterialWipItem(BaseModel):
+    item_id: str
+    item_code: str
+    item_name_ar: str
+    unit_id: str
+    unit_name_ar: str
+    planned_quantity: float
+    dispatched_quantity: float
+    received_quantity: float
+    discrepancy_quantity: float
+    in_transit_quantity: float
+    current_wip_balance: float
+    status: str
+
+
+class OrderWipSummary(BaseModel):
+    order_id: str
+    order_number: str
+    status: str
+    target_quantity: float
+    total_received_goods: float
+    goods_receipt_status: str  # pending, partial, complete
+    stages_completed: bool
+    pending_transfers_count: int
+    unresolved_discrepancies_count: int
+    net_wip_balance: float
+    can_close: bool
+    blocking_reasons: List[str]
+    materials: List[OrderMaterialWipItem]
+
+
+class OrderCloseRequest(BaseModel):
+    discrepancy_signoff: bool = Field(False, description="إقرار واعتماد فروقات استلام الورشة إن وجدت")
+    discrepancy_notes: str = Field("", max_length=2000, description="ملاحظات وتفاصيل تسوية فروقات الاستلام")
+    wip_disposition: Optional[str] = Field(None, max_length=64, description="نوع التوجيه المعتمد لرصيد خامات الورشة (e.g., standard_loss_tolerance, scrap, shopfloor_balance, returned_to_raw)")
+    wip_disposition_notes: str = Field("", max_length=2000, description="ملاحظات ومستندات اعتماد مصير خامات الورشة")
+    under_production_reason: Optional[str] = Field(None, max_length=2000, description="سبب إغلاق الأمر بكمية إنتاج تام أقل من المستهدفة")
+    notes: str = Field("", max_length=2000, description="ملاحظات الإغلاق النهائي")
+
+
+class OrderCloseResponse(BaseModel):
+    order_id: str
+    order_number: str
+    status: str
+    closed_at: datetime
+    closed_by: str
+    target_quantity: float
+    total_received_goods: float
+    remaining_wip_balance: float
+    discrepancy_count: int
+    wip_disposition: Optional[str]
+    notes: str
+
+
+# ─── Stocktake & Inventory Adjustments Schemas ───────────────────────────────
+
+class StocktakeCreateRequest(BaseModel):
+    warehouse_id: str = Field(..., description="المخزن المستهدف للجرد")
+    scope_type: str = Field("full_warehouse", pattern="^(full_warehouse|specific_items)$")
+    item_ids: Optional[List[str]] = Field(default=None, description="قائمة الأصناف المستهدفة في حال الجرد الجزئي")
+    description: str = Field("", max_length=255)
+    counting_date: Optional[datetime] = None
+
+
+class StocktakeCountItem(BaseModel):
+    line_id: str
+    counted_quantity: float = Field(..., ge=0.0, description="الكمية المعدودة فعلياً (الصفر قيمة معتمدة)")
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class StocktakeCountRequest(BaseModel):
+    counts: List[StocktakeCountItem]
+    reason: Optional[str] = Field("regular_count", max_length=255)
+
+
+class StocktakeSubmitRequest(BaseModel):
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class StocktakeReviewRequest(BaseModel):
+    decision: str = Field(..., pattern="^(approve|recount_required|reject)$")
+    recount_line_ids: Optional[List[str]] = Field(default=None, description="أسطر الأصناف المطلوب إعادة عدها")
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class StocktakePostRequest(BaseModel):
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+
+class StocktakeCancelRequest(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=1000, description="سبب إلغاء جلسة الجرد")
+
+
+class StocktakeCountHistoryRead(BaseModel):
+    id: str
+    line_id: str
+    counted_quantity: float
+    previous_quantity: Optional[float] = None
+    counter_id: str
+    counted_at: datetime
+    reason: str
+    notes: str
+
+
+class StocktakeLineRead(BaseModel):
+    id: str
+    stocktake_id: str
+    item_id: str
+    item_code: str
+    item_name_ar: str
+    unit_id: str
+    unit_name_ar: str
+    book_quantity: float
+    counted_quantity: Optional[float] = None
+    variance: Optional[float] = None
+    status: str
+    counter_id: Optional[str] = None
+    counted_at: Optional[datetime] = None
+    notes: str
+    count_history: Optional[List[StocktakeCountHistoryRead]] = None
+
+
+class StocktakeAuditLogRead(BaseModel):
+    id: str
+    stocktake_id: str
+    action: str
+    actor_id: str
+    actor_role: str
+    timestamp: datetime
+    details: Optional[dict] = None
+    notes: str
+
+
+class StocktakeSessionRead(BaseModel):
+    id: str
+    session_number: str
+    warehouse_id: str
+    warehouse_code: str = ""
+    warehouse_name_ar: str = ""
+    scope_type: str
+    status: str
+    description: str
+    counting_date: datetime
+    snapshot_at: Optional[datetime] = None
+    total_lines: int = 0
+    counted_lines: int = 0
+    discrepancy_lines: int = 0
+    shortage_count: int = 0
+    surplus_count: int = 0
+    exact_count: int = 0
+    created_by: str
+    submitted_by: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    review_notes: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    approval_notes: Optional[str] = None
+    posted_by: Optional[str] = None
+    posted_at: Optional[datetime] = None
+    cancelled_by: Optional[str] = None
+    cancelled_at: Optional[datetime] = None
+    cancellation_reason: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    lines: Optional[List[StocktakeLineRead]] = None
+

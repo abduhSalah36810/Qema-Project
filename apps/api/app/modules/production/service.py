@@ -13,7 +13,7 @@ from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -197,7 +197,7 @@ async def create_production_order(
             if current and current["unit_id"] != line["unit_id"]:
                 raise HTTPException(status_code=422, detail="وحدات الصنف تختلف بين قوالب بنود أمر التشغيل.")
             if not current:
-                material_totals[line["item_id"]] = {**line, "notes": line["notes"]}
+                material_totals[line["item_id"]] = {**line, "notes": line["notes"], "name_ar": catalog_item.name_ar if catalog_item else ""}
             else:
                 current["planned_quantity"] = round(current["planned_quantity"] + line["planned_quantity"], 4)
                 if line["notes"]:
@@ -217,16 +217,20 @@ async def create_production_order(
             material_totals[mat.item_id] = {
                 "item_id": mat.item_id, "unit_id": mat.unit_id,
                 "planned_quantity": mat.planned_quantity, "notes": mat.notes,
+                "name_ar": catalog_item.name_ar if catalog_item else "",
             }
 
     for line in material_totals.values():
-        mat_item = await session.get(CatalogItem, line["item_id"])
+        name_ar = line.get("name_ar")
+        if not name_ar:
+            mat_item = await session.get(CatalogItem, line["item_id"])
+            name_ar = mat_item.name_ar if mat_item else ""
         session.add(ProductionOrderMaterial(
             id=str(uuid.uuid4()), order_id=order.id, item_id=line["item_id"],
             unit_id=line["unit_id"], planned_quantity=line["planned_quantity"],
             dispatched_quantity=0.0, received_quantity=0.0, discrepancy_quantity=0.0,
             status="pending", notes=line["notes"],
-            item_name_snapshot=mat_item.name_ar if mat_item else "",
+            item_name_snapshot=name_ar,
         ))
 
     # 2. إنشاء أحداث المراحل الخمس في حالة not_started
@@ -308,14 +312,32 @@ async def remove_material_from_draft_order(
     await session.commit()
 
 
+async def lock_stock_balance(session: AsyncSession, item_id: str, warehouse_id: str) -> None:
+    """
+    قفل موحد على مستوى (Item + Warehouse) لحماية رصيد المخزون من التنافس والتزامن.
+    يستخدم PostgreSQL Transaction-scoped Advisory Lock لضمان تسلسل العمليات
+    التي تقرأ أو تعدل رصيد صنف معين في مخزن معين، دون قفل المخزن بأكمله أو الأصناف الأخرى.
+    """
+    bind = session.bind
+    dialect_name = bind.dialect.name if bind else "postgresql"
+    if dialect_name == "postgresql":
+        lock_key = f"stock_balance:{item_id}:{warehouse_id}"
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": lock_key},
+        )
+
+
 async def dispatch_order_materials(
     session: AsyncSession,
     order_id: str,
     dispatcher_id: str,
     notes: str = "",
+    commit: bool = True,
 ) -> WarehouseTransfer:
     """
     صرف خامات أمر التشغيل من مخزن الخامات الرئيسي:
+    - قفل أرصدة الأصناف تصاعدياً بحسب item_id لحظر التنافس والرصيد السالب.
     - تسجيل المواد كـ "بالطريق" (in_transit).
     - تحديث حالة أمر التشغيل إلى materials_dispatched.
     """
@@ -334,26 +356,27 @@ async def dispatch_order_materials(
         raise HTTPException(status_code=400, detail="تم صرف خامات هذا الأمر مسبقاً.")
 
     # جلب المخزن الرئيسي ومخزن تحت التشغيل
-    raw_wh_res = await session.execute(
-        select(Warehouse).where(Warehouse.code == "main_raw_materials").with_for_update()
-    )
-    raw_wh = raw_wh_res.scalar_one_or_none()
-    wip_wh_res = await session.execute(select(Warehouse).where(Warehouse.code == "work_in_progress"))
-    wip_wh = wip_wh_res.scalar_one_or_none()
+    raw_wh = (await session.execute(select(Warehouse).where(Warehouse.code == "main_raw_materials"))).scalar_one_or_none()
+    wip_wh = (await session.execute(select(Warehouse).where(Warehouse.code == "work_in_progress"))).scalar_one_or_none()
 
     if not raw_wh or not wip_wh:
         raise HTTPException(status_code=500, detail="بيانات المخازن التشغيلية غير مكتملة.")
 
+    # قفل الأرصدة المستهدفة تصاعدياً بحسب item_id لتجنب التعارض ومنع الديدلوك
+    sorted_materials = sorted(order.materials, key=lambda m: m.item_id)
+    for mat in sorted_materials:
+        await lock_stock_balance(session, mat.item_id, raw_wh.id)
+
     shortages = []
-    for mat in order.materials:
+    for mat in sorted_materials:
         available = await session.scalar(
-            select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0)).where(
+            select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0)).where(
                 StockLedgerEntry.item_id == mat.item_id,
                 StockLedgerEntry.warehouse_id == raw_wh.id,
                 StockLedgerEntry.location_type == "warehouse",
             )
         )
-        if float(available or 0) + 1e-9 < mat.planned_quantity:
+        if float(available or 0.0) + 1e-9 < mat.planned_quantity:
             item = await session.get(CatalogItem, mat.item_id)
             shortages.append(
                 f"{item.name_ar if item else mat.item_id}: المتاح {float(available or 0):g} والمطلوب {mat.planned_quantity:g}"
@@ -380,6 +403,7 @@ async def dispatch_order_materials(
     )
     session.add(transfer)
 
+    lines = []
     for mat in order.materials:
         mat.dispatched_quantity = mat.planned_quantity
         mat.status = "dispatched"
@@ -394,6 +418,12 @@ async def dispatch_order_materials(
             notes=mat.notes or "",
         )
         session.add(line)
+        lines.append((line, mat))
+
+    # تثبيت سند التحويل وسطور التحويل أولاً لضمان وجود المفتاح الأجنبي لـ transfer_line_id
+    await session.flush()
+
+    for line, mat in lines:
         session.add(StockLedgerEntry(
             id=str(uuid.uuid4()), item_id=mat.item_id, unit_id=mat.unit_id,
             warehouse_id=raw_wh.id, location_type="warehouse", quantity=-mat.planned_quantity,
@@ -409,8 +439,12 @@ async def dispatch_order_materials(
         ))
 
     order.status = "materials_dispatched"
-    await session.commit()
-    await session.refresh(transfer)
+    if commit:
+        await session.commit()
+        await session.refresh(transfer)
+    else:
+        await session.flush()
+        await session.refresh(transfer)
     return transfer
 
 
@@ -419,6 +453,7 @@ async def confirm_warehouse_receipt(
     order_id: str,
     data: ReceiptConfirmRequest,
     receiver_id: str,
+    commit: bool = True,
 ) -> WarehouseTransfer:
     """
     تأكيد استلام المواد في مخزن تحت التشغيل من قبل أمين المخزن:
@@ -451,6 +486,11 @@ async def confirm_warehouse_receipt(
     if not order:
         raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
 
+    # قفل الأصناف بمخزن الوجهة لضمان التزامن
+    sorted_lines = sorted(transfer.lines, key=lambda l: l.item_id)
+    for line in sorted_lines:
+        await lock_stock_balance(session, line.item_id, transfer.destination_warehouse_id)
+
     received_map = {item.item_id: item.received_quantity for item in data.received_lines}
     notes_map = {item.item_id: item.notes for item in data.received_lines}
 
@@ -471,6 +511,7 @@ async def confirm_warehouse_receipt(
         session.add(StockLedgerEntry(
             id=str(uuid.uuid4()), item_id=line.item_id, unit_id=line.unit_id,
             warehouse_id=transfer.destination_warehouse_id, location_type="warehouse",
+            bucket_reference=f"order:{order.id}",
             quantity=rec_qty, reference_doc_type="warehouse_transfer",
             reference_doc_id=transfer.id, transfer_line_id=line.id,
             entry_type="receipt_warehouse", created_by=receiver_id,
@@ -503,8 +544,12 @@ async def confirm_warehouse_receipt(
         transfer.notes = f"{transfer.notes} | استلام: {data.notes}".strip(" |")
 
     order.status = "in_production"
-    await session.commit()
-    await session.refresh(transfer)
+    if commit:
+        await session.commit()
+        await session.refresh(transfer)
+    else:
+        await session.flush()
+        await session.refresh(transfer)
     return transfer
 
 
@@ -587,9 +632,9 @@ async def update_production_stage(
             timestamp=utc_now(),
         ))
 
-    # إذا اكتملت مرحلة التعبئة والتغليف (المرحلة الأخيرة)، يكتمل الأمر كلياً
+    # إذا اكتملت مرحلة التعبئة والتغليف (المرحلة الأخيرة)، ينتهي التصنيع الميداني بانتظار استلام المنتج التام
     if stage_name == "packing" and data.status == "completed":
-        order.status = "completed"
+        order.status = "manufacturing_completed"
 
     await session.commit()
     await session.refresh(target_event)

@@ -7,6 +7,8 @@ interface AlertPanelProps {
   count?: number;
   showAction?: boolean;
   actionLabel?: string;
+  emptyMessage?: string;
+  onActionClick?: () => void;
 }
 
 const ICON_CLASS: Record<AlertItem['iconVariant'], string> = {
@@ -28,6 +30,8 @@ export function AlertPanel({
   count,
   showAction = false,
   actionLabel = 'مراجعة التنبيهات ←',
+  emptyMessage = 'لا توجد تنبيهات مسجلة حالياً.',
+  onActionClick,
 }: AlertPanelProps) {
   return (
     <article className="side-panel">
@@ -41,32 +45,55 @@ export function AlertPanel({
         )}
       </div>
 
-      <div className="alert-list" role="list">
-        {items.map((item) => (
-          <div key={item.id} className="alert-item" role="listitem">
-            <div className={`alert-icon ${ICON_CLASS[item.iconVariant]}`} aria-hidden>
-              {item.iconChar}
+      {items.length === 0 ? (
+        <div
+          style={{
+            padding: '1.25rem 1rem',
+            textAlign: 'center',
+            backgroundColor: '#f8fafc',
+            borderRadius: '8px',
+            border: '1px dashed #cbd5e1',
+            color: '#64748b',
+            fontSize: '0.86rem',
+            margin: '0.75rem 0',
+          }}
+        >
+          {emptyMessage}
+        </div>
+      ) : (
+        <div className="alert-list" role="list">
+          {items.map((item) => (
+            <div key={item.id} className="alert-item" role="listitem">
+              <div className={`alert-icon ${ICON_CLASS[item.iconVariant]}`} aria-hidden>
+                {item.iconChar}
+              </div>
+              <div>
+                <div className="alert-item__title">{item.title}</div>
+                <div className="alert-item__sub">{item.subtitle}</div>
+              </div>
+              <div
+                className={[
+                  'alert-item__value',
+                  item.valueVariant ? VALUE_CLASS[item.valueVariant] : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              >
+                {item.value}
+              </div>
             </div>
-            <div>
-              <div className="alert-item__title">{item.title}</div>
-              <div className="alert-item__sub">{item.subtitle}</div>
-            </div>
-            <div
-              className={[
-                'alert-item__value',
-                item.valueVariant ? VALUE_CLASS[item.valueVariant] : '',
-              ]
-                .filter(Boolean)
-                .join(' ')}
-            >
-              {item.value}
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
-      {showAction && (
-        <button className="side-panel__action">{actionLabel}</button>
+      {showAction && items.length > 0 && (
+        <button
+          type="button"
+          className="side-panel__action"
+          onClick={onActionClick}
+        >
+          {actionLabel}
+        </button>
       )}
     </article>
   );

@@ -4,6 +4,7 @@ import { OperationsBoard } from './OperationsBoard';
 import { reportsApi, type SummaryReport } from '../reports/reportsApi';
 import { apiClient, ApiError } from '@/lib/api';
 import { AuthProvider } from '@/features/auth/AuthContext';
+import type { ProductionOrder } from '../production/productionApi';
 
 vi.mock('../reports/reportsApi', () => ({
   reportsApi: {
@@ -39,6 +40,46 @@ const mockSummaryReport: SummaryReport = {
   },
 };
 
+const mockOrders: ProductionOrder[] = [
+  {
+    id: 'ord-1',
+    order_number: 'PRD-2026-001',
+    product_id: 'p-1',
+    product_name_ar: 'قميص أكسفورد كلاسيك',
+    variant_id: 'v-1',
+    variant_info: 'مقاس 42 أبيض',
+    target_quantity: 200,
+    season: 'صيف 2026',
+    status: 'in_progress',
+    created_by: 'أحمد محمود',
+    assigned_to: 'خط التشغيل 1',
+    created_at: '2026-10-28T08:00:00Z',
+    notes: 'عاجل',
+    materials: [],
+    stage_events: [
+      { id: 'se-1', stage_name: 'cutting', status: 'completed', actor_id: 'u-1', actor_name: 'عامل 1', timestamp: '2026-10-28T10:00:00Z', notes: '' },
+      { id: 'se-2', stage_name: 'finishing', status: 'in_progress', actor_id: 'u-2', actor_name: 'عامل 2', timestamp: '2026-10-29T10:00:00Z', notes: '' },
+    ],
+  },
+  {
+    id: 'ord-2',
+    order_number: 'PRD-2026-002',
+    product_id: 'p-2',
+    product_name_ar: 'بنطلون جبردين كاجوال',
+    variant_id: 'v-2',
+    variant_info: 'مقاس 34 كحلي',
+    target_quantity: 150,
+    season: 'صيف 2026',
+    status: 'materials_dispatched',
+    created_by: 'محمد علي',
+    assigned_to: 'خط التشغيل 2',
+    created_at: '2026-10-29T09:00:00Z',
+    notes: '',
+    materials: [],
+    stage_events: [],
+  },
+];
+
 describe('OperationsBoard Critical Data Integrity & Dashboard Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,7 +87,6 @@ describe('OperationsBoard Critical Data Integrity & Dashboard Tests', () => {
   });
 
   it('renders loading state without displaying fake demo figures during initial load', async () => {
-    // Keep promise pending
     vi.mocked(reportsApi.getSummary).mockReturnValue(new Promise(() => {}));
 
     render(
@@ -59,7 +99,7 @@ describe('OperationsBoard Critical Data Integrity & Dashboard Tests', () => {
     expect(screen.getByText('المؤشرات التشغيلية للمصنع')).toBeInTheDocument();
     expect(screen.getByText(/مؤشرات السيولة النقدية والتدفقات/i)).toBeInTheDocument();
 
-    // Verify it does NOT display demo figures (e.g. 124 صنفًا or 514 قطعة)
+    // Verify it does NOT display demo figures
     expect(screen.queryByText('١٢٤ صنفًا')).not.toBeInTheDocument();
     expect(screen.queryByText('٥١٤ قطعة')).not.toBeInTheDocument();
   });
@@ -80,15 +120,83 @@ describe('OperationsBoard Critical Data Integrity & Dashboard Tests', () => {
       expect(screen.getByText(new RegExp(`${(3).toLocaleString('ar-EG')} أمر`))).toBeInTheDocument();
       // Finished goods count
       expect(screen.getByText(new RegExp(`${(18).toLocaleString('ar-EG')} صنفًا`))).toBeInTheDocument();
-      // Total available cash (85400 + 9200 = 94600)
+      // Total available cash (85400 + 9200 = 94600) — appears in KPI card and CashFlowChart
       const cashStr = (94600).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      expect(screen.getByText(new RegExp(cashStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+      expect(screen.getAllByText(new RegExp(cashStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length).toBeGreaterThan(0);
       // Net cash flow
       const netStr = (77000).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      expect(screen.getByText(new RegExp(netStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+      expect(screen.getAllByText(new RegExp(netStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length).toBeGreaterThan(0);
       // Supplier payables
       const payStr = (42000).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      expect(screen.getByText(new RegExp(payStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+      expect(screen.getAllByText(new RegExp(payStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length).toBeGreaterThan(0);
+    });
+
+    // Terminology check
+    expect(screen.getByText(/إجمالي السيولة النقدية المتاحة/i)).toBeInTheDocument();
+    expect(screen.getByText(/المقبوضات التشغيلية للفترة/i)).toBeInTheDocument();
+    expect(screen.getByText(/صافي التدفق النقدي للفترة/i)).toBeInTheDocument();
+  });
+
+  it('renders visual CashFlowChart and ProductionPipelineChart driven by actual API data', async () => {
+    vi.mocked(reportsApi.getSummary).mockResolvedValueOnce(mockSummaryReport);
+    vi.spyOn(apiClient, 'request').mockResolvedValueOnce(mockOrders);
+
+    render(
+      <AuthProvider>
+        <OperationsBoard />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      // CashFlowChart is rendered
+      expect(screen.getByText(/ميزان التدفق النقدي التشغيلي والسيولة/i)).toBeInTheDocument();
+      expect(screen.getByText(/مقارنة مؤشرات التدفق للفترة/i)).toBeInTheDocument();
+      // ProductionPipelineChart is rendered
+      expect(screen.getByText(/خط سير مراحل الإنتاج والتشغيل الحي/i)).toBeInTheDocument();
+      // Order batches mapped properly
+      expect(screen.getByText('PRD-2026-001 · خط التشغيل 1')).toBeInTheDocument();
+      expect(screen.getByText('قميص أكسفورد كلاسيك')).toBeInTheDocument();
+    });
+  });
+
+  it('dynamically derives operational alerts from real orders and payables', async () => {
+    vi.mocked(reportsApi.getSummary).mockResolvedValueOnce(mockSummaryReport);
+    vi.spyOn(apiClient, 'request').mockResolvedValueOnce(mockOrders);
+
+    render(
+      <AuthProvider>
+        <OperationsBoard />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      // Alert derived from order with materials_dispatched
+      expect(screen.getByText(/أمر تم صرف خاماتها بانتظار استلام الورشة/i)).toBeInTheDocument();
+      // Alert derived from supplier payables > 0
+      expect(screen.getByText(/مستحقات فواتير خامات تستوجب السداد/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders reassuring empty states when orders and alerts are clear without fake mock arrays', async () => {
+    vi.mocked(reportsApi.getSummary).mockResolvedValueOnce({
+      ...mockSummaryReport,
+      payables: { supplier_payables: 0 },
+    });
+    vi.spyOn(apiClient, 'request').mockResolvedValueOnce([]); // No orders
+
+    render(
+      <AuthProvider>
+        <OperationsBoard />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      // Reassuring empty state in alert panel
+      expect(screen.getByText(/لا توجد تنبيهات تشغيلية حرجة أو متأخرات معلقة للوردية الحالية/i)).toBeInTheDocument();
+      // Clean empty state in batches grid
+      expect(screen.getByText(/لا توجد دفعات تشغيل نشطة على خط الإنتاج حالياً/i)).toBeInTheDocument();
+      // Clean empty state in deliveries
+      expect(screen.getByText(/لا توجد تسليمات قادمة مستحقة خلال الأيام المقبلة/i)).toBeInTheDocument();
     });
   });
 
@@ -142,7 +250,7 @@ describe('OperationsBoard Critical Data Integrity & Dashboard Tests', () => {
       // KPIs are preserved and rendered successfully!
       expect(screen.getByText(new RegExp(`${(64).toLocaleString('ar-EG')} صنفًا`))).toBeInTheDocument();
       const cashStr = (94600).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      expect(screen.getByText(new RegExp(cashStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+      expect(screen.getAllByText(new RegExp(cashStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).length).toBeGreaterThan(0);
       // Orders section shows isolated error with retry
       expect(screen.getByText(/تعذر استرجاع أوامر التشغيل:/i)).toBeInTheDocument();
     });
