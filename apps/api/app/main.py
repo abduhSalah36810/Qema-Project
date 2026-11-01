@@ -10,7 +10,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.tracing import RequestTracingMiddleware
+from app.core.errors import setup_exception_handlers
 from app.api.v1.router import api_router
+from app.db.session import engine
+import app.db.base  # noqa: F401
 
 logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger("qemma.api")
@@ -20,7 +24,8 @@ logger = logging.getLogger("qemma.api")
 async def lifespan(app: FastAPI):
     logger.info("🚀 Qemma ERP API starting — env=%s", settings.app_env)
     yield
-    logger.info("🛑 Qemma ERP API shutting down")
+    logger.info("🛑 Qemma ERP API shutting down — disposing database engine")
+    await engine.dispose()
 
 
 app = FastAPI(
@@ -32,12 +37,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# سياسة CORS المقواة:
+# - نطاقات صريحة ومقيدة مستمدة من الإعدادات الخادمية (مع حظر النطاقات العامة '*' والاعتمادات)
+# - تحديد صريح للطرق المسموحة للواجهة الأمامية
+# - تحديد صريح للترويسات المدعومة (بما فيها Authorization وContent-Type وX-Request-ID)
+# - إتاحة ترويسة X-Request-ID للواجهة الأمامية
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "Origin"],
+    expose_headers=["X-Request-ID"],
+    max_age=600,
 )
+
+# برمجية تتبع الطلبات ومعرّف الطلب (تُضاف بعد CORS لتكون الغلاف الخارجي لجميع الطلبات بما فيها preflight)
+app.add_middleware(RequestTracingMiddleware)
+
+# تسجيل معالجات الأخطاء الموحدة والآمنة
+setup_exception_handlers(app)
 
 app.include_router(api_router, prefix="/api/v1")
