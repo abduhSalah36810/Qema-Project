@@ -62,6 +62,8 @@ ROLE_PERMISSIONS_MAP: dict[str, Set[str]] = {
         "suppliers:view",
         "suppliers:manage",
         "suppliers:receive",
+        "reports:view",
+        "finance:reports:view",
     },
     ROLE_WAREHOUSE_MANAGER: {
         "inventory:view",
@@ -88,6 +90,7 @@ ROLE_PERMISSIONS_MAP: dict[str, Set[str]] = {
         "finance:payroll:manage",
         "finance:payments:manage",
         "finance:reports:view",
+        "reports:view",
         "customers:view",
         "production:orders:view",
     },

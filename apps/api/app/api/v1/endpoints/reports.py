@@ -69,7 +69,7 @@ async def get_summary(
     # ─── إيرادات ومصروفات الفترة ─────────────────────────────────────────────
     revenues_period = await db.scalar(
         select(func.coalesce(func.sum(CashDocument.amount), 0)).where(
-            CashDocument.document_type == "revenue",
+            CashDocument.document_type == "income",
             CashDocument.status == "approved",
             CashDocument.occurred_at >= since,
         )
@@ -144,7 +144,7 @@ async def get_summary(
 @router.get("/inventory")
 async def get_inventory_report(
     warehouse_code: Optional[str] = Query(default=None),
-    current_user: AuthenticatedUser = Depends(require_permission("reports:view")),
+    current_user: AuthenticatedUser = Depends(require_permission("inventory:view")),
     db: AsyncSession = Depends(get_db),
 ):
     """تقرير أرصدة المخزون لكل صنف في كل مخزن."""
@@ -189,7 +189,7 @@ async def get_inventory_report(
 @router.get("/financial")
 async def get_financial_report(
     since_days: int = Query(default=30, ge=1, le=365),
-    current_user: AuthenticatedUser = Depends(require_permission("reports:view")),
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
     db: AsyncSession = Depends(get_db),
 ):
     """تقرير مالي: إيرادات، مصروفات، مستحقات موردين."""
@@ -197,7 +197,7 @@ async def get_financial_report(
 
     revenues = (await db.scalars(
         select(CashDocument).where(
-            CashDocument.document_type == "revenue",
+            CashDocument.document_type == "income",
             CashDocument.status == "approved",
             CashDocument.occurred_at >= since,
         ).order_by(CashDocument.occurred_at.desc())
