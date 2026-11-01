@@ -47,6 +47,20 @@ class Settings(BaseSettings):
         description="الـ Audience المتوقع للتوكنات المصادق عليها",
     )
 
+    # ─── المصادقة المحلية للتطوير (Local Development Authentication) ───
+    dev_auth_enabled: bool = Field(
+        default=False,
+        description="تفعيل مزود المصادقة المحلي في بيئة التطوير فقط (يُحظر في الإنتاج)",
+    )
+    local_jwt_secret: str | None = Field(
+        default=None,
+        description="المفتاح السري لتوقيع توكنات المصادقة المحلية (32 حرفاً على الأقل عند التفعيل)",
+    )
+    local_jwt_issuer: str = Field(
+        default="qemma-local-auth",
+        description="جهة إصدار التوكن المحلي لمصنع القمة",
+    )
+
     @property
     def resolved_jwks_url(self) -> str | None:
         """رابط JWKS المحسوب إما مباشرة أو عبر عنوان المشروع."""
@@ -132,6 +146,22 @@ class Settings(BaseSettings):
                     raise ValueError(
                         f"النطاق '{origin}' غير مسموح به في بيئة الإنتاج (app_env=production)."
                     )
+        return self
+
+    @model_validator(mode="after")
+    def validate_local_auth_settings(self) -> "Settings":
+        env_lower = self.app_env.lower().strip()
+        if self.dev_auth_enabled:
+            # 1. يُحظر تفعيل المصادقة المحلية في بيئة الإنتاج أو البيئات المرحلية
+            if env_lower in ("production", "prod", "staging"):
+                raise ValueError(
+                    f"حظر أمني: لا يمكن تفعيل المصادقة المحلية (DEV_AUTH_ENABLED=true) في بيئة الإنتاج أو البيئات المشتركة (app_env={self.app_env})."
+                )
+            # 2. فحص كفاية قوة المفتاح السري للمصادقة المحلية (32 حرفاً على الأقل)
+            if not self.local_jwt_secret or len(self.local_jwt_secret.strip()) < 32:
+                raise ValueError(
+                    "المفتاح السري للمصادقة المحلية (LOCAL_JWT_SECRET) مطلوب ويجب ألا يقل عن 32 حرفاً عند تفعيل DEV_AUTH_ENABLED."
+                )
         return self
 
     @field_validator("database_url")

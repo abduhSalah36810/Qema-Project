@@ -149,6 +149,102 @@ def verify_supabase_jwt(token: str, request_id: str = "-") -> AuthenticatedUser:
         ) from None
 
 
+# الثوابت المستقرة للمستخدم المحلي للتطوير
+LOCAL_DEV_USER_ID: str = "dev-user-00000000-0000-0000-0000-000000000001"
+LOCAL_DEV_USER_EMAIL: str = "dev@qemma.local"
+LOCAL_DEV_ROLE: str = "general_manager"
+
+
+def verify_local_jwt(token: str, request_id: str = "-") -> AuthenticatedUser:
+    """
+    التحقق الخادمي الصارم من توكن المصادقة المحلي في بيئة التطوير فقط.
+    - يتحقق من تفعيل DEV_AUTH_ENABLED وكون APP_ENV=development.
+    - يتحقق من التوقيع بالخوارزمية المتماثلة HS256 والمفتاح السري المحلي.
+    - يتحقق من الادعاءات الإلزامية: iss, aud, exp, iat, sub.
+    """
+    if not settings.dev_auth_enabled or settings.app_env.lower() != "development":
+        logger.warning("local_auth_rejected reason=disabled_or_non_dev request_id=%s", request_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not settings.local_jwt_secret:
+        logger.warning("local_auth_rejected reason=secret_missing request_id=%s", request_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        payload = jwt.decode(
+            token,
+            key=settings.local_jwt_secret,
+            algorithms=["HS256"],
+            audience=settings.supabase_jwt_audience,
+            issuer=settings.local_jwt_issuer,
+            options={
+                "require": ["exp", "iss", "aud", "sub", "iat"],
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            },
+        )
+
+        sub = payload.get("sub")
+        if not sub or not isinstance(sub, str) or not sub.strip():
+            logger.warning("local_auth_failed reason=empty_sub request_id=%s", request_id)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        return AuthenticatedUser(
+            id=sub.strip(),
+            email=payload.get("email") if isinstance(payload.get("email"), str) else None,
+            claims=payload,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "local_auth_failed category=%s request_id=%s",
+            exc.__class__.__name__,
+            request_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+
+
+def verify_token(token: str, request_id: str = "-") -> AuthenticatedUser:
+    """
+    التحقق الموحد من التوكن:
+    - يفحص جهة الإصدار (iss).
+    - إذا كانت جهة الإصدار محلية (qemma-local-auth) يتم التحقق عبر verify_local_jwt.
+    - عدا ذلك يتم التوجيه لمسار Supabase JWT غير المتماثل القياسي verify_supabase_jwt.
+    """
+    if not token or not isinstance(token, str) or not token.strip():
+        logger.warning("auth_failed reason=empty_token request_id=%s", request_id)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        unverified_claims = jwt.decode(token, options={"verify_signature": False})
+    except Exception:
+        # إذا تعذر حتى قراءة التوكن، يمر عبر مسار Supabase لرمي 401 القياسي
+        return verify_supabase_jwt(token, request_id=request_id)
+
+    if unverified_claims.get("iss") == settings.local_jwt_issuer:
+        return verify_local_jwt(token, request_id=request_id)
+
+    return verify_supabase_jwt(token, request_id=request_id)
+
+
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(http_bearer_scheme),
@@ -166,7 +262,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return verify_supabase_jwt(credentials.credentials.strip(), request_id=request_id)
+    return verify_token(credentials.credentials.strip(), request_id=request_id)
 
 
 async def get_optional_user(
@@ -195,4 +291,4 @@ async def get_optional_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    return verify_supabase_jwt(credentials.credentials.strip(), request_id=request_id)
+    return verify_token(credentials.credentials.strip(), request_id=request_id)

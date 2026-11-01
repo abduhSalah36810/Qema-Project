@@ -14,6 +14,7 @@ from app.core.tracing import RequestTracingMiddleware
 from app.core.errors import setup_exception_handlers
 from app.api.v1.router import api_router
 from app.db.session import engine
+import app.db.base  # noqa: F401
 
 logging.basicConfig(level=settings.log_level.upper())
 logger = logging.getLogger("qemma.api")

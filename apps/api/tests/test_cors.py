@@ -296,5 +296,6 @@ def test_cors_production_safety_validation():
         database_url="postgresql+asyncpg://user:pass@localhost:5432/db",
         app_env="production",
         cors_allowed_origins="https://app.qemma-factory.com",
+        dev_auth_enabled=False,
     )
     assert prod_settings.cors_allowed_origins == ["https://app.qemma-factory.com"]

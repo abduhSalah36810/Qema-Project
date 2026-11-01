@@ -24,7 +24,9 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
     session,
     error,
     isConfigured,
+    isDevAuthAvailable,
     signIn,
+    signInLocalDev,
     signOut,
     retryVerification,
     clearError,
@@ -33,10 +35,27 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLocalDevSubmitting, setIsLocalDevSubmitting] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const handleLocalDevLogin = async () => {
+    setLocalError(null);
+    clearError();
+    setIsLocalDevSubmitting(true);
+    try {
+      await signInLocalDev();
+      onClose();
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setLocalError(err.message);
+      }
+    } finally {
+      setIsLocalDevSubmitting(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -191,12 +210,43 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
           {/* حالة غياب إعدادات Supabase */}
           {!user && authState !== 'unverified' && !isConfigured && (
             <div className="auth-modal__config-missing">
+              {(localError || error) && (
+                <div className="auth-alert auth-alert--red" role="alert" style={{ marginBottom: '1rem' }}>
+                  <span className="auth-alert__icon" aria-hidden>⚠️</span>
+                  <span className="auth-alert__text">{localError || error}</span>
+                </div>
+              )}
+
+              {/* خيار الدخول المحلي للمطور عند توفره في بيئة التطوير */}
+              {isDevAuthAvailable && (
+                <div className="auth-alert auth-alert--teal" style={{ marginBottom: '1.25rem', borderColor: '#0d9488' }}>
+                  <span className="auth-alert__icon" aria-hidden>💻</span>
+                  <div className="auth-alert__content">
+                    <strong style={{ color: '#0f766e', fontSize: '1rem' }}>
+                      المصادقة المحلية المستقلة (Local Development Auth):
+                    </strong>
+                    <p style={{ margin: '0.35rem 0 0.75rem' }}>
+                      يمكنك الدخول فورياً بصلاحيات <strong>المدير العام (General Manager)</strong> وتجربة كامل وظائف النظام وحفظ العمليات على قاعدة البيانات دون الحاجة إلى حساب Supabase.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-teal"
+                      style={{ width: '100%', padding: '0.65rem' }}
+                      onClick={handleLocalDevLogin}
+                      disabled={isLocalDevSubmitting}
+                    >
+                      {isLocalDevSubmitting ? 'جاري تسجيل الدخول المحلي...' : '⚡ دخول كمطور محلي (صلاحيات كاملة)'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="auth-alert auth-alert--amber">
                 <span className="auth-alert__icon" aria-hidden>⚙️</span>
                 <div className="auth-alert__content">
-                  <strong>إعدادات Supabase غير متوفرة في بيئة المتصفح:</strong>
+                  <strong>إعدادات Supabase السحابية (للإنتاج):</strong>
                   <p>
-                    لتفعيل تسجيل الدخول الفعلي، يرجى ضبط المتغيرات التالية في ملف <code>.env</code> للواجهة الأمامية:
+                    لربط المصادقة السحابية عبر Supabase، اضبط المتغيرات في ملف <code>.env</code> للواجهة الأمامية:
                   </p>
                   <ul>
                     <li><code>VITE_SUPABASE_URL=https://&lt;project&gt;.supabase.co</code></li>

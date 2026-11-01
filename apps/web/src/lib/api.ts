@@ -154,7 +154,21 @@ export async function apiRequest<T = unknown>(
     });
 
     if (!response.ok) {
-      throw new ApiError(`استجاب الخادم برمز خطأ (${response.status})`, {
+      let errorMessage = `استجاب الخادم برمز خطأ (${response.status})`;
+      try {
+        const errorData = (await response.json()) as Record<string, unknown>;
+        if (errorData && typeof errorData === 'object') {
+          if (typeof errorData.detail === 'string' && errorData.detail.trim().length > 0) {
+            errorMessage = errorData.detail;
+          } else if (typeof errorData.message === 'string' && errorData.message.trim().length > 0) {
+            errorMessage = errorData.message;
+          }
+        }
+      } catch {
+        // استجابة الخطأ ليست JSON صالحاً، يُعتمد النص الافتراضي
+      }
+
+      throw new ApiError(errorMessage, {
         status: response.status,
       });
     }
@@ -225,9 +239,27 @@ export async function getAuthMe(options?: { token?: string; timeoutMs?: number }
   });
 }
 
+export interface LocalLoginResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  user: UserIdentity;
+}
+
+/**
+ * استدعاء مسار تسجيل الدخول المحلي للتطوير POST /api/v1/auth/local-login
+ */
+export async function localLogin(options?: { timeoutMs?: number }): Promise<LocalLoginResponse> {
+  return apiRequest<LocalLoginResponse>('/api/v1/auth/local-login', {
+    method: 'POST',
+    timeoutMs: options?.timeoutMs,
+  });
+}
+
 export const apiClient = {
   getHealth,
   getAuthMe,
+  localLogin,
   setAccessToken,
   getAccessToken,
   isApiTarget,

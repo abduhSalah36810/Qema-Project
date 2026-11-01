@@ -3,7 +3,7 @@ import { render, screen, act, waitFor } from '@testing-library/react';
 import type { Session } from '@supabase/supabase-js';
 
 import { AuthProvider, useAuth } from './AuthContext';
-import { apiClient, ApiError } from '@/lib/api';
+import { apiClient, ApiError, type UserIdentity } from '@/lib/api';
 import App from '@/App';
 
 // إعداد كائنات محاكاة لـ Supabase دون استخدام بيانات اعتماد حقيقية
@@ -11,18 +11,32 @@ const mockGetSession = vi.fn();
 const mockSignOut = vi.fn();
 const mockSignInWithPassword = vi.fn();
 
+type AuthChangeCallback = (event: string, session: Session | null) => void;
+let authChangeCallbacks: AuthChangeCallback[] = [];
+
+function triggerAuthStateChange(event: string, session: Session | null) {
+  for (const cb of [...authChangeCallbacks]) {
+    cb(event, session);
+  }
+}
+
 vi.mock('@/lib/supabase', () => ({
   isSupabaseConfigured: () => true,
   supabase: {
     auth: {
       getSession: () => mockGetSession(),
-      onAuthStateChange: () => ({
-        data: {
-          subscription: {
-            unsubscribe: vi.fn(),
+      onAuthStateChange: (cb: AuthChangeCallback) => {
+        authChangeCallbacks.push(cb);
+        return {
+          data: {
+            subscription: {
+              unsubscribe: vi.fn(() => {
+                authChangeCallbacks = authChangeCallbacks.filter((c) => c !== cb);
+              }),
+            },
           },
-        },
-      }),
+        };
+      },
       signInWithPassword: (creds: unknown) => mockSignInWithPassword(creds),
       signOut: () => mockSignOut(),
     },
@@ -41,6 +55,7 @@ function AuthTestConsumer({
   return (
     <div>
       <div data-testid="auth-state">{auth.authState}</div>
+      <div data-testid="auth-mode">{auth.authMode}</div>
       <div data-testid="user-id">{auth.user?.id ?? 'none'}</div>
       <div data-testid="user-email">{auth.user?.email ?? 'none'}</div>
       <div data-testid="auth-error">{auth.error ?? 'none'}</div>
@@ -53,6 +68,18 @@ function AuthTestConsumer({
       >
         إعادة التحقق
       </button>
+      <button
+        data-testid="sign-in-btn"
+        onClick={() => void auth.signIn('worker@qemma.com', 'password123')}
+      >
+        تسجيل الدخول
+      </button>
+      <button
+        data-testid="local-dev-btn"
+        onClick={() => void auth.signInLocalDev()}
+      >
+        دخول محلي
+      </button>
     </div>
   );
 }
@@ -60,6 +87,7 @@ function AuthTestConsumer({
 describe('Supabase Auth Integration & Token Handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authChangeCallbacks = [];
     apiClient.setAccessToken(null);
     mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
     mockSignOut.mockResolvedValue({ error: null });
@@ -274,5 +302,358 @@ describe('Supabase Auth Integration & Token Handling', () => {
     });
     expect(screen.getAllByText('manager@qemma.com').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText(/بيئة معاينة تجريبية محلية — لم يتم تسجيل الدخول/)).not.toBeInTheDocument();
+  });
+
+  it('6a. sign-out while /auth/me is pending prevents subsequent success from restoring state', async () => {
+    let resolveGetAuthMe!: (value: UserIdentity) => void;
+    const pendingGetAuthMePromise = new Promise<UserIdentity>((resolve) => {
+      resolveGetAuthMe = resolve;
+    });
+
+    const pendingSession = {
+      access_token: 'pending-token-1',
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      user: { id: 'usr-pending', email: 'pending@qemma.com' },
+    } as unknown as Session;
+
+    mockGetSession.mockResolvedValue({ data: { session: pendingSession }, error: null });
+    vi.spyOn(apiClient, 'getAuthMe').mockReturnValue(pendingGetAuthMePromise);
+
+    render(
+      <AuthProvider>
+        <AuthTestConsumer />
+      </AuthProvider>
+    );
+
+    // التحقق من بدء العملية في حالة loading وتمرير التوكن مؤقتاً
+    expect(screen.getByTestId('auth-state').textContent).toBe('loading');
+
+    // تسجيل الخروج بينما طلب /auth/me لا يزال معلقاً
+    await act(async () => {
+      screen.getByTestId('sign-out-btn').click();
+    });
+
+    // يجب إخلاء التوكن وحالة المصادقة محلياً فوراً
+    expect(screen.getByTestId('auth-state').textContent).toBe('signed_out');
+    expect(apiClient.getAccessToken()).toBeNull();
+    expect(screen.getByTestId('user-id').textContent).toBe('none');
+    expect(screen.getByTestId('user-email').textContent).toBe('none');
+
+    // اكتمال طلب /auth/me المعلق بنجاح بعد تسجيل الخروج
+    await act(async () => {
+      resolveGetAuthMe({ id: 'usr-pending', email: 'pending@qemma.com' });
+    });
+
+    // يجب ألا تتم استعادة حالة التوثيق القديمة نهائياً
+    expect(screen.getByTestId('auth-state').textContent).toBe('signed_out');
+    expect(apiClient.getAccessToken()).toBeNull();
+    expect(screen.getByTestId('user-id').textContent).toBe('none');
+    expect(screen.getByTestId('user-email').textContent).toBe('none');
+  });
+
+  it('6b. a newer token-refresh session arriving while an older verification is pending is verified and wins', async () => {
+    let resolveSession1!: (value: UserIdentity) => void;
+    const session1Promise = new Promise<UserIdentity>((resolve) => {
+      resolveSession1 = resolve;
+    });
+
+    let resolveSession2!: (value: UserIdentity) => void;
+    const session2Promise = new Promise<UserIdentity>((resolve) => {
+      resolveSession2 = resolve;
+    });
+
+    const session1 = {
+      access_token: 'token-v1-old',
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      user: { id: 'usr-1', email: 'worker@qemma.com' },
+    } as unknown as Session;
+
+    const session2 = {
+      access_token: 'token-v2-refreshed',
+      expires_at: Math.floor(Date.now() / 1000) + 7200,
+      user: { id: 'usr-1', email: 'worker@qemma.com' },
+    } as unknown as Session;
+
+    mockGetSession.mockResolvedValue({ data: { session: session1 }, error: null });
+
+    const getAuthMeSpy = vi.spyOn(apiClient, 'getAuthMe').mockImplementation((options) => {
+      if (options?.token === 'token-v1-old') {
+        return session1Promise;
+      }
+      if (options?.token === 'token-v2-refreshed') {
+        return session2Promise;
+      }
+      return Promise.reject(new Error(`Unexpected token: ${options?.token}`));
+    });
+
+    render(
+      <AuthProvider>
+        <AuthTestConsumer />
+      </AuthProvider>
+    );
+
+    // انتظار استدعاء التحقق للجلسة الأولى
+    await waitFor(() => {
+      expect(getAuthMeSpy).toHaveBeenCalledWith(expect.objectContaining({ token: 'token-v1-old' }));
+    });
+
+    // وصول حدث تجديد التوكن TOKEN_REFRESHED بينما طلب الجلسة الأولى لا يزال قيد التنفيذ
+    await act(async () => {
+      triggerAuthStateChange('TOKEN_REFRESHED', session2);
+    });
+
+    // يجب ألا يتم تجاهل حدث التجديد ويجب أن يبدأ التحقق للتوكن الجديد
+    await waitFor(() => {
+      expect(getAuthMeSpy).toHaveBeenCalledWith(expect.objectContaining({ token: 'token-v2-refreshed' }));
+    });
+
+    // اكتمال الجلسة الأولى القديمة
+    await act(async () => {
+      resolveSession1({ id: 'usr-1', email: 'old-worker@qemma.com' });
+    });
+
+    // اكتمال الجلسة الثانية الأحدث
+    await act(async () => {
+      resolveSession2({ id: 'usr-1', email: 'worker@qemma.com' });
+    });
+
+    // التأكد من اعتماد توكن وحالة الجلسة الأحدث
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-state').textContent).toBe('authenticated');
+    });
+    expect(screen.getByTestId('user-email').textContent).toBe('worker@qemma.com');
+    expect(apiClient.getAccessToken()).toBe('token-v2-refreshed');
+  });
+
+  it('6c. an older verification failing after a newer session has already authenticated does not corrupt state', async () => {
+    let rejectSession1!: (reason: unknown) => void;
+    const session1Promise = new Promise<UserIdentity>((_, reject) => {
+      rejectSession1 = reject;
+    });
+
+    const session1 = {
+      access_token: 'token-stale-initial',
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      user: { id: 'usr-stale', email: 'stale@qemma.com' },
+    } as unknown as Session;
+
+    const session2 = {
+      access_token: 'token-current-valid',
+      expires_at: Math.floor(Date.now() / 1000) + 7200,
+      user: { id: 'usr-active', email: 'active@qemma.com' },
+    } as unknown as Session;
+
+    mockGetSession.mockResolvedValue({ data: { session: session1 }, error: null });
+
+    const getAuthMeSpy = vi.spyOn(apiClient, 'getAuthMe').mockImplementation((options) => {
+      if (options?.token === 'token-stale-initial') {
+        return session1Promise;
+      }
+      if (options?.token === 'token-current-valid') {
+        return Promise.resolve({ id: 'usr-active', email: 'active@qemma.com' });
+      }
+      return Promise.reject(new Error(`Unexpected token: ${options?.token}`));
+    });
+
+    render(
+      <AuthProvider>
+        <AuthTestConsumer />
+      </AuthProvider>
+    );
+
+    // انتظار بدء التحقق من الجلسة القديمة
+    await waitFor(() => {
+      expect(getAuthMeSpy).toHaveBeenCalledWith(expect.objectContaining({ token: 'token-stale-initial' }));
+    });
+
+    // وصول جلسة أحدث واعتمادها بنجاح قبل انتهاء الأولى
+    await act(async () => {
+      triggerAuthStateChange('SIGNED_IN', session2);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-state').textContent).toBe('authenticated');
+    });
+    expect(screen.getByTestId('user-id').textContent).toBe('usr-active');
+    expect(apiClient.getAccessToken()).toBe('token-current-valid');
+
+    // فشل التحقق من الجلسة القديمة برمز خطأ 401
+    await act(async () => {
+      rejectSession1(new ApiError('Expired or rejected initial token', { status: 401 }));
+    });
+
+    // يجب أن تبقى الجلسة الأحدث نشطة وموثقة دون أن يمسها فشل الجلسة القديمة
+    expect(screen.getByTestId('auth-state').textContent).toBe('authenticated');
+    expect(screen.getByTestId('user-id').textContent).toBe('usr-active');
+    expect(screen.getByTestId('user-email').textContent).toBe('active@qemma.com');
+    expect(apiClient.getAccessToken()).toBe('token-current-valid');
+    expect(screen.getByTestId('auth-error').textContent).toBe('none');
+  });
+
+  it('6d. sign-out while signInWithPassword is pending prevents subsequent sign-in completion from restoring session', async () => {
+    let resolveSignIn!: (value: {
+      data: { session: Session | null; user: unknown };
+      error: null;
+    }) => void;
+    const pendingSignInPromise = new Promise<{
+      data: { session: Session | null; user: unknown };
+      error: null;
+    }>((resolve) => {
+      resolveSignIn = resolve;
+    });
+
+    const signInSession = {
+      access_token: 'late-signin-token',
+      expires_at: Math.floor(Date.now() / 1000) + 3600,
+      user: { id: 'usr-late', email: 'worker@qemma.com' },
+    } as unknown as Session;
+
+    mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+    mockSignInWithPassword.mockReturnValue(pendingSignInPromise);
+    const getAuthMeSpy = vi.spyOn(apiClient, 'getAuthMe');
+
+    render(
+      <AuthProvider>
+        <AuthTestConsumer />
+      </AuthProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auth-state').textContent).toBe('signed_out');
+    });
+
+    // 1. بدء طلب تسجيل الدخول وتركه معلقاً
+    await act(async () => {
+      screen.getByTestId('sign-in-btn').click();
+    });
+
+    expect(screen.getByTestId('auth-state').textContent).toBe('loading');
+    expect(mockSignInWithPassword).toHaveBeenCalledTimes(1);
+
+    // 2. تسجيل الخروج بينما طلب تسجيل الدخول لا يزال قيد التنفيذ
+    await act(async () => {
+      screen.getByTestId('sign-out-btn').click();
+    });
+
+    expect(screen.getByTestId('auth-state').textContent).toBe('signed_out');
+    expect(apiClient.getAccessToken()).toBeNull();
+    expect(screen.getByTestId('user-id').textContent).toBe('none');
+
+    // 3. اكتمال طلب تسجيل الدخول المعلق بنجاح لاحقاً
+    await act(async () => {
+      resolveSignIn({
+        data: { session: signInSession, user: signInSession.user },
+        error: null,
+      });
+    });
+
+    // 4. التأكد من عدم بدء التحقق الخلفي وبقاء الحالة مسجلاً للخروج وبدون توكن
+    expect(getAuthMeSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('auth-state').textContent).toBe('signed_out');
+    expect(apiClient.getAccessToken()).toBeNull();
+    expect(screen.getByTestId('user-id').textContent).toBe('none');
+    expect(screen.getByTestId('user-email').textContent).toBe('none');
+  });
+
+  describe('Local Development Authentication Flow', () => {
+    beforeEach(() => {
+      localStorage.clear();
+      apiClient.setAccessToken(null);
+    });
+
+    afterEach(() => {
+      localStorage.clear();
+      vi.restoreAllMocks();
+    });
+
+    it('successfully logs in via local dev auth and updates session', async () => {
+      mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+
+      const localLoginSpy = vi.spyOn(apiClient, 'localLogin').mockResolvedValue({
+        access_token: 'local-test-jwt-token-12345',
+        token_type: 'bearer',
+        expires_in: 28800,
+        user: { id: 'dev-user-00000000-0000-0000-0000-000000000001', email: 'dev@qemma.local' },
+      });
+
+      render(
+        <AuthProvider>
+          <AuthTestConsumer />
+        </AuthProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('auth-state').textContent).toBe('signed_out');
+      });
+
+      await act(async () => {
+        screen.getByTestId('local-dev-btn').click();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('auth-state').textContent).toBe('authenticated');
+        expect(screen.getByTestId('auth-mode').textContent).toBe('local_dev');
+        expect(screen.getByTestId('user-id').textContent).toBe('dev-user-00000000-0000-0000-0000-000000000001');
+        expect(screen.getByTestId('user-email').textContent).toBe('dev@qemma.local');
+      });
+
+      expect(localStorage.getItem('qemma_local_dev_token')).toBe('local-test-jwt-token-12345');
+      expect(apiClient.getAccessToken()).toBe('local-test-jwt-token-12345');
+      expect(localLoginSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('restores local dev session from localStorage on mount', async () => {
+      localStorage.setItem('qemma_local_dev_token', 'saved-local-token-999');
+
+      vi.spyOn(apiClient, 'getAuthMe').mockResolvedValue({
+        id: 'dev-user-00000000-0000-0000-0000-000000000001',
+        email: 'dev@qemma.local',
+      });
+
+      render(
+        <AuthProvider>
+          <AuthTestConsumer />
+        </AuthProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('auth-state').textContent).toBe('authenticated');
+        expect(screen.getByTestId('auth-mode').textContent).toBe('local_dev');
+        expect(screen.getByTestId('user-id').textContent).toBe('dev-user-00000000-0000-0000-0000-000000000001');
+      });
+
+      expect(apiClient.getAccessToken()).toBe('saved-local-token-999');
+    });
+
+    it('clears local dev session on signOut', async () => {
+      localStorage.setItem('qemma_local_dev_token', 'token-to-be-cleared');
+
+      vi.spyOn(apiClient, 'getAuthMe').mockResolvedValue({
+        id: 'dev-user-00000000-0000-0000-0000-000000000001',
+        email: 'dev@qemma.local',
+      });
+
+      render(
+        <AuthProvider>
+          <AuthTestConsumer />
+        </AuthProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('auth-state').textContent).toBe('authenticated');
+      });
+
+      await act(async () => {
+        screen.getByTestId('sign-out-btn').click();
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('auth-mode').textContent).toBe('none');
+        expect(screen.getByTestId('user-id').textContent).toBe('none');
+      });
+
+      expect(localStorage.getItem('qemma_local_dev_token')).toBeNull();
+      expect(apiClient.getAccessToken()).toBeNull();
+    });
   });
 });

@@ -1,6 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import '@/styles/index.css';
 import { OperationsBoard } from '@/features/operations-board/OperationsBoard';
+import { ProductionOrdersView } from '@/features/production/ProductionOrdersView';
+import { CustomersView } from '@/features/customers/CustomersView';
+import { MainWarehouseView } from '@/features/inventory/MainWarehouseView';
+import { MachineryView } from '@/features/inventory/MachineryView';
+import { FinishedGoodsView } from '@/features/inventory/FinishedGoodsView';
+import { CatalogManagementView } from '@/features/catalog/CatalogManagementView';
+import { TreasuryView } from '@/features/finance/TreasuryView';
+import { RevenuesView } from '@/features/finance/RevenuesView';
+import { ExpensesView } from '@/features/finance/ExpensesView';
+import { CustodyView } from '@/features/finance/CustodyView';
+import { SuppliersView } from '@/features/finance/SuppliersView';
+import { PaymentsCollectionsView } from '@/features/finance/PaymentsCollectionsView';
+import { PayrollFinanceView } from '@/features/finance/PayrollFinanceView';
+import { FinancialReportsView } from '@/features/finance/FinancialReportsView';
 import { apiClient, ApiError } from '@/lib/api';
 import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
 import { SignInModal } from '@/features/auth/SignInModal';
@@ -10,33 +24,126 @@ type ServerConnectionState =
   | { status: 'connected'; version: string; app: string }
   | { status: 'error'; message: string };
 
-interface NavItem {
-  id: string;
-  name: string;
-  icon: string;
-  badge?: string;
-  badgeVariant?: 'teal' | 'amber' | 'slate';
-}
+type NavEntry =
+  | {
+      type: 'item';
+      id: string;
+      name: string;
+      icon: string;
+      badge?: string;
+      badgeVariant?: 'teal' | 'amber' | 'slate';
+    }
+  | {
+      type: 'group';
+      id: string;
+      name: string;
+      icon: string;
+      badge?: string;
+      badgeVariant?: 'teal' | 'amber' | 'slate';
+      children: Array<{
+        id: string;
+        name: string;
+        icon?: string;
+        badge?: string;
+        badgeVariant?: 'teal' | 'amber' | 'slate';
+      }>;
+    };
 
-const SIDEBAR_NAV: NavItem[] = [
-  { id: 'dashboard',  name: 'لوحة التشغيل',      icon: '📊' },
-  { id: 'inventory',  name: 'المخازن والأصناف',  icon: '📦' },
-  { id: 'batches',    name: 'دفعات الإنتاج',     icon: '⚡', badge: '٤ نشطة', badgeVariant: 'teal' },
-  { id: 'orders',     name: 'الطلبات والتسليم',  icon: '🚚', badge: '٥', badgeVariant: 'amber' },
-  { id: 'customers',  name: 'العملاء',            icon: '👥' },
-  { id: 'reports',    name: 'التقارير والمتابعة', icon: '📈' },
-  { id: 'settings',   name: 'إعدادات المصنع',    icon: '⚙️' },
+const SIDEBAR_ITEMS: NavEntry[] = [
+  { type: 'item', id: 'dashboard', name: 'لوحة التشغيل', icon: '📊' },
+  {
+    type: 'group',
+    id: 'warehouses',
+    name: 'المخازن',
+    icon: '📦',
+    children: [
+      { id: 'warehouse-raw', name: 'مخزن الخامات والمستلزمات' },
+      { id: 'warehouse-machinery', name: 'الماكينات والمعدات' },
+      { id: 'warehouse-finished', name: 'مخزن المنتجات التامة' },
+      { id: 'warehouse-catalog', name: 'دليل الأصناف والتصنيفات' },
+    ],
+  },
+  { type: 'item', id: 'batches', name: 'دفعات الإنتاج', icon: '⚡', badge: '٤ نشطة', badgeVariant: 'teal' },
+  { type: 'item', id: 'orders', name: 'الطلبات والتسليم', icon: '🚚', badge: '٥', badgeVariant: 'amber' },
+  {
+    type: 'group',
+    id: 'finance',
+    name: 'المالية',
+    icon: '💰',
+    children: [
+      { id: 'finance-treasury', name: 'الخزنة' },
+      { id: 'finance-revenues', name: 'الإيرادات' },
+      { id: 'finance-expenses', name: 'المصروفات' },
+      { id: 'finance-custody', name: 'العهد المالية' },
+      { id: 'finance-customers', name: 'العملاء' },
+      { id: 'finance-suppliers', name: 'الموردون' },
+      { id: 'finance-payments', name: 'المدفوعات والتحصيلات' },
+      { id: 'finance-payroll', name: 'الرواتب المالية' },
+      { id: 'finance-reports', name: 'التقارير المالية' },
+    ],
+  },
+  { type: 'item', id: 'settings', name: 'إعدادات المصنع', icon: '⚙️' },
 ];
+
+function getHeaderInfo(nav: string): { kicker: string; title: string } {
+  switch (nav) {
+    case 'batches':
+      return { kicker: 'أوامر التشغيل · لقطات الخامات التناسبية والمراحل', title: 'متابعة دفعات الإنتاج ومراحل التصنيع' };
+    case 'orders':
+      return { kicker: 'الطلبات والعملاء · الشحن والتسليم', title: 'متابعة طلبات التشغيل والتسليم' };
+    case 'warehouse-catalog':
+    case 'catalog':
+      return { kicker: 'المخازن · دليل الخامات والمستلزمات والتصنيفات', title: 'دليل الأصناف والتصنيفات وخطوط الاستخدام' };
+    case 'warehouse-raw':
+    case 'inventory':
+      return { kicker: 'المخازن · الخامات والمستلزمات ومواد التعبئة', title: 'مخزن الخامات والمستلزمات' };
+    case 'warehouse-machinery':
+      return { kicker: 'المخازن · معدات التشغيل وخطوط الإنتاج', title: 'الماكينات ومعدات التشغيل' };
+    case 'warehouse-finished':
+      return { kicker: 'المخازن · المنتجات الجاهزة للتسليم النهائي', title: 'مخزن المنتجات التامة' };
+    case 'finance-treasury':
+    case 'finance':
+      return { kicker: 'المالية · الخزنة الرئيسية وحركات النقدية', title: 'الخزنة والحسابات النقدية' };
+    case 'finance-revenues':
+      return { kicker: 'المالية · التدفقات النقدية الداخلة', title: 'الإيرادات التشغيلية' };
+    case 'finance-expenses':
+      return { kicker: 'المالية · التدفقات النقدية الخارجة', title: 'المصروفات التشغيلية' };
+    case 'finance-custody':
+      return { kicker: 'المالية · الصناديق والمصروفات اليومية', title: 'العهد المالية المؤقتة' };
+    case 'finance-customers':
+    case 'customers':
+      return { kicker: 'المالية · ملفات العملاء وبيانات التواصل والمديونيات', title: 'إدارة العملاء' };
+    case 'finance-suppliers':
+      return { kicker: 'المالية · المشتريات وفواتير الخامات', title: 'الموردون وفواتير الشراء' };
+    case 'finance-payments':
+      return { kicker: 'المالية · متابعة حركة السيولة والسدادات', title: 'المدفوعات والتحصيلات' };
+    case 'finance-payroll':
+    case 'payroll':
+      return { kicker: 'المالية · استحقاقات الأجور وصرف المرتبات', title: 'الرواتب والأجور المالية' };
+    case 'finance-reports':
+    case 'reports':
+      return { kicker: 'المالية · التحليل المالي ومؤشرات الأداء', title: 'التقارير المالية ومؤشرات السيولة' };
+    case 'settings':
+      return { kicker: 'النظام · إعدادات المصنع والمستخدمين والتدقيق', title: 'إعدادات المصنع والتدقيق' };
+    case 'dashboard':
+    default:
+      return { kicker: 'متابعة تشغيل المصنع', title: 'لوحة متابعة تشغيل المصنع' };
+  }
+}
 
 function AppContent() {
   const [activeNav, setActiveNav] = useState('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    warehouses: true,
+    finance: true,
+  });
   const [serverState, setServerState] = useState<ServerConnectionState>({
     status: 'loading',
   });
 
-  const { authState, user, isConfigured } = useAuth();
+  const { authState, authMode, user, isConfigured, isDevAuthAvailable } = useAuth();
 
   const checkServerHealth = useCallback(async () => {
     setServerState({ status: 'loading' });
@@ -62,6 +169,15 @@ function AppContent() {
   useEffect(() => {
     void checkServerHealth();
   }, [checkServerHealth]);
+
+  const toggleGroup = (groupId: string) => {
+    setOpenGroups((prev) => ({
+      ...prev,
+      [groupId]: !prev[groupId],
+    }));
+  };
+
+  const headerInfo = getHeaderInfo(activeNav);
 
   return (
     <div className="app-shell" dir="rtl">
@@ -93,29 +209,87 @@ function AppContent() {
           </button>
         </div>
 
-        {/* عناصر التنقل */}
+        {/* عناصر التنقل الهيكلية */}
         <nav className="sidebar__nav" aria-label="شريط التنقل الرئيسي">
           <ul className="sidebar__menu">
-            {SIDEBAR_NAV.map((item) => {
-              const isActive = activeNav === item.id;
+            {SIDEBAR_ITEMS.map((entry) => {
+              if (entry.type === 'item') {
+                const isActive = activeNav === entry.id;
+                return (
+                  <li key={entry.id} className="sidebar__item-wrap">
+                    <button
+                      className={`sidebar__item ${isActive ? 'sidebar__item--active' : ''}`}
+                      onClick={() => {
+                        setActiveNav(entry.id);
+                        setMobileMenuOpen(false);
+                      }}
+                      aria-current={isActive ? 'page' : undefined}
+                    >
+                      <span className="sidebar__item-icon" aria-hidden>{entry.icon}</span>
+                      <span className="sidebar__item-label">{entry.name}</span>
+                      {entry.badge && (
+                        <span className={`sidebar__item-badge sidebar__item-badge--${entry.badgeVariant || 'teal'}`}>
+                          {entry.badge}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              }
+
+              // Dropdown Group Item (المخازن / المالية)
+              const isOpen = openGroups[entry.id] ?? false;
+              const hasActiveChild = entry.children.some(
+                (child) => activeNav === child.id || (entry.id === 'finance' && activeNav === 'customers' && child.id === 'finance-customers')
+              );
+
               return (
-                <li key={item.id} className="sidebar__item-wrap">
+                <li key={entry.id} className="sidebar__group">
                   <button
-                    className={`sidebar__item ${isActive ? 'sidebar__item--active' : ''}`}
-                    onClick={() => {
-                      setActiveNav(item.id);
-                      setMobileMenuOpen(false);
-                    }}
-                    aria-current={isActive ? 'page' : undefined}
+                    type="button"
+                    className={`sidebar__group-header ${hasActiveChild ? 'sidebar__group-header--active' : ''}`}
+                    onClick={() => toggleGroup(entry.id)}
+                    aria-expanded={isOpen}
                   >
-                    <span className="sidebar__item-icon" aria-hidden>{item.icon}</span>
-                    <span className="sidebar__item-label">{item.name}</span>
-                    {item.badge && (
-                      <span className={`sidebar__item-badge sidebar__item-badge--${item.badgeVariant || 'teal'}`}>
-                        {item.badge}
-                      </span>
-                    )}
+                    <div className="sidebar__group-title">
+                      <span className="sidebar__item-icon" aria-hidden>{entry.icon}</span>
+                      <span>{entry.name}</span>
+                    </div>
+                    <span className={`sidebar__group-arrow ${isOpen ? 'sidebar__group-arrow--open' : ''}`} aria-hidden>
+                      ▾
+                    </span>
                   </button>
+
+                  {isOpen && (
+                    <ul className="sidebar__sub-menu">
+                      {entry.children.map((sub) => {
+                        const isSubActive =
+                          activeNav === sub.id ||
+                          (sub.id === 'warehouse-raw' && activeNav === 'inventory') ||
+                          (sub.id === 'finance-treasury' && activeNav === 'finance') ||
+                          (sub.id === 'finance-customers' && activeNav === 'customers') ||
+                          (sub.id === 'finance-payroll' && activeNav === 'payroll') ||
+                          (sub.id === 'finance-reports' && activeNav === 'reports');
+
+                        return (
+                          <li key={sub.id}>
+                            <button
+                              type="button"
+                              className={`sidebar__sub-item ${isSubActive ? 'sidebar__sub-item--active' : ''}`}
+                              onClick={() => {
+                                setActiveNav(sub.id);
+                                setMobileMenuOpen(false);
+                              }}
+                              aria-current={isSubActive ? 'page' : undefined}
+                            >
+                              <span className="sidebar__sub-dot" aria-hidden />
+                              <span>{sub.name}</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                 </li>
               );
             })}
@@ -126,14 +300,18 @@ function AppContent() {
         <div className="sidebar__footer">
           <div className="sidebar__user">
             <div className="sidebar__avatar" aria-hidden>
-              {user?.email ? user.email.charAt(0).toUpperCase() : '؟'}
+              {authMode === 'local_dev' ? '⚙️' : user?.email ? user.email.charAt(0).toUpperCase() : '؟'}
             </div>
             <div className="sidebar__user-details">
               <span className="sidebar__user-name">
-                {user?.email || 'حساب تجريبي (غير مسجل)'}
+                {authMode === 'local_dev'
+                  ? 'المطور المحلي (General Manager)'
+                  : user?.email || 'حساب تجريبي (غير مسجل)'}
               </span>
               <span className="sidebar__user-role">
-                {user
+                {authMode === 'local_dev'
+                  ? 'LOCAL DEV AUTH'
+                  : user
                   ? `معرّف موثق: ${user.id.slice(0, 8)}...`
                   : authState === 'unverified'
                   ? 'جلسة غير مؤكدة من الخادم'
@@ -152,6 +330,8 @@ function AppContent() {
               ? 'تأكيد الجلسة / الخروج'
               : isConfigured
               ? 'تسجيل الدخول'
+              : isDevAuthAvailable
+              ? 'تسجيل دخول المطور'
               : 'إعداد Supabase'}
           </button>
         </div>
@@ -170,8 +350,8 @@ function AppContent() {
               ☰
             </button>
             <div className="top-header__titles">
-              <div className="top-header__kicker">الأحد · ١٨ أكتوبر ٢٠٢٦</div>
-              <h1 className="top-header__title">لوحة متابعة تشغيل المصنع</h1>
+              <div className="top-header__kicker">{headerInfo.kicker}</div>
+              <h1 className="top-header__title">{headerInfo.title}</h1>
             </div>
           </div>
 
@@ -244,14 +424,23 @@ function AppContent() {
               <span className="shift-indicator__hours">٨:٠٠ ص – ٤:٠٠ م</span>
             </div>
 
-            {/* فلتر المخازن */}
+            {/* فلتر المخازن السريع */}
             <button className="tool-dropdown">
               <span>كل المخازن</span>
               <span className="tool-dropdown__arrow">⌄</span>
             </button>
 
             {/* الزر الرئيسي التيل (Teal Action Button) */}
-            <button className="btn-teal">
+            <button
+              className="btn-teal"
+              onClick={() => {
+                setActiveNav('batches');
+                setTimeout(() => {
+                  const btn = document.getElementById('btnNewOrderModal');
+                  if (btn) btn.click();
+                }, 50);
+              }}
+            >
               <span>＋</span>
               <span>بدء دفعة إنتاج</span>
             </button>
@@ -260,6 +449,44 @@ function AppContent() {
 
         {/* مساحة لوحة التشغيل الفسيحة (Spacious Dashboard Area) */}
         <main className="dashboard-canvas">
+          {/* شريط وضع التطوير المحلي المستقل */}
+          {authMode === 'local_dev' && (
+            <div
+              className="local-dev-banner"
+              role="status"
+              style={{
+                backgroundColor: '#0f766e',
+                color: '#ffffff',
+                padding: '0.65rem 1.25rem',
+                borderRadius: '8px',
+                marginBottom: '1rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                fontWeight: 600,
+                fontSize: '0.92rem',
+                boxShadow: '0 2px 4px rgba(15, 118, 110, 0.15)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span aria-hidden style={{ fontSize: '1.2rem' }}>💻</span>
+                <span>
+                  <strong>وضع التطوير المحلي المستقل (LOCAL DEV MODE)</strong> — تم توثيق الجلسة محلياً بصلاحيات المدير العام دون الحاجة إلى Supabase
+                </span>
+              </div>
+              <span
+                style={{
+                  fontSize: '0.8rem',
+                  backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                  padding: '0.2rem 0.6rem',
+                  borderRadius: '4px',
+                }}
+              >
+                DEV_AUTH_ENABLED
+              </span>
+            </div>
+          )}
+
           {/* شريط تنبيه تعذر الاتصال بالخادم الخلفي */}
           {serverState.status === 'error' && (
             <div className="api-error-strip" role="alert">
@@ -286,7 +513,9 @@ function AppContent() {
           <div className="demo-strip" role="status">
             <span className="demo-strip__icon" aria-hidden>🔶</span>
             <span className="demo-strip__text">
-              {user
+              {activeNav === 'finance-customers' || activeNav === 'customers'
+                ? 'بيانات العملاء والمعاملات تُحمّل من API قاعدة البيانات، ولا تُعرض كبيانات تجريبية.'
+                : user
                 ? `جلسة عمل موثقة عبر Supabase & API — جميع بيانات الدفعات والمخازن أدناه هي نماذج للعرض البصري فقط، وليست محفوظة أو مرتبطة بقاعدة بيانات المصنع.`
                 : `بيئة معاينة تجريبية محلية — لم يتم تسجيل الدخول، وجميع البيانات والأرقام المعروضة هي نماذج بصرية غير محفوظة ولا تتصل بالمصنع.`}
             </span>
@@ -297,7 +526,38 @@ function AppContent() {
             )}
           </div>
 
-          <OperationsBoard />
+          {/* محتوى الشاشة المحدد بحسب المسار */}
+          {activeNav === 'batches' ? (
+            <ProductionOrdersView />
+          ) : activeNav === 'warehouse-catalog' || activeNav === 'catalog' ? (
+            <CatalogManagementView />
+          ) : activeNav === 'warehouse-raw' || activeNav === 'inventory' ? (
+            <MainWarehouseView />
+          ) : activeNav === 'warehouse-machinery' ? (
+            <MachineryView />
+          ) : activeNav === 'warehouse-finished' ? (
+            <FinishedGoodsView />
+          ) : activeNav === 'finance-treasury' || activeNav === 'finance' ? (
+            <TreasuryView />
+          ) : activeNav === 'finance-revenues' ? (
+            <RevenuesView />
+          ) : activeNav === 'finance-expenses' ? (
+            <ExpensesView />
+          ) : activeNav === 'finance-custody' ? (
+            <CustodyView />
+          ) : activeNav === 'finance-customers' || activeNav === 'customers' ? (
+            <CustomersView />
+          ) : activeNav === 'finance-suppliers' ? (
+            <SuppliersView />
+          ) : activeNav === 'finance-payments' ? (
+            <PaymentsCollectionsView />
+          ) : activeNav === 'finance-payroll' || activeNav === 'payroll' ? (
+            <PayrollFinanceView />
+          ) : activeNav === 'finance-reports' || activeNav === 'reports' ? (
+            <FinancialReportsView />
+          ) : (
+            <OperationsBoard />
+          )}
         </main>
       </div>
 
