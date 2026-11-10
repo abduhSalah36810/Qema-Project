@@ -15,12 +15,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qemma_dev} -d ${POSTGRES_DB:-qemma_erp_dev}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      - qemma_dev_pgdata:/var/lib/postgresql/data
 
-# مجلد data/ مُضاف في .gitignore — لا يُرفع إلى Git
+volumes:
+  qemma_dev_pgdata:

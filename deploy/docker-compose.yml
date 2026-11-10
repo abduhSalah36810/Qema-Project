@@ -1,0 +1,40 @@
+# تشغيل Qema ERP API على سيرفر Google e2-micro: الخادم + Caddy (HTTPS تلقائي)
+# الأسرار في deploy/.env على السيرفر فقط (انسخ deploy/.env.example). لا ترفع .env إلى GitHub.
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    image: qema-api:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      APP_ENV: production
+      DEV_AUTH_ENABLED: "false"
+    expose:
+      - "8000"
+    mem_limit: 600m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [api]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  caddy_data:
+  caddy_config:
