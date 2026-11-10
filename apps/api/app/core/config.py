@@ -148,12 +148,22 @@ class Settings(BaseSettings):
                     )
         return self
 
+    @field_validator("app_env")
+    @classmethod
+    def validate_app_env(cls, v: str) -> str:
+        """قيم صريحة فقط؛ أي قيمة غير معروفة (مثل prod أو خطأ إملائي) توقف التشغيل بدلاً من سلوك غير متوقع."""
+        cleaned = (v or "").strip().lower()
+        allowed = {"development", "testing", "test", "staging", "production"}
+        if cleaned not in allowed:
+            raise ValueError(f"قيمة APP_ENV غير معروفة ({v}). القيم المسموحة: {', '.join(sorted(allowed))}.")
+        return cleaned
+
     @model_validator(mode="after")
     def validate_local_auth_settings(self) -> "Settings":
         env_lower = self.app_env.lower().strip()
         if self.dev_auth_enabled:
-            # 1. يُحظر تفعيل المصادقة المحلية في بيئة الإنتاج أو البيئات المرحلية
-            if env_lower in ("production", "prod", "staging"):
+            # 1. المصادقة المحلية (اختيار الدور بدون كلمة مرور) للتطوير والاختبار فقط
+            if env_lower not in ("development", "testing", "test"):
                 raise ValueError(
                     f"حظر أمني: لا يمكن تفعيل المصادقة المحلية (DEV_AUTH_ENABLED=true) في بيئة الإنتاج أو البيئات المشتركة (app_env={self.app_env})."
                 )

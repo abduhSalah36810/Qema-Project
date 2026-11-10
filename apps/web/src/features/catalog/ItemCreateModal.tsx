@@ -303,7 +303,7 @@ export const ItemCreateModal: React.FC<Props> = ({
                   type="number"
                   min="0"
                   step="any"
-                  placeholder="150"
+                  placeholder="مثال: 150"
                   value={widthCm}
                   onChange={(e) => setWidthCm(e.target.value)}
                   className="drawer-input"
@@ -316,7 +316,7 @@ export const ItemCreateModal: React.FC<Props> = ({
                   type="number"
                   min="0"
                   step="any"
-                  placeholder="180"
+                  placeholder="مثال: 180"
                   value={weightGsm}
                   onChange={(e) => setWeightGsm(e.target.value)}
                   className="drawer-input"
@@ -329,7 +329,7 @@ export const ItemCreateModal: React.FC<Props> = ({
                   type="number"
                   min="0"
                   step="any"
-                  placeholder="50"
+                  placeholder="مثال: 50"
                   value={lengthCm}
                   onChange={(e) => setLengthCm(e.target.value)}
                   className="drawer-input"
@@ -342,7 +342,7 @@ export const ItemCreateModal: React.FC<Props> = ({
                   type="number"
                   min="0"
                   step="any"
-                  placeholder="14"
+                  placeholder="مثال: 14"
                   value={diameterMm}
                   onChange={(e) => setDiameterMm(e.target.value)}
                   className="drawer-input"

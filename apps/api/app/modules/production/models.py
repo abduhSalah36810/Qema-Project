@@ -13,7 +13,7 @@
 import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -180,6 +180,8 @@ class Product(Base):
     name_ar: Mapped[str] = mapped_column(String(128), nullable=False)
     style_type: Mapped[str] = mapped_column(String(64), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
+    # الموديل الموقوف لا يظهر في أوامر التشغيل الجديدة؛ الأوامر والحركات السابقة تبقى كما هي.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     variants: Mapped[list["ProductVariant"]] = relationship("ProductVariant", back_populates="product", cascade="all, delete-orphan")
@@ -194,6 +196,8 @@ class ProductVariant(Base):
     letter_size: Mapped[str] = mapped_column(String(16), nullable=False)  # S, M, L, XL, 2XL
     season: Mapped[str] = mapped_column(String(32), nullable=False)  # summer, autumn, winter
     sku: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    # المقاس الموقوف لا يُختار في أوامر جديدة؛ لا يُحذف لارتباطه بحركات مخزن سابقة.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     product: Mapped["Product"] = relationship("Product", back_populates="variants")
@@ -206,10 +210,13 @@ class ProductionTemplate(Base):
     code: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     name_ar: Mapped[str] = mapped_column(String(128), nullable=False)
     product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"), nullable=False)
+    # قالب مستلزمات تصنيع لمقاس/مواصفة محددة (BOM لكل قطعة). القوالب القديمة على مستوى الموديل variant_id = NULL.
+    variant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("product_variants.id"), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     product: Mapped["Product"] = relationship("Product")
+    variant: Mapped["ProductVariant | None"] = relationship("ProductVariant")
     versions: Mapped[list["ProductionTemplateVersion"]] = relationship("ProductionTemplateVersion", back_populates="template", cascade="all, delete-orphan")
 
 
@@ -260,6 +267,15 @@ class ProductionOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     notes: Mapped[str] = mapped_column(Text, default="")
 
+    # ── تكلفة التصنيع (Manufacturing Costing) ──
+    planned_material_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    actual_material_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    actual_labor_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    actual_overhead_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    total_actual_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    wip_balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    unit_manufacturing_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0")
+
     product: Mapped["Product"] = relationship("Product")
     variant: Mapped["ProductVariant"] = relationship("ProductVariant")
     template_version: Mapped["ProductionTemplateVersion | None"] = relationship("ProductionTemplateVersion")
@@ -288,12 +304,38 @@ class ProductionOrderItem(Base):
     fabric_color: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     fabric_weight: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    received_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    rejected_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     order: Mapped["ProductionOrder"] = relationship("ProductionOrder", back_populates="order_items")
     product: Mapped["Product"] = relationship("Product")
     variant: Mapped["ProductVariant"] = relationship("ProductVariant")
     customer: Mapped["Customer | None"] = relationship("Customer")
     template_version: Mapped["ProductionTemplateVersion | None"] = relationship("ProductionTemplateVersion")
+    bom_lines: Mapped[list["ProductionOrderItemMaterial"]] = relationship(
+        "ProductionOrderItemMaterial", back_populates="order_item", cascade="all, delete-orphan"
+    )
+
+
+class ProductionOrderItemMaterial(Base):
+    """
+    نسخة ثابتة من مستلزمات التصنيع لسطر في أمر التشغيل وقت إنشائه:
+    الصنف ووحدته واسمه، استهلاك القطعة الواحدة، والإجمالي المحسوب. لا تتأثر بتعديل BOM الموديل لاحقاً.
+    """
+    __tablename__ = "production_order_item_materials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_item_id: Mapped[str] = mapped_column(String(36), ForeignKey("production_order_items.id", ondelete="CASCADE"), nullable=False, index=True)
+    template_version_id: Mapped[str] = mapped_column(String(36), ForeignKey("production_template_versions.id"), nullable=False)
+    item_id: Mapped[str] = mapped_column(String(36), ForeignKey("catalog_items.id"), nullable=False)
+    unit_id: Mapped[str] = mapped_column(String(36), ForeignKey("units.id"), nullable=False)
+    item_name_snapshot: Mapped[str] = mapped_column(String(128), nullable=False)
+    unit_name_snapshot: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    quantity_per_piece: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    total_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    order_item: Mapped["ProductionOrderItem"] = relationship("ProductionOrderItem", back_populates="bom_lines")
 
 
 class ProductionDefect(Base):
@@ -330,6 +372,9 @@ class ProductionOrderMaterial(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending")  # pending, dispatched, received_with_discrepancy, received_complete
     notes: Mapped[str] = mapped_column(Text, default="")
     item_name_snapshot: Mapped[str | None] = mapped_column(String(128), nullable=True, default=None)
+    # ── تكلفة الخامة وقت الصرف (WAC at time of issue) ──
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0")
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
 
     order: Mapped["ProductionOrder"] = relationship("ProductionOrder", back_populates="materials")
     item: Mapped["CatalogItem"] = relationship("CatalogItem")
@@ -388,6 +433,9 @@ class StockLedgerEntry(Base):
     reference_doc_id: Mapped[str] = mapped_column(String(36), nullable=False)
     transfer_line_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("warehouse_transfer_lines.id"), nullable=True)
     entry_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # ── تقييم المخزون بالتكلفة المتحركة المرجحة (WAC) ──
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0")
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
@@ -451,7 +499,10 @@ class Employee(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     department: Mapped[str] = mapped_column(String(64), default="production")
     job_title: Mapped[str] = mapped_column(String(64), default="")
-    base_salary: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    base_salary: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    # نظام الأجر: monthly = راتب شهري (base_salary)، daily = أجر يومية (daily_rate × أيام العمل الفعلية في الفترة)
+    pay_type: Mapped[str] = mapped_column(String(16), default="monthly", nullable=False, server_default="monthly")
+    daily_rate: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
     hire_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -479,27 +530,86 @@ class PayPeriod(Base):
     period_name: Mapped[str] = mapped_column(String(64), nullable=False)
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="draft")  # draft, approved, paid, closed
+    status: Mapped[str] = mapped_column(String(32), default="draft")  # draft, calculated, submitted, paid, closed
+
+
+class PayPeriodEvent(Base):
+    """
+    سجل غير قابل للتعديل لمن أعد كشف الرواتب أو عدّله أو قدّمه للصرف.
+    يُستخدم لفرض Maker-Checker على مصدر الكشف: من أعد الكشف أو عدّله لا يعتمد سند صرفه.
+    """
+    __tablename__ = "pay_period_events"
+    __table_args__ = (
+        CheckConstraint("action in ('calculate', 'adjust', 'submit_for_disbursement')", name="ck_pay_period_events_action"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    period_id: Mapped[str] = mapped_column(String(36), ForeignKey("pay_periods.id"), nullable=False, index=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    details: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+PAYROLL_PREPARATION_ACTIONS = ("calculate", "adjust")
 
 
 class PayrollRun(Base):
     __tablename__ = "payroll_runs"
+    __table_args__ = (UniqueConstraint("period_id", "employee_id", name="uq_payroll_runs_period_employee"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     period_id: Mapped[str] = mapped_column(String(36), ForeignKey("pay_periods.id"), nullable=False, index=True)
     employee_id: Mapped[str] = mapped_column(String(36), ForeignKey("employees.id"), nullable=False, index=True)
-    base_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    overtime_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    bonus_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    deductions_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    advances_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
-    net_amount: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    base_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    overtime_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    bonus_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    deductions_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    advances_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    net_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False)  # draft, approved, paid
     cash_document_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("cash_documents.id"), nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # لقطة نظام الأجر وقت إعداد الكشف: لا يغيرها تعديل ملف الموظف لاحقاً
+    pay_type: Mapped[str] = mapped_column(String(16), default="monthly", nullable=False, server_default="monthly")
+    rate_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    work_days: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    employee_name_snapshot: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     period: Mapped["PayPeriod"] = relationship("PayPeriod")
     employee: Mapped["Employee"] = relationship("Employee")
+    items: Mapped[list["PayrollRunItem"]] = relationship(
+        "PayrollRunItem", back_populates="run", cascade="all, delete-orphan", order_by="PayrollRunItem.created_at"
+    )
+
+
+class PayrollRunItem(Base):
+    """
+    بند حافز أو خصم داخل كشف موظف في فترة: يُدخله المدير المالي صراحة ولا يُطبَّق تلقائياً.
+    يحفظ طريقة الحساب والقيم المستخدمة والمبلغ الناتج وقت الإدخال (لقطة قابلة للمراجعة).
+    """
+    __tablename__ = "payroll_run_items"
+    __table_args__ = (
+        CheckConstraint("kind in ('incentive', 'deduction')", name="ck_payroll_items_kind"),
+        CheckConstraint("calc_method in ('fixed', 'percent', 'quantity')", name="ck_payroll_items_method"),
+        CheckConstraint("amount >= 0", name="ck_payroll_items_amount_nonnegative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("payroll_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    calc_method: Mapped[str] = mapped_column(String(16), nullable=False)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    value: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    percent_base: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    run: Mapped["PayrollRun"] = relationship("PayrollRun", back_populates="items")
 
 
 class DailyExpense(Base):
@@ -581,6 +691,7 @@ class StocktakeLine(Base):
     stocktake_id: Mapped[str] = mapped_column(String(36), ForeignKey("stocktake_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
     item_id: Mapped[str] = mapped_column(String(36), ForeignKey("catalog_items.id"), nullable=False, index=True)
     unit_id: Mapped[str] = mapped_column(String(36), ForeignKey("units.id"), nullable=False)
+    bucket_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
     book_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     counted_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)  # None = not counted, 0.0 = zero count!
     variance: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -625,3 +736,44 @@ class StocktakeAuditLog(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
 
     stocktake: Mapped["StocktakeSession"] = relationship("StocktakeSession", back_populates="audit_logs")
+
+
+class ProductionMaterialReconciliation(Base):
+    """مستند تسوية خامات الورشة لأمر تشغيل: استهلاك فعلي، مرتجع للمخزن، وهالك."""
+    __tablename__ = "production_material_reconciliations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    reconciliation_number: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    order_id: Mapped[str] = mapped_column(String(36), ForeignKey("production_orders.id"), nullable=False, index=True)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    lines: Mapped[list["ProductionMaterialReconciliationLine"]] = relationship(
+        "ProductionMaterialReconciliationLine", back_populates="reconciliation"
+    )
+
+
+class ProductionMaterialReconciliationLine(Base):
+    __tablename__ = "production_material_reconciliation_lines"
+    __table_args__ = (
+        CheckConstraint(
+            "consumed_quantity >= 0 AND returned_quantity >= 0 AND scrapped_quantity >= 0",
+            name="ck_material_reconciliation_line_nonnegative",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    reconciliation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("production_material_reconciliations.id"), nullable=False, index=True
+    )
+    item_id: Mapped[str] = mapped_column(String(36), ForeignKey("catalog_items.id"), nullable=False)
+    unit_id: Mapped[str] = mapped_column(String(36), ForeignKey("units.id"), nullable=False)
+    consumed_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    returned_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    scrapped_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    reconciliation: Mapped["ProductionMaterialReconciliation"] = relationship(
+        "ProductionMaterialReconciliation", back_populates="lines"
+    )

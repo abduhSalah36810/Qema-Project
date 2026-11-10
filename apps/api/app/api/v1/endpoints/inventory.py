@@ -49,6 +49,20 @@ from app.modules.production.stocktake_service import (
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
+STOCKTAKE_ACTION_AR = {
+    "create": "إنشاء جلسة الجرد وتثبيت الأرصدة الدفترية",
+    "start_counting": "بدء العد الميداني",
+    "record_counts": "تسجيل الكميات المعدودة",
+    "record_count": "تسجيل الكميات المعدودة",
+    "submit": "رفع نتائج الجرد للمراجعة",
+    "request_recount": "طلب إعادة العد لأصناف معينة",
+    "approve": "اعتماد نتائج الجرد",
+    "reject": "رفض الجلسة وإعادتها للتصحيح",
+    "post": "ترحيل قيود التسوية للمخزون",
+    "cancel": "إلغاء جلسة الجرد",
+}
+
+
 def serialize_stocktake_session(st: StocktakeSession, include_lines: bool = False) -> StocktakeSessionRead:
     """تحويل كائن جلسة الجرد إلى Schema مخصصة للقراءة مع ملخص المؤشرات العددية."""
     lines = st.lines or []
@@ -60,38 +74,64 @@ def serialize_stocktake_session(st: StocktakeSession, include_lines: bool = Fals
 
     lines_read = None
     if include_lines:
-        lines_read = [
-            StocktakeLineRead(
-                id=l.id,
-                stocktake_id=l.stocktake_id,
-                item_id=l.item_id,
-                item_code=l.item.code if l.item else "",
-                item_name_ar=l.item.name_ar if l.item else "",
-                unit_id=l.unit_id,
-                unit_name_ar=l.unit.name_ar if l.unit else (l.item.unit.name_ar if l.item and l.item.unit else ""),
-                book_quantity=l.book_quantity,
-                counted_quantity=l.counted_quantity,
-                variance=l.variance,
-                status=l.status,
-                counter_id=l.counter_id,
-                counted_at=l.counted_at,
-                notes=l.notes or "",
-                count_history=[
-                    StocktakeCountHistoryRead(
-                        id=h.id,
-                        line_id=h.line_id,
-                        counted_quantity=h.counted_quantity,
-                        previous_quantity=h.previous_quantity,
-                        counter_id=h.counter_id,
-                        counted_at=h.counted_at,
-                        reason=h.reason,
-                        notes=h.notes or "",
-                    )
-                    for h in (l.count_history or [])
-                ] if l.count_history else [],
+        lines_read = []
+        for l in lines:
+            var_qty = l.variance
+            if var_qty is not None:
+                if var_qty < 0:
+                    v_type = "shortage"
+                elif var_qty > 0:
+                    v_type = "surplus"
+                else:
+                    v_type = "exact"
+            else:
+                v_type = "pending"
+
+            history_items = [
+                StocktakeCountHistoryRead(
+                    id=h.id,
+                    line_id=h.line_id,
+                    count_sequence=idx + 1,
+                    counted_quantity=h.counted_quantity,
+                    previous_quantity=h.previous_quantity,
+                    counter_id=h.counter_id,
+                    counter_role="أمين المخزن",
+                    counted_at=h.counted_at,
+                    recorded_at=h.counted_at,
+                    reason=h.reason or "عد ميداني",
+                    notes=h.notes or "",
+                )
+                for idx, h in enumerate(sorted(l.count_history or [], key=lambda x: x.counted_at))
+            ]
+
+            lines_read.append(
+                StocktakeLineRead(
+                    id=l.id,
+                    stocktake_id=l.stocktake_id,
+                    item_id=l.item_id,
+                    item_code=l.item.code if l.item else "",
+                    item_name_ar=l.item.name_ar if l.item else "",
+                    unit_id=l.unit_id,
+                    unit_name_ar=l.unit.name_ar if l.unit else (l.item.unit.name_ar if l.item and l.item.unit else ""),
+                    book_quantity=l.book_quantity,
+                    counted_quantity=l.counted_quantity,
+                    variance=var_qty,
+                    variance_quantity=var_qty,
+                    variance_type=v_type,
+                    unit_cost=0.0,
+                    total_variance_cost=0.0,
+                    needs_recount=(l.status == "recount_required"),
+                    bucket_reference=l.bucket_reference,
+                    status=l.status,
+                    counter_id=l.counter_id,
+                    last_counted_by=l.counter_id,
+                    counted_at=l.counted_at,
+                    last_counted_at=l.counted_at,
+                    notes=l.notes or "",
+                    count_history=history_items,
+                    history=history_items,
+                )
             )
-            for l in lines
-        ]
 
     return StocktakeSessionRead(
         id=st.id,
@@ -110,6 +150,10 @@ def serialize_stocktake_session(st: StocktakeSession, include_lines: bool = Fals
         shortage_count=shortage_count,
         surplus_count=surplus_count,
         exact_count=exact_count,
+        shortage_lines=shortage_count,
+        surplus_lines=surplus_count,
+        exact_lines=exact_count,
+        net_variance_cost=0.0,
         created_by=st.created_by,
         submitted_by=st.submitted_by,
         submitted_at=st.submitted_at,
@@ -161,6 +205,70 @@ async def list_stock_balances(
         )
         for warehouse in warehouses for item in items
     ]
+
+
+@router.get("/finished-goods-balances")
+async def list_finished_goods_balances(
+    current_user: AuthenticatedUser = Depends(require_permission("inventory:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    أرصدة المنتج التام لكل موديل/مقاس مقسمة حسب الملكية، بنفس قواعد التسليم:
+    - available_factory_brand: متاح للبيع العام.
+    - private_label: محجوز لعملاء التصنيع الخاص.
+    - pending_inspection: مرتجعات تحت الفحص (غير متاحة للبيع).
+    """
+    from app.modules.production.models import Customer, Product, ProductVariant
+    from app.modules.production.stock import FACTORY_BRAND_BUCKET, RETURN_PENDING_PREFIX, balances_by_bucket
+
+    fg = await db.scalar(select(Warehouse).where(Warehouse.code == "finished_goods"))
+    if not fg:
+        return []
+    balances = await balances_by_bucket(db, fg.id)
+    item_ids = sorted({item_id for item_id, _ in balances})
+    if not item_ids:
+        return []
+    items = {i.id: i for i in (await db.scalars(select(CatalogItem).where(CatalogItem.id.in_(item_ids)))).all()}
+    customers = {c.id: c.name for c in (await db.scalars(select(Customer))).all()}
+    rows = []
+    for item_id in item_ids:
+        item = items.get(item_id)
+        if not item:
+            continue
+        variant_id = item.code[len("FG-VAR-"):] if item.code.startswith("FG-VAR-") else None
+        variant = await db.get(ProductVariant, variant_id) if variant_id else None
+        product = await db.get(Product, variant.product_id) if variant else None
+        sellable = balances.get((item_id, FACTORY_BRAND_BUCKET), 0.0)
+        private = []
+        pending = 0.0
+        other = 0.0
+        for (bal_item, bucket), qty in balances.items():
+            if bal_item != item_id or qty == 0:
+                continue
+            if bucket and bucket.startswith("private_label:"):
+                cid = bucket.split(":", 1)[1]
+                private.append({"customer_id": cid, "customer_name": customers.get(cid, ""), "quantity": qty})
+            elif bucket and bucket.startswith(RETURN_PENDING_PREFIX):
+                pending += qty
+            elif bucket != FACTORY_BRAND_BUCKET:
+                other += qty
+        rows.append({
+            "item_id": item.id,
+            "item_code": item.code,
+            "item_name_ar": item.name_ar,
+            "product_id": product.id if product else None,
+            "product_name_ar": product.name_ar if product else "",
+            "variant_id": variant.id if variant else None,
+            "numeric_size": variant.numeric_size if variant else None,
+            "letter_size": variant.letter_size if variant else None,
+            "season": variant.season if variant else None,
+            "available_factory_brand": sellable,
+            "private_label": private,
+            "pending_inspection": pending,
+            "unassigned": other,
+            "total": round(sellable + sum(p["quantity"] for p in private) + pending + other, 6),
+        })
+    return rows
 
 
 @router.get("/ledger", response_model=List[StockLedgerEntryRead])
@@ -393,9 +501,12 @@ async def get_stocktake_audit_endpoint(
             id=log.id,
             stocktake_id=log.stocktake_id,
             action=log.action,
+            event_type=log.action,
+            event_name_ar=STOCKTAKE_ACTION_AR.get(log.action, log.action),
             actor_id=log.actor_id,
             actor_role=log.actor_role,
             timestamp=log.timestamp,
+            created_at=log.timestamp,
             details=log.details,
             notes=log.notes or "",
         )

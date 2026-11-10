@@ -44,6 +44,7 @@ from app.modules.production.schemas import (
     StageUpdate,
     TemplateCreate,
 )
+from app.modules.finance.ledger_service import post_journal_entry, get_weighted_average_cost
 
 
 ORDER_STAGES_SEQUENCE = [
@@ -74,7 +75,7 @@ async def calculate_proportional_materials(
     """
     stmt = (
         select(ProductionTemplateVersion)
-        .options(selectinload(ProductionTemplateVersion.lines))
+        .options(selectinload(ProductionTemplateVersion.lines).selectinload(ProductionTemplateLine.unit))
         .where(ProductionTemplateVersion.id == template_version_id)
     )
     result = await session.execute(stmt)
@@ -96,11 +97,14 @@ async def calculate_proportional_materials(
 
     for line in version.lines:
         planned_qty = round(line.quantity_per_reference * ratio, 4)
+        unit = line.__dict__.get("unit")
         snapshot_lines.append({
             "item_id": line.item_id,
             "unit_id": line.unit_id,
             "planned_quantity": planned_qty,
             "notes": line.notes or "",
+            "quantity_per_piece": (Decimal(str(line.quantity_per_reference)) / Decimal(str(version.reference_quantity))).quantize(Decimal("0.0001")),
+            "unit_name": getattr(unit, "name_ar", "") or "",
         })
 
     return snapshot_lines
@@ -120,7 +124,10 @@ async def create_production_order(
         target_quantity=data.target_quantity or 0, season=data.season or "",
         template_version_id=data.template_version_id,
     )]
+    from app.modules.production.bom import active_bom_version, variant_label
+
     item_details: list[tuple[ProductionOrderItemCreate, Product, ProductVariant, Customer | None]] = []
+    missing_bom: list[str] = []
     for input_item in requested_items:
         product = await session.get(Product, input_item.product_id)
         if not product:
@@ -128,11 +135,22 @@ async def create_production_order(
         variant = await session.get(ProductVariant, input_item.variant_id)
         if not variant or variant.product_id != product.id:
             raise HTTPException(status_code=400, detail="متغير المقاس والموسم لا يتبع المنتج المحدد.")
+        if getattr(product, "is_active", True) is False:
+            raise HTTPException(status_code=422, detail=f"الموديل «{product.name_ar}» موقوف؛ أعد تفعيله من «الموديلات والمقاسات» قبل إنشاء أمر له.")
+        if getattr(variant, "is_active", True) is False:
+            raise HTTPException(status_code=422, detail=f"{variant_label(variant)} للموديل «{product.name_ar}» موقوف؛ أعد تفعيله أو اختر مقاساً آخر.")
         customer = None
         if input_item.product_type == "private_label":
             customer = await session.get(Customer, input_item.customer_id)
             if not customer or customer.status != "active":
                 raise HTTPException(status_code=404, detail="عميل التصنيع للغير غير موجود أو غير نشط.")
+        if not input_item.template_version_id:
+            # المستلزمات من BOM المقاس النشط تلقائياً
+            bom_version = await active_bom_version(session, variant.id)
+            if isinstance(bom_version, ProductionTemplateVersion) and bom_version.lines:
+                input_item.template_version_id = bom_version.id
+            elif not data.custom_materials:
+                missing_bom.append(f"{product.name_ar} ({variant_label(variant)})")
         if input_item.template_version_id:
             version = await session.get(ProductionTemplateVersion, input_item.template_version_id)
             if not version:
@@ -142,16 +160,23 @@ async def create_production_order(
                 raise HTTPException(status_code=422, detail="قالب الخامات لا يتبع الموديل المحدد.")
         item_details.append((input_item, product, variant, customer))
 
+    if missing_bom:
+        raise HTTPException(
+            status_code=422,
+            detail="لا يمكن إنشاء أمر التشغيل: مستلزمات التصنيع غير معرّفة لـ " + "، ".join(missing_bom)
+            + ". عرّفها من «الموديلات والمقاسات» أولاً.",
+        )
+
     first_input, first_product, first_variant, _ = item_details[0]
     total_target = sum(input_item.target_quantity for input_item, _, _, _ in item_details)
     order_season = first_input.season if all(entry[0].season == first_input.season for entry in item_details) else "mixed"
 
     # توليد رقم أمر فريد
     now_year = datetime.now(timezone.utc).year
-    count_stmt = select(ProductionOrder)
-    count_res = await session.execute(count_stmt)
+    count_res = await session.execute(select(ProductionOrder.id))
     order_count = len(count_res.scalars().all()) + 1
-    order_number = f"PO-{now_year}-{order_count:04d}"
+    # لاحقة عشوائية قصيرة تمنع تصادم الأرقام عند الإنشاء المتزامن (القيد فريد في القاعدة)
+    order_number = f"PO-{now_year}-{order_count:04d}-{uuid.uuid4().hex[:4].upper()}"
 
     order = ProductionOrder(
         id=str(uuid.uuid4()),
@@ -170,9 +195,11 @@ async def create_production_order(
     )
     session.add(order)
 
+    order_item_ids: list[str] = []
     for input_item, product, variant, customer in item_details:
+        order_item_ids.append(str(uuid.uuid4()))
         session.add(ProductionOrderItem(
-            id=str(uuid.uuid4()), order_id=order.id, product_id=product.id, variant_id=variant.id,
+            id=order_item_ids[-1], order_id=order.id, product_id=product.id, variant_id=variant.id,
             product_type=input_item.product_type, customer_id=customer.id if customer else None,
             template_version_id=input_item.template_version_id,
             target_quantity=input_item.target_quantity, season=input_item.season,
@@ -181,9 +208,11 @@ async def create_production_order(
             notes=input_item.notes.strip(),
         ))
 
-    # 1. إعداد لقطة الخامات (Snapshot)
+    # 1. إعداد لقطة الخامات (Snapshot) + نسخة ثابتة من مستلزمات كل سطر
+    from app.modules.production.models import ProductionOrderItemMaterial
+
     material_totals: dict[str, dict] = {}
-    for input_item, _, _, _ in item_details:
+    for (input_item, _, _, _), order_item_id in zip(item_details, order_item_ids):
         if not input_item.template_version_id:
             continue
         calc_lines = await calculate_proportional_materials(
@@ -192,7 +221,19 @@ async def create_production_order(
         for line in calc_lines:
             catalog_item = await session.get(CatalogItem, line["item_id"])
             if not catalog_item or not catalog_item.is_active or catalog_item.unit_id != line["unit_id"]:
-                raise HTTPException(status_code=422, detail="أحد أصناف القالب غير نشط أو وحدته لا تطابق دليل الأصناف.")
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"الصنف «{catalog_item.name_ar if catalog_item else line['item_id']}» في مستلزمات التصنيع موقوف أو تغيّرت وحدته في دليل الأصناف. حدّث مستلزمات المقاس.",
+                )
+            # نسخة ثابتة من مستلزمات هذا السطر داخل الأمر (لا تتأثر بتعديل BOM لاحقاً)
+            session.add(ProductionOrderItemMaterial(
+                id=str(uuid.uuid4()), order_item_id=order_item_id, template_version_id=input_item.template_version_id,
+                item_id=line["item_id"], unit_id=line["unit_id"],
+                item_name_snapshot=(catalog_item.name_ar or "")[:128],
+                unit_name_snapshot=(line.get("unit_name") or "")[:64],
+                quantity_per_piece=line["quantity_per_piece"],
+                total_quantity=Decimal(str(line["planned_quantity"])).quantize(Decimal("0.0001")),
+            ))
             current = material_totals.get(line["item_id"])
             if current and current["unit_id"] != line["unit_id"]:
                 raise HTTPException(status_code=422, detail="وحدات الصنف تختلف بين قوالب بنود أمر التشغيل.")
@@ -305,9 +346,22 @@ async def remove_material_from_draft_order(
         raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
     if order.status != "draft":
         raise HTTPException(status_code=409, detail="لا يمكن حذف خامة بعد بدء الصرف.")
+    from app.modules.production.models import ProductionOrderItem, ProductionOrderItemMaterial
+
     line = await session.get(ProductionOrderMaterial, material_id)
     if not line or line.order_id != order_id:
         raise HTTPException(status_code=404, detail="خامة الأمر غير موجودة.")
+    # خامات مستلزمات التصنيع المحفوظة في الأمر لا تُحذف (لا اختلاف غير موثق بين المطلوب والمصروف)
+    from_bom = await session.scalar(
+        select(ProductionOrderItemMaterial.id)
+        .join(ProductionOrderItem, ProductionOrderItem.id == ProductionOrderItemMaterial.order_item_id)
+        .where(ProductionOrderItem.order_id == order.id, ProductionOrderItemMaterial.item_id == line.item_id)
+    )
+    if isinstance(from_bom, str):
+        raise HTTPException(
+            status_code=409,
+            detail="هذه الخامة من مستلزمات التصنيع المحفوظة في الأمر ولا تُحذف منه. لتغيير المستلزمات عدّل BOM المقاس وأنشئ أمراً جديداً.",
+        )
     await session.delete(line)
     await session.commit()
 
@@ -407,6 +461,10 @@ async def dispatch_order_materials(
     for mat in order.materials:
         mat.dispatched_quantity = mat.planned_quantity
         mat.status = "dispatched"
+        # احتساب متوسط التكلفة المرجح للخامة وتجميد التكلفة بالأمر
+        mat_wac = await get_weighted_average_cost(session, mat.item_id, raw_wh.id)
+        mat.unit_cost = mat_wac
+        mat.total_cost = (Decimal(str(mat.planned_quantity)) * mat_wac).quantize(Decimal("0.01"))
         line = WarehouseTransferLine(
             id=str(uuid.uuid4()),
             transfer_id=transfer.id,
@@ -429,6 +487,7 @@ async def dispatch_order_materials(
             warehouse_id=raw_wh.id, location_type="warehouse", quantity=-mat.planned_quantity,
             reference_doc_type="warehouse_transfer", reference_doc_id=transfer.id,
             transfer_line_id=line.id, entry_type="dispatch_source", created_by=dispatcher_id,
+            unit_cost=mat.unit_cost, total_cost=-mat.total_cost,
         ))
         session.add(StockLedgerEntry(
             id=str(uuid.uuid4()), item_id=mat.item_id, unit_id=mat.unit_id,
@@ -436,6 +495,7 @@ async def dispatch_order_materials(
             quantity=mat.planned_quantity, reference_doc_type="warehouse_transfer",
             reference_doc_id=transfer.id, transfer_line_id=line.id,
             entry_type="dispatch_transit", created_by=dispatcher_id,
+            unit_cost=mat.unit_cost, total_cost=mat.total_cost,
         ))
 
     order.status = "materials_dispatched"
@@ -461,10 +521,18 @@ async def confirm_warehouse_receipt(
     - تسجيل الفروقات إن وجدت دون مسح الأثر.
     - تحديث حالة أمر التشغيل إلى in_production.
     """
+    # اتجاه التحويل صراحة: صرف من مخزن الخامات إلى مخزن تحت التشغيل فقط.
+    # مستندات مرتجعات الورشة (تحت التشغيل ← الخامات) تحمل رقم الأمر نفسه ولا يجوز اختيارها هنا.
+    raw_wh_id = select(Warehouse.id).where(Warehouse.code == "main_raw_materials").scalar_subquery()
+    wip_wh_id = select(Warehouse.id).where(Warehouse.code == "work_in_progress").scalar_subquery()
     transfer_stmt = (
         select(WarehouseTransfer)
         .options(selectinload(WarehouseTransfer.lines))
-        .where(WarehouseTransfer.order_id == order_id)
+        .where(
+            WarehouseTransfer.order_id == order_id,
+            WarehouseTransfer.source_warehouse_id == raw_wh_id,
+            WarehouseTransfer.destination_warehouse_id == wip_wh_id,
+        )
         .order_by(WarehouseTransfer.dispatched_at.desc())
         .with_for_update()
     )
@@ -475,6 +543,13 @@ async def confirm_warehouse_receipt(
 
     if transfer.status == "received_confirmed":
         raise HTTPException(status_code=400, detail="تم تأكيد استلام هذا التحويل مسبقاً.")
+
+    # فصل المسؤوليات: من صرف الخامات لا يؤكد استلامها بالورشة بنفسه، مهما كانت صلاحياته
+    if transfer.dispatched_by and transfer.dispatched_by == receiver_id:
+        raise HTTPException(
+            status_code=409,
+            detail="لا يجوز لمن صرف الخامات أن يؤكد استلامها بنفسه. يؤكد الاستلام مسؤول الإنتاج أو مستخدم آخر مخوّل.",
+        )
 
     order_stmt = (
         select(ProductionOrder)
@@ -491,14 +566,38 @@ async def confirm_warehouse_receipt(
     for line in sorted_lines:
         await lock_stock_balance(session, line.item_id, transfer.destination_warehouse_id)
 
+    if order.status != "materials_dispatched":
+        raise HTTPException(status_code=409, detail="لا يمكن تأكيد استلام الخامات إلا لأمر صُرفت خاماته ولم يُستلم بعد.")
+
+    transfer_item_ids = {line.item_id for line in transfer.lines}
+    unknown_items = [entry.item_id for entry in data.received_lines if entry.item_id not in transfer_item_ids]
+    if unknown_items:
+        raise HTTPException(status_code=422, detail="أحد أصناف الاستلام ليس ضمن مستند صرف الخامات لهذا الأمر.")
     received_map = {item.item_id: item.received_quantity for item in data.received_lines}
     notes_map = {item.item_id: item.notes for item in data.received_lines}
+    materials_by_item = {mat.item_id: mat for mat in order.materials}
 
-    has_any_discrepancy = False
+    received_cost = Decimal("0.00")
+    transit_loss_cost = Decimal("0.00")
+    dispatched_cost = Decimal("0.00")
+    wip_bucket = f"order:{order.id}"
 
     for line in transfer.lines:
-        rec_qty = received_map.get(line.item_id, line.dispatched_quantity)
-        disc_qty = round(rec_qty - line.dispatched_quantity, 4)
+        rec_qty = round(float(received_map.get(line.item_id, line.dispatched_quantity)), 6)
+        if rec_qty < 0 or rec_qty > line.dispatched_quantity + 1e-9:
+            raise HTTPException(
+                status_code=409,
+                detail=f"الكمية المستلمة ({rec_qty:g}) يجب أن تكون بين صفر والكمية المصروفة ({line.dispatched_quantity:g}). الزيادة تُصرف بمستند صرف مستقل.",
+            )
+        disc_qty = round(rec_qty - line.dispatched_quantity, 6)
+        mat = materials_by_item.get(line.item_id)
+        unit_cost = Decimal(str(mat.unit_cost if mat and mat.unit_cost is not None else 0))
+        rec_cost = (Decimal(str(rec_qty)) * unit_cost).quantize(Decimal("0.01"))
+        disp_cost = (Decimal(str(line.dispatched_quantity)) * unit_cost).quantize(Decimal("0.01"))
+        received_cost += rec_cost
+        dispatched_cost += disp_cost
+        transit_loss_cost += disp_cost - rec_cost
+
         line.received_quantity = rec_qty
         line.discrepancy_quantity = disc_qty
         session.add(StockLedgerEntry(
@@ -507,15 +606,18 @@ async def confirm_warehouse_receipt(
             quantity=-line.dispatched_quantity, reference_doc_type="warehouse_transfer",
             reference_doc_id=transfer.id, transfer_line_id=line.id,
             entry_type="receipt_transit", created_by=receiver_id,
+            unit_cost=unit_cost, total_cost=-disp_cost,
         ))
-        session.add(StockLedgerEntry(
-            id=str(uuid.uuid4()), item_id=line.item_id, unit_id=line.unit_id,
-            warehouse_id=transfer.destination_warehouse_id, location_type="warehouse",
-            bucket_reference=f"order:{order.id}",
-            quantity=rec_qty, reference_doc_type="warehouse_transfer",
-            reference_doc_id=transfer.id, transfer_line_id=line.id,
-            entry_type="receipt_warehouse", created_by=receiver_id,
-        ))
+        if rec_qty > 0:
+            session.add(StockLedgerEntry(
+                id=str(uuid.uuid4()), item_id=line.item_id, unit_id=line.unit_id,
+                warehouse_id=transfer.destination_warehouse_id, location_type="warehouse",
+                bucket_reference=wip_bucket,
+                quantity=rec_qty, reference_doc_type="warehouse_transfer",
+                reference_doc_id=transfer.id, transfer_line_id=line.id,
+                entry_type="receipt_warehouse", created_by=receiver_id,
+                unit_cost=unit_cost, total_cost=rec_cost,
+            ))
         if disc_qty != 0:
             session.add(StockLedgerEntry(
                 id=str(uuid.uuid4()), item_id=line.item_id, unit_id=line.unit_id,
@@ -523,25 +625,48 @@ async def confirm_warehouse_receipt(
                 quantity=-disc_qty, reference_doc_type="warehouse_transfer",
                 reference_doc_id=transfer.id, transfer_line_id=line.id,
                 entry_type="receipt_discrepancy", created_by=receiver_id,
+                unit_cost=unit_cost, total_cost=(disp_cost - rec_cost),
             ))
-        if line.item_id in notes_map and notes_map[line.item_id]:
+        if notes_map.get(line.item_id):
             line.notes = f"{line.notes} | {notes_map[line.item_id]}".strip(" |")
 
-        if disc_qty != 0:
-            has_any_discrepancy = True
-
-        # تحديث لقطة الخامات بالأمر
-        for mat in order.materials:
-            if mat.item_id == line.item_id:
-                mat.received_quantity = rec_qty
-                mat.discrepancy_quantity = disc_qty
-                mat.status = "received_with_discrepancy" if disc_qty != 0 else "received_complete"
+        if mat:
+            mat.received_quantity = rec_qty
+            mat.discrepancy_quantity = disc_qty
+            mat.status = "received_with_discrepancy" if disc_qty != 0 else "received_complete"
 
     transfer.status = "received_confirmed"
     transfer.received_at = utc_now()
     transfer.received_by = receiver_id
     if data.notes:
         transfer.notes = f"{transfer.notes} | استلام: {data.notes}".strip(" |")
+
+    # تكلفة الخامات المستلمة فعلياً بالورشة هي تكلفة الأمر (الفاقد في النقل لا يُحمل على المنتج)
+    order.actual_material_cost = (order.actual_material_cost or Decimal("0.00")) + received_cost
+    labor = order.actual_labor_cost or Decimal("0.00")
+    overhead = order.actual_overhead_cost or Decimal("0.00")
+    order.total_actual_cost = order.actual_material_cost + labor + overhead
+    order.wip_balance = (order.wip_balance or Decimal("0.00")) + received_cost
+    target_q = Decimal(str(order.target_quantity or 0))
+    if target_q > Decimal("0.00"):
+        order.unit_manufacturing_cost = (order.total_actual_cost / target_q).quantize(Decimal("0.0001"))
+
+    # قيد تحويل الخامات للورشة (في نفس المعاملة): Dr 1220 بالمستلم + Dr 5200 بفاقد النقل / Cr 1210 بالمصروف
+    if dispatched_cost > Decimal("0.00"):
+        journal_lines = []
+        if received_cost > Decimal("0.00"):
+            journal_lines.append({"account_code": "1220", "debit": received_cost, "credit": 0, "description": f"خامات مستلمة بالورشة لأمر {order.order_number}"})
+        if transit_loss_cost > Decimal("0.00"):
+            journal_lines.append({"account_code": "5200", "debit": transit_loss_cost, "credit": 0, "description": f"عجز خامات أثناء النقل لأمر {order.order_number}"})
+        journal_lines.append({"account_code": "1210", "debit": 0, "credit": dispatched_cost, "description": "صرف خامات من مخزن الخامات"})
+        await post_journal_entry(
+            session,
+            source_doc_type="production_wip_issue",
+            source_doc_id=transfer.id,
+            description=f"تحميل تكلفة خامات على أمر التشغيل {order.order_number} بمخزن تحت التشغيل",
+            lines=journal_lines,
+            user_id=receiver_id,
+        )
 
     order.status = "in_production"
     if commit:
@@ -581,6 +706,12 @@ async def update_production_stage(
     if not order:
         raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
 
+    if order.status != "in_production":
+        raise HTTPException(
+            status_code=409,
+            detail="لا يمكن تحديث مراحل الإنتاج إلا بعد صرف الخامات وتأكيد استلامها بالورشة (حالة الأمر: قيد الإنتاج).",
+        )
+
     # ترتيب المراحل والتحقق من التتابع
     stage_index = ORDER_STAGES_SEQUENCE.index(stage_name)
     events_by_stage = {ev.stage_name: ev for ev in order.stage_events}
@@ -602,7 +733,16 @@ async def update_production_stage(
         raise HTTPException(status_code=400, detail="تغيير حالة المرحلة يتم عبر إجراءاتها المخصصة فقط.")
     allowed_next = {"not_started": "in_progress", "in_progress": "completed"}
     if allowed_next.get(previous_status) != data.status:
-        raise HTTPException(status_code=409, detail="حالة المرحلة تغيرت؛ حدّث الصفحة قبل تنفيذ الإجراء.")
+        stage_ar = STAGE_NAMES_AR.get(stage_name, stage_name)
+        if previous_status == "not_started" and data.status == "completed":
+            detail = f"ابدأ مرحلة ({stage_ar}) أولاً قبل تسجيل إكمالها."
+        elif previous_status == data.status:
+            detail = f"مرحلة ({stage_ar}) مسجلة بهذه الحالة بالفعل؛ حدّث الصفحة لرؤية آخر وضع."
+        elif previous_status == "completed":
+            detail = f"مرحلة ({stage_ar}) مكتملة بالفعل. للتصحيح استخدم التراجع عن المرحلة مع ذكر السبب."
+        else:
+            detail = "حالة المرحلة تغيرت؛ حدّث الصفحة قبل تنفيذ الإجراء."
+        raise HTTPException(status_code=409, detail=detail)
     if not target_event:
         target_event = ProductionStageEvent(
             id=str(uuid.uuid4()),
@@ -665,6 +805,9 @@ async def reopen_last_completed_stage(
     if not order:
         raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
 
+    if order.status not in ("in_production", "manufacturing_completed"):
+        raise HTTPException(status_code=409, detail="لا يمكن التراجع عن مراحل أمر تم استلام منتجه التام بالكامل أو إغلاقه.")
+
     event_by_stage = {event.stage_name: event for event in order.stage_events}
     event = event_by_stage.get(stage_name)
     if not event or event.status != "completed":
@@ -709,6 +852,7 @@ async def seed_provisional_data_if_empty(session: AsyncSession) -> None:
     roles_data = [
         ("general_manager", "المدير العام", "إدارة شاملة لأوامر الإنتاج والمراحل والأسعار والعملاء"),
         ("warehouse_manager", "أمين المخزن", "إدارة المخزون وصرف الخامات وتأكيد استلام المواد"),
+        ("production_manager", "مدير الإنتاج", "إدارة أوامر ومراحل التشغيل الميدانية واستلام خامات WIP وإثبات الاستهلاك"),
         ("finance_manager", "المدير المالي", "إدارة المصروفات وسجلات الرواتب والدفعات المالية"),
     ]
     for r_name, r_ar, r_desc in roles_data:

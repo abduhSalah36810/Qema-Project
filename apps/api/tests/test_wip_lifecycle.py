@@ -108,6 +108,12 @@ def _build_mock_order(
     )
     order.product = prod
     order.variant = var
+    order.order_items = [ProductionOrderItem(
+        id="order-item-1", order_id=order.id, product_id=prod.id, variant_id=var.id,
+        product_type="factory_brand", target_quantity=target_quantity, season="summer",
+        received_quantity=0.0, rejected_quantity=0.0,
+    )]
+    order.order_items[0].variant = var
 
     # Materials
     mat_item = CatalogItem(
@@ -148,7 +154,6 @@ def _build_mock_order(
         )
         stage_events.append(ev)
     order.stage_events = stage_events
-    order.order_items = []
     return order
 
 

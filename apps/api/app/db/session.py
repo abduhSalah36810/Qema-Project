@@ -3,6 +3,8 @@
 لا تُستخدم قاعدة البيانات في هذه المرحلة التأسيسية.
 الاتصال الفعلي يبدأ عند تنفيذ أول migration لوحدة عمل.
 """
+import os
+
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -17,7 +19,8 @@ def get_async_database_url(url: str) -> str:
 
 engine = create_async_engine(
     get_async_database_url(settings.database_url),
-    echo=(settings.app_env == "development"),
+    # طباعة استعلامات SQL قد تكشف قيم الرواتب والعملاء في السجلات؛ تُفعّل صراحة فقط
+    echo=os.environ.get("SQL_ECHO", "").strip().lower() == "true",
     pool_pre_ping=True,
 )
 

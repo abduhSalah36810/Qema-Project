@@ -63,9 +63,16 @@ router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 # ─── الاعتماديات وتفويض الصلاحيات (RBAC Dependencies) ────────────────────────
 Database = Annotated[AsyncSession, Depends(get_db)]
-CatalogViewer = Annotated[AuthenticatedUser, Depends(require_permission("inventory:view"))]
-CatalogManager = Annotated[AuthenticatedUser, Depends(require_permission("inventory:manage"))]
+CatalogViewer = Annotated[AuthenticatedUser, Depends(require_permission("catalog:view"))]
+CategoryManager = Annotated[AuthenticatedUser, Depends(require_permission("catalog:categories:manage"))]
+ItemCreator = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:create"))]
+ItemEditor = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:update"))]
+ItemSubmitter = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:submit"))]
 CatalogApprover = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:approve"))]
+CatalogRejecter = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:reject"))]
+ItemDeactivator = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:deactivate"))]
+ItemReactivator = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:reactivate"))]
+RevisionRequester = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:request_revision"))]
 CatalogRevisionManager = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:manage_revisions"))]
 
 
@@ -231,7 +238,7 @@ async def get_category(category_id: str, current_user: CatalogViewer, db: Databa
 
 
 @router.post("/categories", response_model=ItemCategoryRead, status_code=status.HTTP_201_CREATED)
-async def create_category(data: ItemCategoryCreate, current_user: CatalogManager, db: Database):
+async def create_category(data: ItemCategoryCreate, current_user: CategoryManager, db: Database):
     """إنشاء تصنيف رئيسي أو فرعي جديد."""
     del current_user
 
@@ -276,7 +283,7 @@ async def create_category(data: ItemCategoryCreate, current_user: CatalogManager
 
 
 @router.patch("/categories/{category_id}", response_model=ItemCategoryRead)
-async def update_category(category_id: str, data: ItemCategoryUpdate, current_user: CatalogManager, db: Database):
+async def update_category(category_id: str, data: ItemCategoryUpdate, current_user: CategoryManager, db: Database):
     """تعديل بيانات تصنيف (الاسم، الوصف، الأب، الترتيب، حالة التفعيل)."""
     del current_user
     category = await db.get(ItemCategory, category_id)
@@ -348,7 +355,7 @@ async def update_category(category_id: str, data: ItemCategoryUpdate, current_us
 
 
 @router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_category(category_id: str, current_user: CatalogManager, db: Database):
+async def delete_category(category_id: str, current_user: CategoryManager, db: Database):
     """حذف تصنيف مخصص فقط إذا كان غير مرتبط بأي أصناف أو فروع وغير مستخدم تاريخياً."""
     del current_user
     category = await db.get(ItemCategory, category_id)
@@ -558,7 +565,7 @@ async def get_catalog_item(item_id: str, current_user: CatalogViewer, db: Databa
 
 
 @router.post("/items", response_model=CatalogItemRead, status_code=status.HTTP_201_CREATED)
-async def create_catalog_item(data: CatalogItemCreate, current_user: CatalogManager, db: Database):
+async def create_catalog_item(data: CatalogItemCreate, current_user: ItemCreator, db: Database):
     """إنشاء صنف جديد في دليل الخامات والمستلزمات كمسودة (draft)."""
     code_trimmed = data.code.strip()
 
@@ -655,7 +662,7 @@ async def create_catalog_item(data: CatalogItemCreate, current_user: CatalogMana
 
 
 @router.patch("/items/{item_id}", response_model=CatalogItemRead)
-async def update_catalog_item(item_id: str, data: CatalogItemUpdate, current_user: CatalogManager, db: Database):
+async def update_catalog_item(item_id: str, data: CatalogItemUpdate, current_user: ItemEditor, db: Database):
     """تعديل بيانات صنف في الدليل (المسودات فقط؛ الأصناف المعتمدة تتطلب تقديم طلب تعديل Revision)."""
     del current_user
     stmt = (
@@ -746,11 +753,12 @@ async def update_catalog_item(item_id: str, data: CatalogItemUpdate, current_use
 
     await db.commit()
     await db.refresh(item)
+    await db.refresh(item, attribute_names=["unit", "category"])
     return serialize_catalog_item(item)
 
 
 @router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_catalog_item(item_id: str, current_user: CatalogManager, db: Database):
+async def delete_catalog_item(item_id: str, current_user: ItemEditor, db: Database):
     """حذف صنف من الدليل فقط إذا كان غير معتمد وغير مرتبط بأي حركات مخزنية أو فواتير أو أوامر إنتاج."""
     del current_user
     item = await db.get(CatalogItem, item_id)
@@ -816,7 +824,7 @@ async def delete_catalog_item(item_id: str, current_user: CatalogManager, db: Da
 # ═════════════════════════════════════════════════════════════════════════════
 
 @router.post("/items/{item_id}/submit", response_model=CatalogItemRead)
-async def submit_item_for_review(item_id: str, current_user: CatalogManager, db: Database):
+async def submit_item_for_review(item_id: str, current_user: ItemSubmitter, db: Database):
     """تقديم مسودة صنف للمراجعة والاعتماد (draft/rejected -> pending_review)."""
     item = await db.get(CatalogItem, item_id)
     if not item:
@@ -857,6 +865,7 @@ async def submit_item_for_review(item_id: str, current_user: CatalogManager, db:
     )
     await db.commit()
     await db.refresh(item)
+    await db.refresh(item, attribute_names=["unit", "category"])
     return serialize_catalog_item(item)
 
 
@@ -916,11 +925,12 @@ async def approve_catalog_item(item_id: str, current_user: CatalogApprover, db: 
     )
     await db.commit()
     await db.refresh(item)
+    await db.refresh(item, attribute_names=["unit", "category"])
     return serialize_catalog_item(item)
 
 
 @router.post("/items/{item_id}/reject", response_model=CatalogItemRead)
-async def reject_catalog_item(item_id: str, data: CatalogItemRejectRequest, current_user: CatalogApprover, db: Database):
+async def reject_catalog_item(item_id: str, data: CatalogItemRejectRequest, current_user: CatalogRejecter, db: Database):
     """رفض اعتماد الصنف (pending_review -> rejected) مع اشتراط سبب الرفض إلزامي."""
     item = await db.get(CatalogItem, item_id)
     if not item:
@@ -966,11 +976,12 @@ async def reject_catalog_item(item_id: str, data: CatalogItemRejectRequest, curr
     )
     await db.commit()
     await db.refresh(item)
+    await db.refresh(item, attribute_names=["unit", "category"])
     return serialize_catalog_item(item)
 
 
 @router.post("/items/{item_id}/reopen", response_model=CatalogItemRead)
-async def reopen_rejected_item(item_id: str, current_user: CatalogManager, db: Database):
+async def reopen_rejected_item(item_id: str, current_user: ItemEditor, db: Database):
     """إعادة فتح صنف مرفوض كمسودة للتعديل وإعادة التقديم (rejected -> draft)."""
     item = await db.get(CatalogItem, item_id)
     if not item:
@@ -1008,11 +1019,12 @@ async def reopen_rejected_item(item_id: str, current_user: CatalogManager, db: D
     )
     await db.commit()
     await db.refresh(item)
+    await db.refresh(item, attribute_names=["unit", "category"])
     return serialize_catalog_item(item)
 
 
 @router.post("/items/{item_id}/deactivate", response_model=CatalogItemRead)
-async def deactivate_catalog_item(item_id: str, current_user: CatalogApprover, db: Database):
+async def deactivate_catalog_item(item_id: str, current_user: ItemDeactivator, db: Database):
     """تعطيل صنف معتمد لمنع استخدامه في العمليات التشغيلية الجديدة (is_active = False)."""
     item = await db.get(CatalogItem, item_id)
     if not item:
@@ -1052,11 +1064,12 @@ async def deactivate_catalog_item(item_id: str, current_user: CatalogApprover, d
     )
     await db.commit()
     await db.refresh(item)
+    await db.refresh(item, attribute_names=["unit", "category"])
     return serialize_catalog_item(item)
 
 
 @router.post("/items/{item_id}/reactivate", response_model=CatalogItemRead)
-async def reactivate_catalog_item(item_id: str, current_user: CatalogApprover, db: Database):
+async def reactivate_catalog_item(item_id: str, current_user: ItemReactivator, db: Database):
     """إعادة تفعيل صنف معطل (is_active = True)."""
     item = await db.get(CatalogItem, item_id)
     if not item:
@@ -1096,11 +1109,12 @@ async def reactivate_catalog_item(item_id: str, current_user: CatalogApprover, d
     )
     await db.commit()
     await db.refresh(item)
+    await db.refresh(item, attribute_names=["unit", "category"])
     return serialize_catalog_item(item)
 
 
 @router.post("/items/{item_id}/revisions", response_model=CatalogItemRevisionRead, status_code=status.HTTP_201_CREATED)
-async def create_item_revision(item_id: str, data: CatalogItemRevisionCreate, current_user: CatalogManager, db: Database):
+async def create_item_revision(item_id: str, data: CatalogItemRevisionCreate, current_user: RevisionRequester, db: Database):
     """تقديم طلب تعديل (Revision) لصنف معتمد دون المساس بالنسخة الحية."""
     item = await db.get(CatalogItem, item_id)
     if not item:
@@ -1204,7 +1218,7 @@ async def create_item_revision(item_id: str, data: CatalogItemRevisionCreate, cu
 
 
 @router.post("/items/{item_id}/revisions/{revision_id}/approve", response_model=CatalogItemRevisionRead)
-async def approve_item_revision(item_id: str, revision_id: str, current_user: CatalogApprover, db: Database):
+async def approve_item_revision(item_id: str, revision_id: str, current_user: CatalogRevisionManager, db: Database):
     """اعتماد طلب التعديل وتطبيقه ذرياً (Atomically) على الصنف الحي مع تسجيل التاريخ."""
     revision = await db.get(CatalogItemRevision, revision_id)
     if not revision or revision.item_id != item_id:
@@ -1324,7 +1338,7 @@ async def reject_item_revision(
     item_id: str,
     revision_id: str,
     data: CatalogItemRevisionRejectRequest,
-    current_user: CatalogApprover,
+    current_user: CatalogRevisionManager,
     db: Database,
 ):
     """رفض طلب تعديل مع تسجيل السبب الإلزامي دون التأثير على الصنف المعتمد."""
@@ -1387,7 +1401,7 @@ async def reject_item_revision(
 
 
 @router.post("/items/{item_id}/revisions/{revision_id}/cancel", response_model=CatalogItemRevisionRead)
-async def cancel_item_revision(item_id: str, revision_id: str, current_user: CatalogManager, db: Database):
+async def cancel_item_revision(item_id: str, revision_id: str, current_user: RevisionRequester, db: Database):
     """إلغاء طلب تعديل مفتوح من قبل مقدم الطلب أو الإدارة."""
     revision = await db.get(CatalogItemRevision, revision_id)
     if not revision or revision.item_id != item_id:
@@ -1603,7 +1617,7 @@ async def get_item_usages(item_id: str, current_user: CatalogViewer, db: Databas
 
 
 @router.post("/items/{item_id}/usages", response_model=ApplicationLineRead, status_code=status.HTTP_201_CREATED)
-async def add_item_usage(item_id: str, data: CatalogItemUsageCreate, current_user: CatalogManager, db: Database):
+async def add_item_usage(item_id: str, data: CatalogItemUsageCreate, current_user: ItemEditor, db: Database):
     """إضافة وسم استخدام لربط الصنف بخط تطبيق ملابس معين (وسم استرشادي فقط)."""
     del current_user
 
@@ -1641,7 +1655,7 @@ async def add_item_usage(item_id: str, data: CatalogItemUsageCreate, current_use
 
 
 @router.delete("/items/{item_id}/usages/{application_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_item_usage(item_id: str, application_id: str, current_user: CatalogManager, db: Database):
+async def remove_item_usage(item_id: str, application_id: str, current_user: ItemEditor, db: Database):
     """إزالة وسم خط تطبيق من الصنف."""
     del current_user
     usage = await db.get(CatalogItemUsage, (item_id, application_id))

@@ -47,13 +47,17 @@ async def setup_and_seed_test_database(target_url: str | None = None) -> None:
         await session.commit()
 
     await engine.dispose()
-    print("✅ تم تأكيد الأمان وتهيئة البيانات المرجعية لقاعدة الاختبارات بنجاح.")
+    print("[OK] تم تأكيد الأمان وتهيئة البيانات المرجعية لقاعدة الاختبارات بنجاح.")
 
 
 if __name__ == "__main__":
+    # طرفية ويندوز الافتراضية لا تدعم العربية؛ نفرض UTF-8 للمخرجات
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     try:
         asyncio.run(setup_and_seed_test_database())
     except UnsafeTestDatabaseError as e:
-        print(f"❌ تم إيقاف السكربت بحظر أمني: {e}", file=sys.stderr)
+        print(f"[ERROR] تم إيقاف السكربت بحظر أمني: {e}", file=sys.stderr)
         sys.exit(1)
 

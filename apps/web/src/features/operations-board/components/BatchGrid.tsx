@@ -5,7 +5,6 @@ interface BatchGridProps {
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
-  isDemo?: boolean;
 }
 
 const STATUS_CLASS: Record<BatchRow['status'], string> = {
@@ -25,7 +24,6 @@ export function BatchGrid({
   loading = false,
   error = null,
   onRetry,
-  isDemo = false,
 }: BatchGridProps) {
   return (
     <article className="card">
@@ -33,21 +31,6 @@ export function BatchGrid({
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <h2 className="card__title">الدفعات على خط الإنتاج</h2>
-            {isDemo && (
-              <span
-                style={{
-                  fontSize: '0.72rem',
-                  backgroundColor: '#fef3c7',
-                  color: '#92400e',
-                  border: '1px solid #fde68a',
-                  padding: '0.15rem 0.5rem',
-                  borderRadius: '999px',
-                  fontWeight: 600,
-                }}
-              >
-                معاينة بصرية تجريبية
-              </span>
-            )}
           </div>
           <p className="card__sub">حالة التنفيذ والكميات المستهدفة للوردية الحالية</p>
         </div>

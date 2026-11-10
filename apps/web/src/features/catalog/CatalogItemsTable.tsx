@@ -21,6 +21,7 @@ interface Props {
   onFilterChange: (newParams: Partial<CatalogFilterParams>) => void;
   onResetFilters: () => void;
   pageSize: number;
+  canCreate?: boolean;
 }
 
 const ITEM_TYPE_LABELS: Record<string, string> = {
@@ -45,8 +46,10 @@ export const CatalogItemsTable: React.FC<Props> = ({
   onFilterChange,
   onResetFilters,
   pageSize,
+  canCreate = false,
 }) => {
   const [searchInput, setSearchInput] = useState(filterParams.search || '');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,9 +67,28 @@ export const CatalogItemsTable: React.FC<Props> = ({
 
   const categoryMap = new Map(categories.map((c) => [c.id, c]));
 
+  // تحديد القيمة المجمعة الحالية (إما نوع أو تصنيف)
+  const combinedFilterValue = filterParams.category_id && filterParams.category_id !== 'all'
+    ? `cat:${filterParams.category_id}`
+    : filterParams.item_type && filterParams.item_type !== 'all'
+    ? `type:${filterParams.item_type}`
+    : 'all';
+
+  const handleCombinedFilterChange = (val: string) => {
+    if (val === 'all') {
+      onFilterChange({ category_id: 'all', item_type: 'all', offset: 0 });
+    } else if (val.startsWith('type:')) {
+      const typeKey = val.replace('type:', '');
+      onFilterChange({ item_type: typeKey, category_id: 'all', offset: 0 });
+    } else if (val.startsWith('cat:')) {
+      const catId = val.replace('cat:', '');
+      onFilterChange({ category_id: catId, item_type: 'all', offset: 0 });
+    }
+  };
+
   return (
     <div className="catalog-table-container">
-      {/* شريط الأدوات والفلترة المتقدمة */}
+      {/* شريط الأدوات والفلترة الموحد والمنظم */}
       <div className="catalog-toolbar">
         <form onSubmit={handleSearchSubmit} className="catalog-toolbar__search">
           <input
@@ -82,66 +104,28 @@ export const CatalogItemsTable: React.FC<Props> = ({
         </form>
 
         <div className="catalog-toolbar__filters">
-          {/* فلتر التصنيف */}
+          {/* فلتر مدمج: التصنيف والنوع في قائمة واحدة منطقية */}
           <select
-            value={filterParams.category_id || 'all'}
-            onChange={(e) => onFilterChange({ category_id: e.target.value, offset: 0 })}
+            value={combinedFilterValue}
+            onChange={(e) => handleCombinedFilterChange(e.target.value)}
             className="catalog-filter-select"
-            aria-label="تصفية حسب التصنيف"
+            aria-label="تصفية حسب التصنيف أو النوع"
           >
-            <option value="all">كل التصنيفات</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.parent_id ? `↳ ${c.name_ar}` : `■ ${c.name_ar}`}
-              </option>
-            ))}
-          </select>
-
-          {/* فلتر نوع الصنف */}
-          <select
-            value={filterParams.item_type || 'all'}
-            onChange={(e) => onFilterChange({ item_type: e.target.value, offset: 0 })}
-            className="catalog-filter-select"
-            aria-label="تصفية حسب نوع الصنف"
-          >
-            <option value="all">كل الأنواع</option>
-            {Object.entries(ITEM_TYPE_LABELS).map(([k, label]) => (
-              <option key={k} value={k}>
-                {label}
-              </option>
-            ))}
-          </select>
-
-          {/* فلتر حالة دورة الاعتماد */}
-          <select
-            value={filterParams.approval_status || 'all'}
-            onChange={(e) =>
-              onFilterChange({ approval_status: e.target.value, offset: 0 })
-            }
-            className="catalog-filter-select"
-            aria-label="تصفية حسب حالة دورة الاعتماد"
-          >
-            <option value="all">كل حالات الاعتماد</option>
-            <option value="approved">معتمد للتشغيل (Approved)</option>
-            <option value="pending_review">قيد الاعتماد (Pending Review)</option>
-            <option value="draft">مسودة (Draft)</option>
-            <option value="rejected">مرفوض (Rejected)</option>
-          </select>
-
-          {/* فلتر حالة المراجعة */}
-          <select
-            value={filterParams.classification_status || 'all'}
-            onChange={(e) =>
-              onFilterChange({ classification_status: e.target.value, offset: 0 })
-            }
-            className="catalog-filter-select"
-            aria-label="تصفية حسب حالة التصنيف"
-          >
-            <option value="all">كل حالات التصنيف</option>
-            <option value="confirmed">تصنيف مؤكد (Confirmed)</option>
-            <option value="suggested">تصنيف مقترح (Suggested)</option>
-            <option value="needs_review">يحتاج مراجعة (Needs Review)</option>
-            <option value="not_applicable">غير خاضع (N/A)</option>
+            <option value="all">كل التصنيفات والأنواع</option>
+            <optgroup label="── أنواع الأصناف الأساسية ──">
+              {Object.entries(ITEM_TYPE_LABELS).map(([k, label]) => (
+                <option key={`type:${k}`} value={`type:${k}`}>
+                  {label}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="── شجرة التصنيفات المعتمدة ──">
+              {categories.map((c) => (
+                <option key={`cat:${c.id}`} value={`cat:${c.id}`}>
+                  {c.parent_id ? `↳ ${c.name_ar}` : `■ ${c.name_ar}`}
+                </option>
+              ))}
+            </optgroup>
           </select>
 
           {/* فلتر الوحدة */}
@@ -158,6 +142,17 @@ export const CatalogItemsTable: React.FC<Props> = ({
               </option>
             ))}
           </select>
+
+          {/* زر إظهار خيارات التدقيق والاعتماد المتقدمة */}
+          <button
+            type="button"
+            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            className="btn-secondary btn-sm"
+            style={{ fontSize: '0.8rem', padding: '4px 8px' }}
+            title="إظهار أو إخفاء فلاتر الاعتماد والمراجعة"
+          >
+            {showAdvancedFilters ? '▲ إخفاء الفلاتر المتقدمة' : '⚙️ خيارات متقدمة'}
+          </button>
 
           <button
             type="button"
@@ -180,15 +175,57 @@ export const CatalogItemsTable: React.FC<Props> = ({
             ↻ تحديث
           </button>
 
-          <button
-            type="button"
-            onClick={onOpenCreateModal}
-            className="btn-teal"
-          >
-            ＋ إضافة صنف جديد
-          </button>
+          {canCreate && (
+            <button
+              type="button"
+              onClick={onOpenCreateModal}
+              className="btn-teal"
+            >
+              ＋ إضافة صنف جديد
+            </button>
+          )}
         </div>
       </div>
+
+      {/* صف الفلاتر المتقدمة (حالة الاعتماد والمراجعة) - يظهر فقط عند الحاجة لتقليل التشتت */}
+      {showAdvancedFilters && (
+        <div style={{ display: 'flex', gap: '0.75rem', padding: '0.5rem 0.75rem', background: '#f8fafc', borderRadius: '4px', marginBottom: '0.75rem', border: '1px solid #e2e8f0', alignItems: 'center', fontSize: '0.85rem' }}>
+          <span style={{ color: '#64748b', fontWeight: 600 }}>فلاتر إضافية:</span>
+          {/* فلتر حالة دورة الاعتماد */}
+          <select
+            value={filterParams.approval_status || 'all'}
+            onChange={(e) =>
+              onFilterChange({ approval_status: e.target.value, offset: 0 })
+            }
+            className="catalog-filter-select"
+            aria-label="تصفية حسب حالة دورة الاعتماد"
+            style={{ fontSize: '0.8rem' }}
+          >
+            <option value="all">كل حالات الاعتماد</option>
+            <option value="approved">معتمد للتشغيل (Approved)</option>
+            <option value="pending_review">قيد الاعتماد (Pending Review)</option>
+            <option value="draft">مسودة (Draft)</option>
+            <option value="rejected">مرفوض (Rejected)</option>
+          </select>
+
+          {/* فلتر حالة المراجعة */}
+          <select
+            value={filterParams.classification_status || 'all'}
+            onChange={(e) =>
+              onFilterChange({ classification_status: e.target.value, offset: 0 })
+            }
+            className="catalog-filter-select"
+            aria-label="تصفية حسب حالة التصنيف"
+            style={{ fontSize: '0.8rem' }}
+          >
+            <option value="all">كل حالات التصنيف</option>
+            <option value="confirmed">تصنيف مؤكد (Confirmed)</option>
+            <option value="suggested">تصنيف مقترح (Suggested)</option>
+            <option value="needs_review">يحتاج مراجعة (Needs Review)</option>
+            <option value="not_applicable">غير خاضع (N/A)</option>
+          </select>
+        </div>
+      )}
 
       {/* رسالة الخطأ إن وجدت */}
       {error && (
@@ -243,7 +280,8 @@ export const CatalogItemsTable: React.FC<Props> = ({
                     className={item.is_active ? '' : 'catalog-table__row--inactive'}
                   >
                     <td>
-                      <code className="catalog-table__code">{item.code}</code>
+                      {/* كود المنتج التام يُولَّد تلقائياً من معرف داخلي؛ لا يُعرض للمستخدم */}
+                      {isFinishedGood ? <span className="catalog-table__muted">تلقائي</span> : <code className="catalog-table__code">{item.code}</code>}
                     </td>
                     <td>
                       <div className="catalog-table__name-cell">
@@ -255,6 +293,11 @@ export const CatalogItemsTable: React.FC<Props> = ({
                         )}
                         {!item.is_active && (
                           <span className="catalog-tag-inactive">معطل</span>
+                        )}
+                        {item.is_active && item.approval_status === 'approved' && item.item_type !== 'finished_garment' && !isFinishedGood && (
+                          <span className="catalog-tag-bom" title="صنف معتمد نشط: يمكن اختياره في مستلزمات تصنيع الموديلات">
+                            يصلح للمستلزمات
+                          </span>
                         )}
                       </div>
                     </td>

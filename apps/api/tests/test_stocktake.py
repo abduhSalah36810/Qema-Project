@@ -365,9 +365,9 @@ async def test_post_stocktake_adjustments_creates_immutable_ledger_entries(sessi
 
     client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
     app.dependency_overrides[get_db] = lambda: session
-    app.dependency_overrides[get_current_user] = lambda: make_auth_user("gm_user", ROLE_GENERAL_MANAGER)
+    # 1. إنشاء الجلسة بواسطة أمين المخزن
+    app.dependency_overrides[get_current_user] = lambda: make_auth_user("wh_user", ROLE_WAREHOUSE_MANAGER)
 
-    # 1. إنشاء الجلسة
     create_res = await client.post(
         "/api/v1/inventory/stocktakes",
         json={"warehouse_id": wh.id, "scope_type": "specific_items", "item_ids": [item1.id, item2.id, item3.id]},
@@ -375,10 +375,7 @@ async def test_post_stocktake_adjustments_creates_immutable_ledger_entries(sessi
     st_id = create_res.json()["id"]
     lines = {l["item_id"]: l for l in create_res.json()["lines"]}
 
-    # 2. بدء العد وتسجيل:
-    # item1 (دفتر 100): عدلي 90 (عجز -10)
-    # item2 (دفتر 50): عدلي 60 (زيادة +10)
-    # item3 (دفتر 40): عدلي 40 (تطابق 0)
+    # 2. بدء العد وتسجيل الكميات ورفعها للمراجعة بواسطة أمين المخزن
     await client.post(f"/api/v1/inventory/stocktakes/{st_id}/start-counting")
     await client.post(
         f"/api/v1/inventory/stocktakes/{st_id}/counts",
@@ -391,9 +388,11 @@ async def test_post_stocktake_adjustments_creates_immutable_ledger_entries(sessi
         },
     )
     await client.post(f"/api/v1/inventory/stocktakes/{st_id}/submit")
+
+    # 3. اعتماد وترحيل التسويات بواسطة المدير العام (فصل رقابي Maker-Checker)
+    app.dependency_overrides[get_current_user] = lambda: make_auth_user("gm_user", ROLE_GENERAL_MANAGER)
     await client.post(f"/api/v1/inventory/stocktakes/{st_id}/approve", json={"decision": "approve"})
 
-    # 3. ترحيل التسويات
     post_res = await client.post(
         f"/api/v1/inventory/stocktakes/{st_id}/post",
         json={"notes": "ترحيل معتمد بعد المطابقة"},
@@ -461,7 +460,7 @@ async def test_post_stocktake_idempotency_duplicate_replay(session: AsyncSession
 
     client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
     app.dependency_overrides[get_db] = lambda: session
-    app.dependency_overrides[get_current_user] = lambda: make_auth_user("gm_user", ROLE_GENERAL_MANAGER)
+    app.dependency_overrides[get_current_user] = lambda: make_auth_user("wh_user", ROLE_WAREHOUSE_MANAGER)
 
     create_res = await client.post(
         "/api/v1/inventory/stocktakes",
@@ -476,6 +475,9 @@ async def test_post_stocktake_idempotency_duplicate_replay(session: AsyncSession
         json={"counts": [{"line_id": line_id, "counted_quantity": 90.0}]},
     )
     await client.post(f"/api/v1/inventory/stocktakes/{st_id}/submit")
+
+    # اعتماد وترحيل بواسطة المدير العام (Maker-Checker)
+    app.dependency_overrides[get_current_user] = lambda: make_auth_user("gm_user", ROLE_GENERAL_MANAGER)
     await client.post(f"/api/v1/inventory/stocktakes/{st_id}/approve", json={"decision": "approve"})
 
     idempotency_key = f"stk-post-{uuid.uuid4()}"

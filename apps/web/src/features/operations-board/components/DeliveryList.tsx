@@ -5,7 +5,6 @@ interface DeliveryListProps {
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
-  isDemo?: boolean;
 }
 
 const STATUS_BADGE_CLASS: Record<DeliveryRow['status'], string> = {
@@ -19,7 +18,6 @@ export function DeliveryList({
   loading = false,
   error = null,
   onRetry,
-  isDemo = false,
 }: DeliveryListProps) {
   return (
     <article className="delivery-card">
@@ -27,21 +25,6 @@ export function DeliveryList({
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <h2 className="card__title">التسليمات والطلبات القادمة</h2>
-            {isDemo && (
-              <span
-                style={{
-                  fontSize: '0.72rem',
-                  backgroundColor: '#fef3c7',
-                  color: '#92400e',
-                  border: '1px solid #fde68a',
-                  padding: '0.15rem 0.5rem',
-                  borderRadius: '999px',
-                  fontWeight: 600,
-                }}
-              >
-                معاينة بصرية تجريبية
-              </span>
-            )}
           </div>
           <p className="card__sub">مواعيد تسليم طلبيات العملاء المستحقة</p>
         </div>

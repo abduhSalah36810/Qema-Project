@@ -8,6 +8,7 @@ import {
   deleteCategory,
 } from './catalogApi';
 import { ApiError } from '@/lib/api';
+import { useDialog } from '@/components/feedback/DialogProvider';
 
 interface Props {
   tree: ItemCategoryTree[];
@@ -158,6 +159,8 @@ export const CategoriesExplorer: React.FC<Props> = ({
     }
   };
 
+  const dialog = useDialog();
+
   const handleToggleActive = async (category: ItemCategory) => {
     setFeedbackMsg(null);
     try {
@@ -165,23 +168,30 @@ export const CategoriesExplorer: React.FC<Props> = ({
       setFeedbackMsg(`تم ${category.is_active ? 'تعطيل' : 'تفعيل'} التصنيف (${category.name_ar}).`);
       onRefresh();
     } catch (err: unknown) {
-      alert(err instanceof ApiError ? err.message : 'تعذر تغيير حالة تفعيل التصنيف.');
+      void dialog.notify({
+        title: 'تعذر تغيير حالة التصنيف',
+        message: err instanceof ApiError ? err.message : 'تعذر تغيير حالة تفعيل التصنيف. حاول مرة أخرى.',
+        tone: 'danger',
+      });
     }
   };
 
   const handleDeleteCategory = async (category: ItemCategory) => {
     if (SEEDED_CODES.has(category.code)) {
-      alert('التصنيفات المعيارية الأساسية لا يمكن حذفها لضمان استقرار النظام. يمكنك تعطيلها بدلاً من ذلك.');
+      void dialog.notify({
+        title: 'لا يمكن حذف هذا التصنيف',
+        message: 'التصنيفات الأساسية لا تُحذف حتى لا تتأثر بقية الأصناف. يمكنك تعطيله بدلاً من ذلك.',
+      });
       return;
     }
 
-    if (
-      !window.confirm(
-        `هل أنت متأكد من حذف التصنيف (${category.name_ar})؟ لن يُسمح بالحذف إذا كان مرتبطاً بأي أصناف أو تصنيفات فرعية.`
-      )
-    ) {
-      return;
-    }
+    const confirmed = await dialog.confirm({
+      title: `حذف التصنيف «${category.name_ar}»؟`,
+      message: 'لن يتم الحذف إذا كان التصنيف مرتبطاً بأصناف أو تصنيفات فرعية. الحذف لا يمكن التراجع عنه.',
+      confirmLabel: 'حذف التصنيف',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
 
     setFeedbackMsg(null);
     try {
@@ -189,7 +199,17 @@ export const CategoriesExplorer: React.FC<Props> = ({
       setFeedbackMsg(`تم حذف التصنيف (${category.name_ar}) بنجاح.`);
       onRefresh();
     } catch (err: unknown) {
-      alert(err instanceof ApiError ? err.message : 'تعذر حذف التصنيف.');
+      const errMsg = err instanceof ApiError ? err.message : 'تعذر حذف التصنيف.';
+      void dialog.notify({
+        title: `تعذر حذف التصنيف «${category.name_ar}»`,
+        message: (
+          <>
+            <p>{errMsg}</p>
+            <p>إذا كان التصنيف يحتوي على أصناف أو حركات سابقة، عطّله بدلاً من حذفه.</p>
+          </>
+        ),
+        tone: 'danger',
+      });
     }
   };
 

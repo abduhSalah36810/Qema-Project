@@ -79,6 +79,13 @@ async def execute_idempotent_operation(
                 detail="مفتاح عدم التكرار (Idempotency-Key) مسجل لمستخدم آخر.",
             )
 
+        # المفتاح مرتبط بالمستند الذي استُخدم معه أول مرة؛ لا يعاد استخدامه لمستند آخر
+        if existing.resource_id != resource_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="مفتاح عدم التكرار (Idempotency-Key) مستخدم مسبقاً مع مستند آخر.",
+            )
+
         # فحص تطابق البيانات (Payload mismatch)
         if existing.request_hash != req_hash:
             raise HTTPException(

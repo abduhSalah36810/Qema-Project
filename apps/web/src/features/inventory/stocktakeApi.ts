@@ -12,12 +12,32 @@ export interface StocktakeCountHistory {
   counter_id: string;
   counter_role: string;
   counter_notes?: string | null;
-  recorded_at: string;
+  previous_quantity?: number | null;
+  reason?: string;
+  notes?: string;
+  recorded_at?: string | null;
+  counted_at?: string;
 }
+
+/** حالات سطر الجرد كما يعيدها الخادم. */
+export type StocktakeLineStatus = 'uncounted' | 'counted' | 'recount_required' | string;
+
+/** حالات جلسة الجرد: draft → counting → submitted → (under_review عند طلب إعادة عد) → approved → posted (+ cancelled). */
+export type StocktakeStatus =
+  | 'draft'
+  | 'counting'
+  | 'submitted'
+  | 'under_review'
+  | 'approved'
+  | 'posted'
+  | 'cancelled';
 
 export interface StocktakeLine {
   id: string;
-  session_id: string;
+  session_id?: string;
+  stocktake_id?: string;
+  /** سلة الملكية: factory_brand, private_label:<id>, return_pending_inspection:<id>, order:<id>، أو null للخامات */
+  bucket_reference?: string | null;
   item_id: string;
   item_code: string;
   item_name_ar: string;
@@ -26,14 +46,19 @@ export interface StocktakeLine {
   book_quantity: number;
   counted_quantity?: number | null;
   variance_quantity?: number | null;
-  variance_type: 'pending' | 'exact' | 'shortage' | 'surplus';
+  variance?: number | null;
+  variance_type?: 'pending' | 'exact' | 'shortage' | 'surplus' | null;
+  status?: StocktakeLineStatus;
   unit_cost: number;
   total_variance_cost: number;
   needs_recount: boolean;
+  counter_id?: string | null;
+  counted_at?: string | null;
   last_counted_by?: string | null;
   last_counted_at?: string | null;
   notes?: string | null;
   history?: StocktakeCountHistory[];
+  count_history?: StocktakeCountHistory[];
 }
 
 export interface StocktakeSession {
@@ -41,19 +66,29 @@ export interface StocktakeSession {
   session_number: string;
   warehouse_id: string;
   warehouse_name_ar: string;
-  status: 'draft' | 'counting' | 'under_review' | 'recounting' | 'approved' | 'posted' | 'cancelled';
+  status: StocktakeStatus;
   scope_type: 'full_warehouse' | 'specific_items';
   description?: string | null;
   total_lines: number;
   counted_lines: number;
   shortage_lines: number;
+  shortage_count?: number;
   surplus_lines: number;
+  surplus_count?: number;
   exact_lines: number;
-  net_variance_cost: number;
+  exact_count?: number;
+  /** لا يُعرض: التكلفة تُحسب وتُرحَّل خادمياً عند الترحيل ولا يعيدها الخادم هنا. */
+  net_variance_cost?: number;
+  discrepancy_lines?: number;
   created_by: string;
+  submitted_by?: string | null;
+  reviewed_by?: string | null;
   reviewer_id?: string | null;
   review_decision?: string | null;
   review_notes?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  approval_notes?: string | null;
   posted_by?: string | null;
   cancelled_by?: string | null;
   cancellation_reason?: string | null;
@@ -71,10 +106,14 @@ export interface StocktakeAuditLog {
   session_id: string;
   event_type: string;
   event_name_ar: string;
+  action?: string;
+  stocktake_id?: string;
   actor_id: string;
   actor_role: string;
-  details: Record<string, unknown>;
-  created_at: string;
+  details?: Record<string, unknown> | null;
+  notes?: string | null;
+  created_at?: string | null;
+  timestamp?: string;
 }
 
 export interface StockLedgerEntry {
@@ -118,7 +157,8 @@ export interface StocktakeSubmitRequest {
 }
 
 export interface StocktakeReviewRequest {
-  decision: 'approve' | 'request_recount' | 'reject';
+  /** القيم المقبولة خادمياً: approve | recount_required | reject */
+  decision: 'approve' | 'recount_required' | 'reject';
   notes?: string;
   recount_line_ids?: string[];
 }

@@ -18,6 +18,11 @@ export interface ProductVariant {
   letter_size?: string | null;
   season?: string | null;
   sku?: string | null;
+  /** المقاس الموقوف لا يُختار في أوامر تشغيل جديدة */
+  is_active?: boolean;
+  /** هل للمقاس مستلزمات تصنيع معرّفة (الإصدار النشط) */
+  has_bom?: boolean;
+  bom_version_number?: number | null;
 }
 
 export interface Product {
@@ -26,6 +31,8 @@ export interface Product {
   name_ar: string;
   style_type: string;
   description: string;
+  /** الموديل الموقوف لا يظهر في أوامر التشغيل الجديدة */
+  is_active?: boolean;
   variants: ProductVariant[];
 }
 
@@ -38,6 +45,7 @@ export interface CatalogItem {
   unit_name_ar: string;
   is_consumable: boolean;
   is_active: boolean;
+  approval_status?: string;
 }
 
 export interface Warehouse {
@@ -162,6 +170,14 @@ export interface ProductionOrderItem {
   fabric_color: string;
   fabric_weight: string;
   notes: string;
+  /** الكمية السليمة المستلمة بمخزن التام لهذا البند حتى الآن */
+  received_quantity?: number;
+  /** الكمية المرفوضة بالفحص لهذا البند حتى الآن */
+  rejected_quantity?: number;
+  /** نسخة مستلزمات التصنيع المحفوظة في الأمر وقت إنشائه */
+  bom_lines?: Array<{ item_id: string; item_name: string; unit_name: string; quantity_per_piece: number; total_quantity: number }>;
+  /** رقم إصدار المستلزمات الذي بُني عليه السطر */
+  bom_version_number?: number | null;
 }
 
 export interface ProductionOrder {
@@ -178,6 +194,13 @@ export interface ProductionOrder {
   assigned_to: string;
   created_at: string;
   notes: string;
+  /** من صرف تحويل الخامات المعلق؛ الخادم يرفض أن يؤكد استلامه بنفسه */
+  pending_transfer_dispatched_by?: string | null;
+  /** مرتجعات الورشة بانتظار استلام المخزن / بانتظار تسوية العجز أو المرفوض */
+  returns_awaiting_receipt?: number;
+  returns_awaiting_resolution?: number;
+  returns_pending_declared_by?: string[];
+  returns_pending_received_by?: string[];
   items?: ProductionOrderItem[];
   materials: OrderMaterialSnapshot[];
   stage_events: StageEvent[];
@@ -418,61 +441,56 @@ export const PROVISIONAL_FALLBACK_ORDERS: ProductionOrder[] = [
 
 // ─── استدعاءات الـ API مع الحفاظ على العمل الاحتياطي التفاعلي ─────────────────
 
+// لا بيانات بديلة عند الفشل: عرض موديلات أو أوامر وهمية قد يقود الموظف لتسجيل عمليات على بيانات غير موجودة
 export async function fetchProducts(): Promise<Product[]> {
-  try {
-    return await apiClient.request<Product[]>('/api/v1/production/products');
-  } catch {
-    return PROVISIONAL_FALLBACK_PRODUCTS;
-  }
+  return apiClient.request<Product[]>('/api/v1/production/products');
+}
+
+export async function createProductApi(payload: {
+  code: string;
+  name_ar: string;
+  style_type?: string;
+  description?: string;
+  variants: Array<{ numeric_size: number; letter_size?: string; season: string }>;
+}): Promise<Product> {
+  return apiClient.request<Product>('/api/v1/production/products', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateProductApi(productId: string, payload: { name_ar?: string; description?: string; is_active?: boolean }): Promise<Product> {
+  return apiClient.request<Product>(`/api/v1/production/products/${encodeURIComponent(productId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** إيقاف مقاس أو إعادة تفعيله، أو تعديل مقاسه الحرفي */
+export async function updateProductVariantApi(variantId: string, payload: { is_active?: boolean; letter_size?: string }): Promise<Product> {
+  return apiClient.request<Product>(`/api/v1/production/variants/${encodeURIComponent(variantId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function addProductVariantsApi(
+  productId: string,
+  variants: Array<{ numeric_size: number; letter_size?: string; season: string }>
+): Promise<Product> {
+  return apiClient.request<Product>(`/api/v1/production/products/${encodeURIComponent(productId)}/variants`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(variants),
+  });
 }
 
 export async function fetchTemplates(productId?: string): Promise<ProductionTemplate[]> {
-  try {
-    const query = productId ? `?product_id=${encodeURIComponent(productId)}` : '';
-    return await apiClient.request<ProductionTemplate[]>(`/api/v1/production/templates${query}`);
-  } catch {
-    return [
-      {
-        id: 'tmpl-1',
-        code: 'TMPL-HC-STD',
-        name_ar: 'قالب الجلابية نصف ياقة القياسي',
-        product_id: 'prod-01',
-        product_name_ar: 'نصف ياقة مع أساور',
-        is_active: true,
-        versions: [
-          {
-            id: 'ver-1',
-            version_number: 1,
-            status: 'active',
-            reference_quantity: 50,
-            notes: 'كمية مرجعية: 50 جلابية',
-            lines: [
-              {
-                id: 'l1',
-                item_id: 'it-fab',
-                item_name_ar: 'قماش قطن مصري فاخر',
-                item_code: 'FAB-COTTON-01',
-                unit_id: 'u-m',
-                unit_name_ar: 'متر',
-                quantity_per_reference: 150,
-                notes: '3 أمتار للجلابية الواحدة',
-              },
-              {
-                id: 'l2',
-                item_id: 'it-btn',
-                item_name_ar: 'أزرار صدفية طبيعية',
-                item_code: 'BTN-PEARL-18',
-                unit_id: 'u-pcs',
-                unit_name_ar: 'قطعة',
-                quantity_per_reference: 400,
-                notes: '8 أزرار للقطعة',
-              },
-            ],
-          },
-        ],
-      },
-    ];
-  }
+  const query = productId ? `?product_id=${encodeURIComponent(productId)}` : '';
+  return apiClient.request<ProductionTemplate[]>(`/api/v1/production/templates${query}`);
 }
 
 export async function fetchCatalogItems(): Promise<CatalogItem[]> {
@@ -480,24 +498,16 @@ export async function fetchCatalogItems(): Promise<CatalogItem[]> {
 }
 
 export async function fetchWarehouses(): Promise<Warehouse[]> {
-  try {
-    return await apiClient.request<Warehouse[]>('/api/v1/production/warehouses');
-  } catch {
-    return [
-      { id: 'wh-raw', code: 'main_raw_materials', name_ar: 'مخزن الخامات الرئيسي', is_active: true },
-      { id: 'wh-wip', code: 'work_in_progress', name_ar: 'مخزن تحت التشغيل', is_active: true },
-      { id: 'wh-fin', code: 'finished_goods', name_ar: 'مخزن المنتج التام', is_active: true },
-    ];
-  }
+  return apiClient.request<Warehouse[]>('/api/v1/production/warehouses');
 }
 
 export async function fetchOrders(status?: string): Promise<ProductionOrder[]> {
-  try {
-    const query = status ? `?status=${encodeURIComponent(status)}` : '';
-    return await apiClient.request<ProductionOrder[]>(`/api/v1/production/orders${query}`);
-  } catch {
-    return PROVISIONAL_FALLBACK_ORDERS;
-  }
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  return apiClient.request<ProductionOrder[]>(`/api/v1/production/orders${query}`);
+}
+
+export async function fetchProductionOrderById(orderId: string): Promise<ProductionOrder> {
+  return apiClient.request<ProductionOrder>(`/api/v1/production/orders/${orderId}`);
 }
 
 export async function createProductionOrderApi(payload: OrderCreatePayload): Promise<ProductionOrder> {
@@ -528,10 +538,30 @@ export async function dispatchMaterialsApi(orderId: string, notes: string = ''):
   });
 }
 
-export async function receiveMaterialsApi(orderId: string, payload: ReceiptConfirmPayload): Promise<WarehouseTransfer> {
+function jsonHeaders(idempotencyKey?: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (idempotencyKey) {
+    headers['Idempotency-Key'] = idempotencyKey;
+  }
+  return headers;
+}
+
+/** مفتاح منع التكرار يُولَّد مرة واحدة لكل نموذج مفتوح. */
+export function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `idem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export async function receiveMaterialsApi(
+  orderId: string,
+  payload: ReceiptConfirmPayload,
+  idempotencyKey?: string,
+): Promise<WarehouseTransfer> {
   return apiClient.request<WarehouseTransfer>(`/api/v1/production/orders/${orderId}/receive`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders(idempotencyKey),
     body: JSON.stringify(payload),
   });
 }
@@ -549,5 +579,247 @@ export async function rollbackStageApi(orderId: string, stageName: string, reaso
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason }),
+  });
+}
+
+export interface FinishedGoodsReceiptLinePayload {
+  order_item_id: string;
+  accepted_quantity: number;
+  rejected_quantity: number;
+}
+
+/**
+ * استلام المنتج التام لكل بند في أمر التشغيل.
+ * الشكل المختصر (accepted_quantity/rejected_quantity) مقبول خادمياً للأوامر ذات البند الواحد فقط.
+ */
+export interface FinishedGoodsReceiptPayload {
+  lines?: FinishedGoodsReceiptLinePayload[];
+  accepted_quantity?: number;
+  rejected_quantity?: number;
+  notes?: string;
+}
+
+export interface FinishedGoodsReceiptLineRead {
+  order_item_id: string;
+  variant_id: string;
+  variant_label: string;
+  bucket_reference: string;
+  target_quantity: number;
+  accepted_quantity: number;
+  rejected_quantity: number;
+  total_received: number;
+  remaining_quantity: number;
+}
+
+export interface FinishedGoodsReceipt {
+  order_id: string;
+  order_number: string;
+  target_quantity: number;
+  received_quantity: number;
+  accepted_quantity: number;
+  rejected_quantity: number;
+  warehouse_name: string;
+  receipt_status: string;
+  confirmed_at: string;
+  confirmed_by: string;
+  notes: string;
+  lines?: FinishedGoodsReceiptLineRead[];
+}
+
+export async function receiveFinishedGoodsApi(
+  orderId: string,
+  payload: FinishedGoodsReceiptPayload,
+  idempotencyKey?: string,
+): Promise<FinishedGoodsReceipt> {
+  return apiClient.request<FinishedGoodsReceipt>(`/api/v1/production/orders/${orderId}/finished-receipt`, {
+    method: 'POST',
+    headers: jsonHeaders(idempotencyKey),
+    body: JSON.stringify(payload),
+  });
+}
+
+// ─── تسوية خامات الورشة وإغلاق أمر التشغيل ─────────────────────────────────
+
+export interface OrderMaterialWipItem {
+  item_id: string;
+  item_code: string;
+  item_name_ar: string;
+  unit_id: string;
+  unit_name_ar: string;
+  planned_quantity: number;
+  dispatched_quantity: number;
+  received_quantity: number;
+  discrepancy_quantity: number;
+  in_transit_quantity: number;
+  current_wip_balance: number;
+  status: string;
+}
+
+export interface OrderWipSummary {
+  order_id: string;
+  order_number: string;
+  status: string;
+  target_quantity: number;
+  total_received_goods: number;
+  goods_receipt_status: string;
+  stages_completed: boolean;
+  pending_transfers_count: number;
+  unresolved_discrepancies_count: number;
+  net_wip_balance: number;
+  can_close: boolean;
+  blocking_reasons: string[];
+  returns_pending_resolution_count?: number;
+  materials: OrderMaterialWipItem[];
+}
+
+export async function fetchOrderWipSummary(orderId: string): Promise<OrderWipSummary> {
+  return apiClient.request<OrderWipSummary>(`/api/v1/production/orders/${orderId}/wip-summary`);
+}
+
+export interface MaterialReconciliationLinePayload {
+  item_id: string;
+  consumed_quantity: number;
+  returned_quantity: number;
+  scrapped_quantity: number;
+  return_condition?: ReturnCondition;
+  notes?: string;
+}
+
+export type ReturnCondition = 'good' | 'needs_inspection' | 'damaged';
+
+export interface MaterialReconciliationPayload {
+  lines: MaterialReconciliationLinePayload[];
+  notes?: string;
+}
+
+export interface MaterialReconciliationRead {
+  id: string;
+  reconciliation_number: string;
+  order_id: string;
+  created_by: string;
+  created_at: string;
+  notes: string;
+  lines: Array<{
+    item_id: string;
+    item_name_ar: string;
+    unit_name_ar: string;
+    consumed_quantity: number;
+    returned_quantity: number;
+    scrapped_quantity: number;
+    remaining_wip_balance: number;
+  }>;
+  return_transfer_id?: string | null;
+  return_transfer_number?: string | null;
+}
+
+export interface ReturnLine {
+  line_id: string;
+  item_id: string;
+  item_name_ar: string;
+  unit_name_ar: string;
+  declared_quantity: number;
+  accepted_quantity: number;
+  rejected_quantity: number;
+  rejected_open_quantity: number;
+  rejected_restocked_quantity: number;
+  rejected_scrapped_quantity: number;
+  shortage_quantity: number;
+  shortage_open_quantity: number;
+  notes: string;
+}
+
+export interface ReturnTransfer {
+  id: string;
+  transfer_number: string;
+  order_id: string;
+  status: 'in_transit' | 'pending_resolution' | 'received_confirmed' | string;
+  status_ar: string;
+  declared_by: string;
+  declared_at: string;
+  received_by?: string | null;
+  received_at?: string | null;
+  awaiting_receipt: boolean;
+  awaiting_resolution: boolean;
+  notes: string;
+  lines: ReturnLine[];
+}
+
+export interface ReturnReceiptPayload {
+  lines: Array<{ item_id: string; accepted_quantity: number; rejected_quantity: number; notes: string }>;
+  notes?: string;
+}
+
+export interface ReturnResolutionPayload {
+  lines: Array<{
+    item_id: string;
+    kind: 'shortage' | 'rejected';
+    disposition: 'write_off' | 'restock' | 'scrap';
+    quantity: number;
+    reason: string;
+  }>;
+}
+
+export async function fetchOrderReturns(orderId: string): Promise<ReturnTransfer[]> {
+  return apiClient.request<ReturnTransfer[]>(`/api/v1/production/orders/${orderId}/returns`);
+}
+
+export async function receiveOrderReturnApi(
+  orderId: string, transferId: string, payload: ReturnReceiptPayload, idempotencyKey?: string,
+): Promise<ReturnTransfer> {
+  return apiClient.request<ReturnTransfer>(`/api/v1/production/orders/${orderId}/returns/${transferId}/receive`, {
+    method: 'POST', headers: jsonHeaders(idempotencyKey), body: JSON.stringify(payload),
+  });
+}
+
+export async function resolveOrderReturnApi(
+  orderId: string, transferId: string, payload: ReturnResolutionPayload, idempotencyKey?: string,
+): Promise<ReturnTransfer> {
+  return apiClient.request<ReturnTransfer>(`/api/v1/production/orders/${orderId}/returns/${transferId}/resolve`, {
+    method: 'POST', headers: jsonHeaders(idempotencyKey), body: JSON.stringify(payload),
+  });
+}
+
+export async function reconcileOrderMaterialsApi(
+  orderId: string,
+  payload: MaterialReconciliationPayload,
+  idempotencyKey?: string,
+): Promise<MaterialReconciliationRead> {
+  return apiClient.request<MaterialReconciliationRead>(`/api/v1/production/orders/${orderId}/material-reconciliations`, {
+    method: 'POST',
+    headers: jsonHeaders(idempotencyKey),
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface OrderClosePayload {
+  discrepancy_signoff?: boolean;
+  discrepancy_notes?: string;
+  under_production_reason?: string | null;
+  notes?: string;
+}
+
+export interface OrderCloseResponse {
+  order_id: string;
+  order_number: string;
+  status: string;
+  closed_at: string;
+  closed_by: string;
+  target_quantity: number;
+  total_received_goods: number;
+  remaining_wip_balance: number;
+  discrepancy_count: number;
+  wip_disposition: string | null;
+  notes: string;
+}
+
+export async function closeProductionOrderApi(
+  orderId: string,
+  payload: OrderClosePayload,
+  idempotencyKey?: string,
+): Promise<OrderCloseResponse> {
+  return apiClient.request<OrderCloseResponse>(`/api/v1/production/orders/${orderId}/close`, {
+    method: 'POST',
+    headers: jsonHeaders(idempotencyKey),
+    body: JSON.stringify(payload),
   });
 }

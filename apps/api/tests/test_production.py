@@ -47,6 +47,7 @@ from app.modules.production.models import (
     utc_now,
 )
 from app.modules.production.schemas import (
+    OrderMaterialCreate,
     OrderCreate,
     ProductionOrderItemCreate,
     ReceiptConfirmRequest,
@@ -418,7 +419,9 @@ async def test_warehouse_dispatch_and_receipt_discrepancy():
         notes="تم الاستلام مع عجز",
     )
 
-    confirmed_tr = await confirm_warehouse_receipt(
+    from unittest.mock import patch as _patch
+    with _patch("app.modules.production.service.post_journal_entry", new_callable=AsyncMock):
+        confirmed_tr = await confirm_warehouse_receipt(
         session=mock_session,
         order_id="ord-1",
         data=receipt_req,
@@ -586,11 +589,15 @@ async def test_create_order_with_multiple_items_and_fabric_specifications():
     product2 = Product(id="prod-2", code="STYLE-2", name_ar="شروال", style_type="sharwal")
     variant2 = ProductVariant(id="var-2", product_id="prod-2", numeric_size=60, letter_size="XL", season="summer", sku="SKU-2")
     customer = Customer(id="cust-1", code="CUST-01", name="أبو الفدا للتجارة", status="active")
+    # لا توجد مستلزمات تصنيع (BOM) لهذه المقاسات في الاختبار: يُستخدم مسار الخامات اليدوية
+    manual_item = CatalogItem(id="cat-manual", code="FAB-M", name_ar="قماش يدوي", item_type="raw_material", unit_id="unit-m", is_active=True)
 
     session = AsyncMock()
     session.add = MagicMock()
 
     async def mock_get(model, pk):
+        if model == CatalogItem and pk == "cat-manual":
+            return manual_item
         if model == Product and pk == "prod-1":
             return product1
         if model == Product and pk == "prod-2":
@@ -637,6 +644,7 @@ async def test_create_order_with_multiple_items_and_fabric_specifications():
                 notes="شروال تصنيع لعميل أبو الفدا",
             ),
         ],
+        custom_materials=[OrderMaterialCreate(item_id="cat-manual", unit_id="unit-m", planned_quantity=10.0)],
         assigned_to="خط الإنتاج 1",
         notes="أمر مجمع متعدد الموديلات",
     )

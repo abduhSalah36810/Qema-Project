@@ -9,6 +9,17 @@ import type { MetricCard, BatchRow, AlertItem, DeliveryRow } from './mockData';
 import { reportsApi, type SummaryReport } from '../reports/reportsApi';
 import { apiClient, ApiError } from '@/lib/api';
 import type { ProductionOrder } from '../production/productionApi';
+import { userLabel } from '@/lib/userLabel';
+
+const ORDER_STATUS_AR: Record<string, string> = {
+  draft: 'بانتظار صرف الخامات',
+  materials_dispatched: 'خامات في الطريق',
+  in_production: 'قيد التشغيل',
+  manufacturing_completed: 'اكتمل التصنيع',
+  receipt_completed: 'تم استلام التام',
+  completed: 'مكتمل',
+  closed: 'مغلق',
+};
 
 export function OperationsBoard() {
   // ─── 1. حالة مؤشرات الأداء الحية (KPIs) ───────────────────────────────────
@@ -38,7 +49,7 @@ export function OperationsBoard() {
     } catch (err: unknown) {
       const message =
         err instanceof ApiError && err.status === 403
-          ? 'تم رفض الوصول: يتطلب عرض مؤشرات التشغيل صلاحية (reports:view).'
+          ? 'لا يملك حسابك صلاحية عرض لوحة التشغيل. اطلبها من المدير العام إن كانت ضمن عملك.'
           : err instanceof ApiError
           ? err.message
           : 'تعذر الاتصال بالخادم لتحميل المؤشرات التشغيلية.';
@@ -60,7 +71,7 @@ export function OperationsBoard() {
     } catch (err: unknown) {
       const message =
         err instanceof ApiError && err.status === 403
-          ? 'صلاحية غير كافية لاستعراض أوامر التشغيل (production:orders:view).'
+          ? 'لا يملك حسابك صلاحية عرض أوامر التشغيل.'
           : err instanceof ApiError
           ? err.message
           : 'تعذر الاتصال بالخادم لتحميل أوامر التشغيل.';
@@ -194,21 +205,10 @@ export function OperationsBoard() {
         targetCount: o.target_quantity,
         progressPercent: progress,
         progressVariant: progress < 50 ? 'amber' : undefined,
-        supervisorName: o.created_by || 'مشرف الوردية',
-        supervisorRole: 'إدارة الإنتاج',
-        status: o.status === 'in_progress' ? 'active' : o.status === 'pending' ? 'wait' : 'active',
-        statusLabel:
-          o.status === 'in_progress'
-            ? 'قيد التنفيذ'
-            : o.status === 'completed' || o.status === 'receipt_completed'
-            ? 'مكتمل'
-            : o.status === 'pending' || o.status === 'draft'
-            ? 'بانتظار البدء'
-            : o.status === 'materials_dispatched'
-            ? 'خامات منصرفة'
-            : o.status === 'manufacturing_completed'
-            ? 'تم التصنيع'
-            : o.status,
+        supervisorName: userLabel(o.created_by) || 'مشرف الوردية',
+        supervisorRole: 'أنشأ الأمر',
+        status: o.status === 'in_production' ? 'active' : o.status === 'draft' ? 'wait' : 'active',
+        statusLabel: ORDER_STATUS_AR[o.status] || o.status,
       };
     });
   }, [orders]);
@@ -229,7 +229,7 @@ export function OperationsBoard() {
         subtitle: `الأوامر: ${dispatched.map((o) => o.order_number).slice(0, 3).join('، ')}${
           dispatched.length > 3 ? '...' : ''
         }`,
-        value: 'تأكيد استلام WIP',
+        value: 'تأكيد استلام الورشة',
         valueVariant: 'amber',
       });
     }
@@ -254,7 +254,7 @@ export function OperationsBoard() {
         id: 'alert-ready-to-close',
         iconVariant: 'green',
         iconChar: '🔒',
-        title: `${readyToClose.length.toLocaleString('ar-EG')} أمر جاهز للإغلاق النهائي وتسوية WIP`,
+        title: `${readyToClose.length.toLocaleString('ar-EG')} أمر جاهز للتسوية والإغلاق`,
         subtitle: `الأوامر: ${readyToClose.map((o) => o.order_number).slice(0, 3).join('، ')}`,
         value: 'جاهز للإغلاق',
       });
@@ -283,7 +283,7 @@ export function OperationsBoard() {
     const items: AlertItem[] = [];
     const orderList = orders || [];
 
-    const activeCount = orderList.filter((o) => o.status === 'in_progress').length;
+    const activeCount = orderList.filter((o) => o.status === 'in_production').length;
     items.push({
       id: 'act-active',
       iconVariant: 'blue',
@@ -320,8 +320,8 @@ export function OperationsBoard() {
       id: 'act-sync-status',
       iconVariant: 'blue',
       iconChar: '🔄',
-      title: 'حالة الربط مع خادم PostgreSQL',
-      subtitle: 'مزامنة قيود اليومية ودفاتر الأستاذ',
+      title: 'آخر تحديث لبيانات اللوحة',
+      subtitle: 'الأرقام محسوبة من حركات المخازن والخزينة المعتمدة',
       value: lastSync,
       valueVariant: 'muted',
     });

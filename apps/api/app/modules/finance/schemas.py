@@ -72,6 +72,14 @@ class SupplierCreate(BaseModel):
     address: str = Field(default="", max_length=2000)
 
 
+class SupplierUpdate(BaseModel):
+    """تعديل بيانات المورد الأساسية. لا يغير الفواتير أو المدفوعات السابقة."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    phone: Optional[str] = Field(default=None, max_length=32)
+    address: Optional[str] = Field(default=None, max_length=2000)
+    is_active: Optional[bool] = None
+
+
 class SupplierRead(BaseModel):
     id: str
     code: str
@@ -86,6 +94,7 @@ class SupplierInvoiceLineCreate(BaseModel):
     unit_id: str
     invoiced_quantity: float = Field(gt=0)
     unit_price: Decimal = Field(ge=0, max_digits=14, decimal_places=4)
+    discount_amount: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
     notes: str = Field(default="", max_length=1000)
 
 
@@ -93,14 +102,14 @@ class SupplierInvoiceCreate(BaseModel):
     supplier_id: str
     invoice_number: str = Field(min_length=1, max_length=128)
     invoice_date: datetime
-    invoice_total: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    invoice_total: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
     notes: str = Field(default="", max_length=2000)
     lines: list[SupplierInvoiceLineCreate] = Field(min_length=1, max_length=200)
 
 
 class SupplierReceiptLine(BaseModel):
     line_id: str
-    received_quantity: float = Field(ge=0)
+    received_quantity: float = Field(ge=0, description="الكمية المستلمة في هذه الدفعة فقط (وليس الإجمالي التراكمي)")
     notes: str = Field(default="", max_length=1000)
 
 
@@ -120,6 +129,18 @@ class SupplierInvoiceLineRead(BaseModel):
     received_quantity: float
     unit_price: Decimal
     notes: str
+    discount_amount: Decimal = Decimal("0.00")
+    line_total: Decimal = Decimal("0.00")
+    remaining_quantity: float = 0.0
+
+
+class SupplierPaymentLineRead(BaseModel):
+    id: str
+    cash_document_id: str
+    amount: Decimal
+    status: str
+    created_by: str
+    created_at: datetime
 
 
 class SupplierInvoiceRead(BaseModel):
@@ -138,6 +159,28 @@ class SupplierInvoiceRead(BaseModel):
     received_by: str | None
     received_at: datetime | None
     lines: list[SupplierInvoiceLineRead]
+    payments: list[SupplierPaymentLineRead] = Field(default_factory=list)
+    received_value: Decimal = Decimal("0.00")
+    pending_payments_total: Decimal = Decimal("0.00")
+    payable_balance: Decimal = Decimal("0.00")
+    # مؤشرات بلا مبالغ (تظهر لكل الأدوار): هل يوجد طلب سداد معلق؟ وهل يمكن طلب سداد كامل المستحق؟
+    has_pending_payment_request: bool = False
+    can_request_full_balance: bool = False
+
+
+class SupplierFullBalanceRequest(BaseModel):
+    notes: str = Field(default="", max_length=1000)
+
+
+class SupplierFullBalanceRequestAck(BaseModel):
+    """تأكيد طلب سداد كامل المستحق؛ لا يحمل أي مبلغ (المبلغ يظهر للمالية في الخزينة فقط)."""
+    invoice_id: str
+    invoice_internal_number: str
+    supplier_name: str
+    payment_request_id: str
+    cash_document_number: str
+    status: str
+    message: str
 
 
 class SupplierPaymentCreate(BaseModel):
@@ -171,4 +214,37 @@ class DailyExpenseRead(BaseModel):
     created_by: str
     expense_date: datetime
     status: str
+    cash_document_id: Optional[str] = None
+
+
+class CustodySettlementCreate(BaseModel):
+    """
+    المستخدم يُدخل فقط النقدية التي يردها فعلياً للخزنة.
+    المصروفات والمتبقي يحسبهما الخادم من دفتر النقدية؛ القيم المرسلة في الحقول الأخرى
+    للتوافق فقط ولا تتجاوز الحساب الخادمي.
+    """
+    returned_cash_amount: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
+    approved_expenses_amount: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    remaining_unsettled_amount: Optional[Decimal] = Field(default=None, ge=0, max_digits=14, decimal_places=2)
+    notes: str = Field(default="", max_length=2000)
+
+
+class CustodySettlementRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    settlement_number: str
+    custody_account_id: str
+    custody_account_name: str = ""
+    original_custody_amount: Decimal
+    approved_expenses_amount: Decimal
+    returned_cash_amount: Decimal
+    remaining_unsettled_amount: Decimal
+    status: str
+    notes: str
+    created_by: str
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    created_at: datetime
+    is_mathematically_balanced: bool = True
     cash_document_id: Optional[str] = None

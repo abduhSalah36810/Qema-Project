@@ -33,6 +33,7 @@ class CustomerOrder(Base):
     lines: Mapped[list["CustomerOrderLine"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     payments: Mapped[list["CustomerPayment"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     deliveries: Mapped[list["CustomerDelivery"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    returns: Mapped[list["CustomerDeliveryReturn"]] = relationship(viewonly=True)
 
 
 class CustomerOrderLine(Base):
@@ -128,5 +129,8 @@ class CustomerPayment(Base):
     reference: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
     recorded_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    # pending: بانتظار اعتماد الخزينة | approved: مُودَع فعلياً | rejected: مرفوض من الخزينة
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="approved")
+    cash_document_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("cash_documents.id"), nullable=True)
 
     order: Mapped[CustomerOrder] = relationship(back_populates="payments")

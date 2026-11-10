@@ -2,6 +2,15 @@
 
 نظام ويب تشغيلي لإدارة خامات الإنتاج والدفعات والمخازن والمبيعات والرواتب في مصنع القمة للملابس.
 
+## وثائق التسليم
+
+| الوثيقة | المحتوى |
+|---|---|
+| [docs/INSTALL_AND_OPERATIONS_AR.md](docs/INSTALL_AND_OPERATIONS_AR.md) | التثبيت، متغيرات البيئة، إسناد الأدوار، الاختبارات، النشر، النسخ الاحتياطي والاستعادة |
+| [docs/USER_GUIDE_AR.md](docs/USER_GUIDE_AR.md) | دليل الموظفين حسب الدور |
+| [docs/KNOWN_LIMITATIONS_AR.md](docs/KNOWN_LIMITATIONS_AR.md) | القيود المعروفة والقرارات المعلقة لدى المصنع |
+| [docs/API_CONTRACT_CHANGES_2026-11-08.md](docs/API_CONTRACT_CHANGES_2026-11-08.md) | تغييرات واجهة الـ API في إصدار السلامة التشغيلية |
+
 ---
 
 ## المكدس التقني

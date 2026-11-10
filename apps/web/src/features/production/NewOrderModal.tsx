@@ -1,706 +1,400 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ApiError } from '@/lib/api';
 import {
   Product,
   ProductionTemplate,
-  OrderCreatePayload,
   createProductionOrderApi,
   ProductionOrder,
   CatalogItem,
   ProductionOrderItemPayload,
 } from './productionApi';
+import { previewOrderRequirements, type Requirements } from './bomApi';
 import { fetchCustomers, Customer } from '@/features/customers/customersApi';
+import { useDialog } from '@/components/feedback/DialogProvider';
 
+/**
+ * أمر تشغيل موحد: سطر واحد أو أكثر (موديل + مقاس + مواصفات + كمية) دون اختيار «نوع» الأمر.
+ * الاحتياجات تُحسب تلقائياً من مستلزمات التصنيع (BOM) لكل مقاس وتُقارن برصيد مخزن الخامات.
+ * لا يُصرف شيء عند الإنشاء؛ الصرف يبقى بدورته الحالية بواسطة أمين المخزن.
+ */
 interface NewOrderModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOrderCreated: (order: ProductionOrder) => void;
   products: Product[];
-  templates: ProductionTemplate[];
+  templates?: ProductionTemplate[];
   catalogItems?: CatalogItem[];
   isCatalogLoading?: boolean;
   catalogError?: string | null;
 }
 
-interface OrderItemDisplay extends ProductionOrderItemPayload {
-  product_name: string;
-  variant_info: string;
-  customer_name?: string;
+interface DraftLine {
+  key: string;
+  product_id: string;
+  variant_id: string;
+  quantity: string;
+  product_type: 'factory_brand' | 'private_label';
+  customer_id: string;
+  fabric_name: string;
+  fabric_area: string;
+  fabric_color: string;
+  fabric_weight: string;
+  notes: string;
+  showSpecs: boolean;
 }
 
-export const NewOrderModal: React.FC<NewOrderModalProps> = ({
-  isOpen,
-  onClose,
-  onOrderCreated,
-  products,
-  templates,
-  catalogItems = [],
-  isCatalogLoading = false,
-  catalogError = null,
-}) => {
-  const [orderMode, setOrderMode] = useState<'single' | 'multiple'>('single');
+const SEASON_AR: Record<string, string> = { summer: 'صيفي', autumn: 'خريفي', winter: 'شتوي' };
+let lineSeq = 0;
+const emptyLine = (productId = ''): DraftLine => ({
+  key: `ln${(lineSeq += 1)}`, product_id: productId, variant_id: '', quantity: '', product_type: 'factory_brand', customer_id: '',
+  fabric_name: '', fabric_area: '', fabric_color: '', fabric_weight: '', notes: '', showSpecs: false,
+});
+
+function qty(n: number): string {
+  return n.toLocaleString('ar-EG', { maximumFractionDigits: 3 });
+}
+
+function errorText(err: unknown, fallback: string): string {
+  return err instanceof ApiError || err instanceof Error ? err.message || fallback : fallback;
+}
+
+export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, onOrderCreated, products: allProducts }) => {
+  const dialog = useDialog();
+  // الموديلات والمقاسات الموقوفة لا تُختار في أوامر جديدة
+  const products = useMemo(
+    () => allProducts
+      .filter((p) => p.is_active !== false)
+      .map((p) => ({ ...p, variants: p.variants.filter((v) => v.is_active !== false) })),
+    [allProducts],
+  );
+  const [lines, setLines] = useState<DraftLine[]>([emptyLine()]);
+  const [assignedTo, setAssignedTo] = useState('');
+  const [notes, setNotes] = useState('');
   const [customers, setCustomers] = useState<Customer[]>([]);
-
-  // حقول الموديل الفردي
-  const [selectedProductId, setSelectedProductId] = useState<string>('');
-  const [selectedVariantId, setSelectedVariantId] = useState<string>('');
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
-  const [targetQuantity, setTargetQuantity] = useState<number>(100);
-  const [season, setSeason] = useState<string>('summer');
-  const [assignedTo, setAssignedTo] = useState<string>('خط التشغيل الرئيسي ١');
-  const [notes, setNotes] = useState<string>('');
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // الخامات الإضافية اليدوية
-  const [materialItemId, setMaterialItemId] = useState('');
-  const [materialQuantity, setMaterialQuantity] = useState('');
-  const [materialNotes, setMaterialNotes] = useState('');
-  const [customMaterials, setCustomMaterials] = useState<Array<{ item_id: string; unit_id: string; planned_quantity: number; notes: string; item_name_ar: string; item_code: string; unit_name_ar: string }>>([]);
-
-  // بنود الأمر المتعددة
-  const [orderItems, setOrderItems] = useState<OrderItemDisplay[]>([]);
-  const [itemProductId, setItemProductId] = useState<string>('');
-  const [itemVariantId, setItemVariantId] = useState<string>('');
-  const [itemQuantity, setItemQuantity] = useState<number>(50);
-  const [itemSeason, setItemSeason] = useState<string>('summer');
-  const [itemProductType, setItemProductType] = useState<'factory_brand' | 'private_label'>('factory_brand');
-  const [itemCustomerId, setItemCustomerId] = useState<string>('');
-  const [itemFabricName, setItemFabricName] = useState<string>('قطن مخلوط فاخر');
-  const [itemFabricArea, setItemFabricArea] = useState<string>('3.2 متر');
-  const [itemFabricColor, setItemFabricColor] = useState<string>('أبيض');
-  const [itemFabricWeight, setItemFabricWeight] = useState<string>('220 جم');
-  const [itemNotes, setItemNotes] = useState<string>('');
+  const [customersUnavailable, setCustomersUnavailable] = useState(false);
+  const [requirements, setRequirements] = useState<Requirements | null>(null);
+  const [reqLoading, setReqLoading] = useState(false);
+  const [reqError, setReqError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
-    if (isOpen) {
-      fetchCustomers()
-        .then((list) => setCustomers(list.filter((c) => c.status === 'active')))
-        .catch(() => {});
-    }
+    if (!isOpen) return;
+    setLines([emptyLine()]);
+    setAssignedTo('');
+    setNotes('');
+    setRequirements(null);
+    setSubmitError('');
+    fetchCustomers()
+      .then((list) => { setCustomers(list.filter((c) => c.status === 'active')); setCustomersUnavailable(false); })
+      .catch(() => setCustomersUnavailable(true));
   }, [isOpen]);
 
+  const productById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
+
+  const lineIssue = (line: DraftLine): string | null => {
+    if (!line.product_id) return 'اختر الموديل';
+    if (!line.variant_id) return 'اختر المقاس';
+    const q = Number(line.quantity);
+    if (!Number.isFinite(q) || q <= 0) return 'أدخل الكمية';
+    if (line.product_type === 'private_label' && !line.customer_id) return 'اختر العميل';
+    return null;
+  };
+  const validLines = lines.filter((l) => lineIssue(l) === null);
+  const allValid = lines.length > 0 && validLines.length === lines.length;
+
+  // معاينة الاحتياجات تلقائياً عند تغيّر الأسطر الصالحة
+  const reqKey = JSON.stringify(validLines.map((l) => [l.product_id, l.variant_id, Number(l.quantity)]));
   useEffect(() => {
-    if (products.length > 0 && !selectedProductId) {
-      setSelectedProductId(products[0].id);
-    }
-    if (products.length > 0 && !itemProductId) {
-      setItemProductId(products[0].id);
-    }
-  }, [products, selectedProductId, itemProductId]);
-
-  const currentProduct = products.find((p) => p.id === selectedProductId);
-  const currentItemProduct = products.find((p) => p.id === itemProductId);
-
-  useEffect(() => {
-    if (currentProduct?.variants && currentProduct.variants.length > 0) {
-      setSelectedVariantId(currentProduct.variants[0].id);
-    } else {
-      setSelectedVariantId('');
-    }
-  }, [currentProduct]);
-
-  useEffect(() => {
-    if (currentItemProduct?.variants && currentItemProduct.variants.length > 0) {
-      setItemVariantId(currentItemProduct.variants[0].id);
-    } else {
-      setItemVariantId('');
-    }
-  }, [currentItemProduct]);
-
-  // القوالب المتوافقة مع المنتج المحدد
-  const matchingTemplates = templates.filter(
-    (t) => !t.product_id || t.product_id === selectedProductId
-  );
-
-  useEffect(() => {
-    if (matchingTemplates.length > 0) {
-      setSelectedTemplateId(matchingTemplates[0].id);
-    } else {
-      setSelectedTemplateId('');
-    }
-  }, [selectedProductId, matchingTemplates.length]);
-
-  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId);
-  const activeVersion = selectedTemplate?.versions?.[0];
-  const selectableMaterials = catalogItems.filter((item) =>
-    item.is_active &&
-    !activeVersion?.lines.some((line) => line.item_id === item.id) &&
-    !customMaterials.some((line) => line.item_id === item.id)
-  );
-
-  const handleAddMaterial = () => {
-    const item = catalogItems.find((candidate) => candidate.id === materialItemId && candidate.is_active);
-    const quantity = Number(materialQuantity);
-    if (!item || !Number.isFinite(quantity) || quantity <= 0) {
-      setErrorMsg('اختر صنفاً وأدخل كمية أكبر من صفر لإضافته إلى الأمر.');
+    if (!isOpen) return;
+    if (validLines.length === 0) {
+      setRequirements(null);
+      setReqError('');
       return;
     }
-    setCustomMaterials((previous) => [...previous, {
-      item_id: item.id, unit_id: item.unit_id, planned_quantity: quantity,
-      notes: materialNotes.trim(), item_name_ar: item.name_ar,
-      item_code: item.code, unit_name_ar: item.unit_name_ar,
-    }]);
-    setMaterialItemId('');
-    setMaterialQuantity('');
-    setMaterialNotes('');
-    setErrorMsg(null);
-  };
-
-  const handleAddOrderItem = () => {
-    if (!itemProductId || !itemVariantId || itemQuantity <= 0) {
-      setErrorMsg('اختر الموديل والمقاس وحدد كمية أكبر من صفر لإضافة البند.');
-      return;
-    }
-    if (itemProductType === 'private_label' && !itemCustomerId) {
-      setErrorMsg('اختر العميل عند تحديد نوع التصنيع للغير.');
-      return;
-    }
-    const prod = products.find((p) => p.id === itemProductId);
-    const variant = prod?.variants.find((v) => v.id === itemVariantId);
-    const customer = customers.find((c) => c.id === itemCustomerId);
-
-    const variantLabel = variant
-      ? `مقاس رقمي ${variant.numeric_size || '—'} · حرفي ${variant.letter_size || '—'} · موسم ${variant.season || '—'}`
-      : itemVariantId;
-
-    const newItem: OrderItemDisplay = {
-      product_id: itemProductId,
-      variant_id: itemVariantId,
-      product_name: prod ? prod.name_ar : 'موديل',
-      variant_info: variantLabel,
-      target_quantity: itemQuantity,
-      season: itemSeason,
-      product_type: itemProductType,
-      customer_id: itemProductType === 'private_label' ? itemCustomerId : null,
-      customer_name: customer ? customer.name : undefined,
-      fabric_name: itemFabricName.trim(),
-      fabric_area: itemFabricArea.trim(),
-      fabric_color: itemFabricColor.trim(),
-      fabric_weight: itemFabricWeight.trim(),
-      notes: itemNotes.trim(),
-    };
-
-    setOrderItems((prev) => [...prev, newItem]);
-    setItemNotes('');
-    setErrorMsg(null);
-  };
-
-  const handleRemoveOrderItem = (index: number) => {
-    setOrderItems((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  // الحساب التناسبي المباشر للمعاينة
-  const scalingRatio =
-    activeVersion && activeVersion.reference_quantity > 0
-      ? targetQuantity / activeVersion.reference_quantity
-      : 1;
+    const seq = (requestSeq.current += 1);
+    setReqLoading(true);
+    const timer = setTimeout(() => {
+      previewOrderRequirements(validLines.map((l) => ({ product_id: l.product_id, variant_id: l.variant_id, quantity: Number(l.quantity) })))
+        .then((res) => { if (seq === requestSeq.current) { setRequirements(res); setReqError(''); } })
+        .catch((err) => { if (seq === requestSeq.current) setReqError(errorText(err, 'تعذر حساب الاحتياجات.')); })
+        .finally(() => { if (seq === requestSeq.current) setReqLoading(false); });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [reqKey, isOpen]);
 
   if (!isOpen) return null;
 
+  const update = (key: string, patch: Partial<DraftLine>) =>
+    setLines((cur) => cur.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+
+  const lineReq = (line: DraftLine) =>
+    requirements?.lines.find((r) => r.variant_id === line.variant_id && r.product_id === line.product_id);
+
+  const isPristine = lines.every((l) => !l.product_id && !l.quantity) && !assignedTo.trim() && !notes.trim();
+  const requestClose = async () => {
+    if (submitting) return;
+    if (isPristine) { onClose(); return; }
+    const ok = await dialog.confirm({
+      title: 'إغلاق دون إنشاء الأمر؟',
+      message: 'ستُفقد الموديلات والكميات التي أدخلتها.',
+      confirmLabel: 'إغلاق',
+      cancelLabel: 'متابعة الإدخال',
+      tone: 'danger',
+    });
+    if (ok) onClose();
+  };
+
+  // سطر مكرر بنفس الموديل والمقاس ونوع التصنيع والعميل والقماش: تنبيه فقط لأن المواصفات قد تختلف
+  const duplicateKeys = new Set<string>();
+  const seenKeys = new Map<string, string>();
+  for (const l of lines) {
+    if (!l.product_id || !l.variant_id) continue;
+    const k = [l.product_id, l.variant_id, l.product_type, l.customer_id, l.fabric_name, l.fabric_color].join('|');
+    const first = seenKeys.get(k);
+    if (first) { duplicateKeys.add(l.key); duplicateKeys.add(first); } else seenKeys.set(k, l.key);
+  }
+  const shortageCount = requirements?.materials.filter((m) => m.shortage_quantity > 0).length ?? 0;
+  const blockedLines = requirements?.lines.filter((l) => !l.has_bom) ?? [];
+
+  const totalPieces = validLines.reduce((sum, l) => sum + Number(l.quantity), 0);
+  const canCreate = allValid && !!requirements?.can_create && !reqLoading && !submitting;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
-    setErrorMsg(null);
-
-    let payload: OrderCreatePayload;
-
-    if (orderMode === 'multiple' && orderItems.length > 0) {
-      payload = {
-        items: orderItems.map(({ product_id, variant_id, target_quantity: itemQty, season: itemSsn, product_type, customer_id, fabric_name, fabric_area, fabric_color, fabric_weight, notes: itemNts }) => ({
-          product_id,
-          variant_id,
-          target_quantity: itemQty,
-          season: itemSsn,
-          product_type,
-          customer_id,
-          fabric_name,
-          fabric_area,
-          fabric_color,
-          fabric_weight,
-          notes: itemNts,
-        })),
-        assigned_to: assignedTo,
-        notes,
-      };
-    } else {
-      if (!selectedProductId || !selectedVariantId || targetQuantity <= 0) {
-        setErrorMsg('يرجى تحديد المنتج والمقاس وإدخال كمية مستهدفة أكبر من صفر.');
-        setIsSubmitting(false);
-        return;
-      }
-      payload = {
-        product_id: selectedProductId,
-        variant_id: selectedVariantId,
-        target_quantity: Number(targetQuantity),
-        season,
-        template_version_id: activeVersion?.id,
-        custom_materials: customMaterials.map(({ item_id, unit_id, planned_quantity, notes: materialLineNotes }) => ({
-          item_id, unit_id, planned_quantity, notes: materialLineNotes,
-        })),
-        assigned_to: assignedTo,
-        notes,
-      };
-    }
-
+    if (!canCreate) return;
+    setSubmitting(true);
+    setSubmitError('');
     try {
-      const created = await createProductionOrderApi(payload);
-      onOrderCreated(created);
+      const items: ProductionOrderItemPayload[] = lines.map((l) => {
+        const variant = productById.get(l.product_id)?.variants.find((v) => v.id === l.variant_id);
+        return {
+          product_id: l.product_id,
+          variant_id: l.variant_id,
+          target_quantity: Number(l.quantity),
+          season: variant?.season || 'summer',
+          product_type: l.product_type,
+          customer_id: l.product_type === 'private_label' ? l.customer_id : null,
+          fabric_name: l.fabric_name.trim(),
+          fabric_area: l.fabric_area.trim(),
+          fabric_color: l.fabric_color.trim(),
+          fabric_weight: l.fabric_weight.trim(),
+          notes: l.notes.trim(),
+        };
+      });
+      const order = await createProductionOrderApi({ items, assigned_to: assignedTo.trim(), notes: notes.trim() });
+      onOrderCreated(order);
       onClose();
-    } catch {
-      setErrorMsg('تعذر حفظ أمر التشغيل. لم يتم إنشاء أمر محلي بديل؛ تحقق من تسجيل الدخول والاتصال ثم أعد المحاولة.');
+    } catch (err) {
+      setSubmitError(errorText(err, 'تعذر إنشاء أمر التشغيل.'));
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div
-        className="modal-card modal-card--lg"
-        onClick={(e) => e.stopPropagation()}
-        dir="rtl"
-      >
+    <div className="modal-backdrop" onClick={() => void requestClose()} role="dialog" aria-modal="true" aria-labelledby="new-order-title">
+      <div className="modal-card modal-card--lg new-order" onClick={(e) => e.stopPropagation()} dir="rtl">
         <div className="modal-header">
           <div>
-            <h2 className="modal-title">إنشاء أمر تشغيل جديد (مسودة دفعة)</h2>
-            <p className="modal-subtitle">
-              تحديد الموديل والمتغيرات ومواصفات الأقمشة وحساب لقطة الخامات التناسبية
-            </p>
+            <h2 className="modal-title" id="new-order-title">إنشاء أمر تشغيل جديد (مسودة دفعة)</h2>
+            <p className="modal-subtitle">أضف موديلاً واحداً أو أكثر بمقاساتهم وكمياتهم؛ تُحسب الخامات المطلوبة تلقائياً من مستلزمات كل مقاس.</p>
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="إغلاق">
-            ✕
-          </button>
+          <button className="modal-close" onClick={() => void requestClose()} aria-label="إغلاق">✕</button>
         </div>
 
-        {errorMsg && (
-          <div className="modal-alert modal-alert--danger">{errorMsg}</div>
-        )}
-
-        {/* أزرار التبديل بين الموديل الفردي والأمر المجمع */}
-        <div style={{ display: 'flex', gap: '8px', padding: '12px 24px', borderBottom: '1px solid var(--border-color, #e2e8f0)', background: 'var(--bg-subtle, #f8fafc)' }}>
-          <button
-            type="button"
-            className={`btn ${orderMode === 'single' ? 'btn--primary' : 'btn--secondary'}`}
-            onClick={() => setOrderMode('single')}
-            style={{ fontSize: '0.875rem' }}
-          >
-            📦 أمر موديل واحد
-          </button>
-          <button
-            type="button"
-            className={`btn ${orderMode === 'multiple' ? 'btn--primary' : 'btn--secondary'}`}
-            onClick={() => setOrderMode('multiple')}
-            style={{ fontSize: '0.875rem' }}
-          >
-            📋 أمر مجمع لعدة موديلات ومواصفات أقمشة ({orderItems.length})
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="modal-body">
-          {orderMode === 'single' ? (
-            <>
-              <div className="form-grid">
-                {/* اختيار الموديل */}
-                <div className="form-field">
-                  <label className="form-label">الموديل والتصميم المطلوب *</label>
-                  <select
-                    className="form-select"
-                    value={selectedProductId}
-                    onChange={(e) => setSelectedProductId(e.target.value)}
-                    required
-                  >
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name_ar} ({p.code})
-                      </option>
-                    ))}
-                  </select>
-                  <span className="form-hint">
-                    {currentProduct?.description || 'الموديلات الستة المعتمدة للمصنع.'}
-                  </span>
-                </div>
-
-                {/* اختيار المتغير: المقاسات والموسم */}
-                <div className="form-field">
-                  <label className="form-label">المقاس والموسم *</label>
-                  <select
-                    className="form-select"
-                    value={selectedVariantId}
-                    onChange={(e) => setSelectedVariantId(e.target.value)}
-                    required
-                  >
-                    {currentProduct?.variants.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        مقاس رقمي: {v.numeric_size || '—'} · حرفي: {v.letter_size || '—'} · موسم: {v.season || '—'}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="form-hint">
-                    الأبعاد الرقمية 56–64 محفوظة ومستقلة عن الحرفية S–2XL.
-                  </span>
-                </div>
-
-                {/* الكمية المستهدفة */}
-                <div className="form-field">
-                  <label className="form-label" htmlFor="targetQtyInput">الكمية المستهدفة للدفعة (قطعة) *</label>
-                  <input
-                    id="targetQtyInput"
-                    type="number"
-                    min="1"
-                    step="1"
-                    className="form-input"
-                    value={targetQuantity}
-                    onChange={(e) => setTargetQuantity(Math.max(1, parseInt(e.target.value) || 0))}
-                    required
-                  />
-                </div>
-
-                {/* الموسم التشغيلي */}
-                <div className="form-field">
-                  <label className="form-label">الموسم التشغيلي</label>
-                  <select
-                    className="form-select"
-                    value={season}
-                    onChange={(e) => setSeason(e.target.value)}
-                  >
-                    <option value="summer">صيف (Summer)</option>
-                    <option value="autumn">خريف (Autumn)</option>
-                    <option value="winter">شتاء (Winter)</option>
-                  </select>
-                </div>
-
-                {/* قالب الإنتاج المرجعي */}
-                <div className="form-field form-field--full">
-                  <label className="form-label">قالب الإنتاج لحساب استهلاك الخامات</label>
-                  <select
-                    className="form-select"
-                    value={selectedTemplateId}
-                    onChange={(e) => setSelectedTemplateId(e.target.value)}
-                  >
-                    <option value="">-- بدون قالب (إنشاء يدوي من الصفر) --</option>
-                    {matchingTemplates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name_ar} (كمية مرجعية: {t.versions[0]?.reference_quantity || 50} قطعة)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <section className="new-order-materials" aria-labelledby="new-order-materials-title">
-                <div className="new-order-materials__heading">
-                  <div>
-                    <h3 id="new-order-materials-title">خامات أمر التشغيل</h3>
-                    <p>يمكن استخدام خامات القالب وإضافة أصناف أخرى من دليل الأصناف قبل إنشاء المسودة.</p>
-                  </div>
-                  <span className="badge-tag">{(activeVersion?.lines.length || 0) + customMaterials.length} صنف</span>
-                </div>
-                <div className="new-order-material-form">
-                  <label>
-                    <span>إضافة صنف خامة</span>
-                    <select value={materialItemId} onChange={(event) => setMaterialItemId(event.target.value)}>
-                      <option value="">{isCatalogLoading ? 'جاري تحميل الأصناف…' : 'اختر صنفاً من دليل الأصناف المسجل'}</option>
-                      {selectableMaterials.map((item) => <option key={item.id} value={item.id}>{item.name_ar} · {item.code} · {item.unit_name_ar}</option>)}
-                    </select>
-                  </label>
-                  <label>
-                    <span>الكمية المطلوبة</span>
-                    <input type="number" min="0.01" step="0.01" value={materialQuantity} onChange={(event) => setMaterialQuantity(event.target.value)} />
-                  </label>
-                  <label>
-                    <span>ملاحظة (اختياري)</span>
-                    <input value={materialNotes} onChange={(event) => setMaterialNotes(event.target.value)} placeholder="مثال: لون أو مواصفة" />
-                  </label>
-                  <button type="button" className="btn btn--secondary" onClick={handleAddMaterial} disabled={!materialItemId || !materialQuantity}>＋ إضافة الصنف</button>
-                  {catalogError && <span className="form-hint" role="alert">{catalogError}</span>}
-                  {!catalogError && !isCatalogLoading && catalogItems.length === 0 && <span className="form-hint">لا توجد أصناف مسجلة في قاعدة البيانات؛ أضف الصنف أولاً من شاشة الأصناف والمخازن.</span>}
-                </div>
-
-                {/* معاينة لقطة الخامات التناسبية المحسوبة */}
-                {(activeVersion?.lines.length || 0) + customMaterials.length > 0 ? (
-                  <div className="materials-preview-card">
-                    <div className="materials-preview-header">
-                      <div>
-                        <strong>معاينة لقطة الخامات المحسوبة نسبياً</strong>
-                        <span className="materials-preview-ratio">
-                          {activeVersion ? `معامل التناسب: ${targetQuantity} ÷ ${activeVersion.reference_quantity} = ${scalingRatio.toFixed(2)}x` : 'الكميات المضافة يدويًا'}
-                        </span>
-                      </div>
-                      <span className="badge-tag">مسودة لقطة مستقلة</span>
-                    </div>
-
-                    <table className="preview-table">
-                      <thead>
+        <form className="modal-body" onSubmit={(e) => void handleSubmit(e)}>
+          <section aria-labelledby="order-lines-title">
+            <h3 id="order-lines-title" className="new-order__title">١. الموديلات والكميات</h3>
+            {products.length === 0 && (
+              <p className="notice notice--warning">لا توجد موديلات نشطة. أضف الموديلات ومقاساتها ومستلزماتها من «البيانات الأساسية ← الموديلات والمقاسات» أولاً.</p>
+            )}
+            <div className="payroll-table-wrap">
+              <table className="md-table new-order__lines">
+                <thead>
+                  <tr><th>الموديل</th><th>المقاس / المواصفة</th><th>الكمية (قطعة)</th><th>المستلزمات</th><th aria-label="إجراءات" /></tr>
+                </thead>
+                <tbody>
+                  {lines.map((line, idx) => {
+                    const product = productById.get(line.product_id);
+                    const req = lineReq(line);
+                    const issue = lineIssue(line);
+                    return (
+                      <React.Fragment key={line.key}>
                         <tr>
-                          <th>الصنف</th>
-                          <th>الكود</th>
-                          <th>الوحدة</th>
-                          <th>{activeVersion ? `الكمية المرجعية (${activeVersion.reference_quantity} ق)` : 'المرجع'}</th>
-                          <th>الكمية المخططة للدفعة ({targetQuantity} ق)</th>
-                          <th>إجراء</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {activeVersion?.lines.map((l) => {
-                          const scaledQty = Math.round(l.quantity_per_reference * scalingRatio * 100) / 100;
-                          return (
-                            <tr key={l.id}>
-                              <td><strong>{l.item_name_ar}</strong></td>
-                              <td><code>{l.item_code}</code></td>
-                              <td>{l.unit_name_ar}</td>
-                              <td>{l.quantity_per_reference}</td>
-                              <td className="highlight-cell">
-                                <strong>{scaledQty}</strong>
-                              </td>
-                              <td><span className="template-material-label">من القالب</span></td>
-                            </tr>
-                          );
-                        })}
-                        {customMaterials.map((line) => (
-                          <tr key={`custom-${line.item_id}`}>
-                            <td><strong>{line.item_name_ar}</strong><small className="material-source-label">إضافة يدوية</small></td>
-                            <td><code>{line.item_code}</code></td>
-                            <td>{line.unit_name_ar}</td>
-                            <td>—</td>
-                            <td className="highlight-cell"><strong>{line.planned_quantity}</strong></td>
-                            <td><button type="button" className="material-remove-button" onClick={() => setCustomMaterials((previous) => previous.filter((candidate) => candidate.item_id !== line.item_id))}>حذف</button></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-
-                    <div className="provisional-hint">
-                      ℹ️ <strong>مبدأ التجميد (Snapshot):</strong> يتم نسخ هذه الخامات وربطها بأمر التشغيل كلقطة ثابتة فور إنشائه، بحيث لا يتأثر هذا الأمر بأي تعديلات تجري على قالب الإنتاج مستقبلاً.
-                    </div>
-                  </div>
-                ) : <div className="empty-materials">لم تُضف خامات بعد. اختر قالباً أو أضف أصنافاً من دليل الأصناف.</div>}
-              </section>
-            </>
-          ) : (
-            <section className="multi-product-section" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{ padding: '12px 16px', background: '#eff6ff', borderRadius: '8px', border: '1px solid #bfdbfe', color: '#1e40af', fontSize: '0.875rem' }}>
-                💡 <strong>أمر مجمع متعدد الأصناف ومواصفات الأقمشة:</strong> أضف الموديلات والمقاسات المطلوبة ونوع التصنيع ومواصفات الأقمشة (المساحة، اللون، الوزن) لكل بند.
-              </div>
-
-              {/* بطاقة إضافة بند جديد */}
-              <div style={{ border: '1px solid #cbd5e1', borderRadius: '8px', padding: '16px', background: '#ffffff' }}>
-                <h4 style={{ margin: '0 0 12px 0', fontSize: '0.95rem', fontWeight: 600 }}>＋ إضافة بند منتج إلى أمر التشغيل</h4>
-                <div className="form-grid">
-                  <div className="form-field">
-                    <label className="form-label">الموديل *</label>
-                    <select
-                      className="form-select"
-                      value={itemProductId}
-                      onChange={(e) => setItemProductId(e.target.value)}
-                    >
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>{p.name_ar} ({p.code})</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">المقاس والمتغير *</label>
-                    <select
-                      className="form-select"
-                      value={itemVariantId}
-                      onChange={(e) => setItemVariantId(e.target.value)}
-                    >
-                      {currentItemProduct?.variants.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          رقمي: {v.numeric_size || '—'} · حرفي: {v.letter_size || '—'} · موسم: {v.season || '—'}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">الكمية المطلوبة (قطعة) *</label>
-                    <input
-                      type="number"
-                      min="1"
-                      className="form-input"
-                      value={itemQuantity}
-                      onChange={(e) => setItemQuantity(Math.max(1, parseInt(e.target.value) || 0))}
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">الموسم</label>
-                    <select
-                      className="form-select"
-                      value={itemSeason}
-                      onChange={(e) => setItemSeason(e.target.value)}
-                    >
-                      <option value="summer">صيف</option>
-                      <option value="autumn">خريف</option>
-                      <option value="winter">شتاء</option>
-                    </select>
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">نوع التصنيع</label>
-                    <select
-                      className="form-select"
-                      value={itemProductType}
-                      onChange={(e) => setItemProductType(e.target.value as any)}
-                    >
-                      <option value="factory_brand">براند المصنع (El-Qemma)</option>
-                      <option value="private_label">تصنيع للغير (Private Label)</option>
-                    </select>
-                  </div>
-                  {itemProductType === 'private_label' && (
-                    <div className="form-field">
-                      <label className="form-label">عميل التصنيع للغير *</label>
-                      <select
-                        className="form-select"
-                        value={itemCustomerId}
-                        onChange={(e) => setItemCustomerId(e.target.value)}
-                      >
-                        <option value="">-- اختر العميل --</option>
-                        {customers.map((c) => (
-                          <option key={c.id} value={c.id}>{c.name} ({c.code})</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                  {/* مواصفات القماش */}
-                  <div className="form-field">
-                    <label className="form-label">اسم / نوع القماش</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={itemFabricName}
-                      onChange={(e) => setItemFabricName(e.target.value)}
-                      placeholder="مثال: قطن مصري فاخر / كتان"
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">مساحة القماش</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={itemFabricArea}
-                      onChange={(e) => setItemFabricArea(e.target.value)}
-                      placeholder="مثال: 3.2 متر مربع"
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">لون القماش</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={itemFabricColor}
-                      onChange={(e) => setItemFabricColor(e.target.value)}
-                      placeholder="مثال: أبيض / كحلي"
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label className="form-label">وزن القماش</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={itemFabricWeight}
-                      onChange={(e) => setItemFabricWeight(e.target.value)}
-                      placeholder="مثال: 220 جم/م²"
-                    />
-                  </div>
-                </div>
-                <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    className="btn btn--secondary"
-                    onClick={handleAddOrderItem}
-                  >
-                    ＋ إضافة البند إلى القائمة
-                  </button>
-                </div>
-              </div>
-
-              {/* جدول البنود المضافة */}
-              <div style={{ border: '1px solid #cbd5e1', borderRadius: '8px', overflow: 'hidden' }}>
-                <div style={{ padding: '10px 16px', background: '#f8fafc', fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
-                  <span>بنود أمر التشغيل المضافة ({orderItems.length})</span>
-                  <span>إجمالي الكمية: {orderItems.reduce((acc, it) => acc + it.target_quantity, 0)} قطعة</span>
-                </div>
-                {orderItems.length > 0 ? (
-                  <table className="preview-table" style={{ width: '100%' }}>
-                    <thead>
-                      <tr>
-                        <th>#</th>
-                        <th>الموديل</th>
-                        <th>المقاس</th>
-                        <th>الكمية</th>
-                        <th>نوع التصنيع</th>
-                        <th>مواصفات القماش</th>
-                        <th>إجراء</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {orderItems.map((item, index) => (
-                        <tr key={index}>
-                          <td>{index + 1}</td>
-                          <td><strong>{item.product_name}</strong></td>
-                          <td><small>{item.variant_info}</small></td>
-                          <td><strong style={{ color: 'var(--teal-accent, #0d9488)' }}>{item.target_quantity}</strong></td>
                           <td>
-                            {item.product_type === 'factory_brand' ? (
-                              <span className="badge-tag">براند المصنع</span>
-                            ) : (
-                              <span className="badge-tag" style={{ background: '#fef3c7', color: '#92400e' }}>
-                                تصنيع: {item.customer_name || 'عميل'}
-                              </span>
+                            <select aria-label={`موديل السطر ${idx + 1}`} value={line.product_id} onChange={(e) => update(line.key, { product_id: e.target.value, variant_id: '' })}>
+                              <option value="">— اختر الموديل —</option>
+                              {products.map((p) => <option key={p.id} value={p.id}>{p.name_ar} ({p.code})</option>)}
+                            </select>
+                          </td>
+                          <td>
+                            <select aria-label={`مقاس السطر ${idx + 1}`} value={line.variant_id} disabled={!product} onChange={(e) => update(line.key, { variant_id: e.target.value })}>
+                              <option value="">— اختر المقاس —</option>
+                              {(product?.variants ?? [])
+                                .slice()
+                                .sort((a, b) => Number(a.numeric_size) - Number(b.numeric_size))
+                                .map((v) => (
+                                  <option key={v.id} value={v.id}>
+                                    مقاس {v.numeric_size}{v.letter_size ? ` · ${v.letter_size}` : ''} · {SEASON_AR[v.season || ''] || v.season}{v.has_bom === false ? ' — بدون مستلزمات' : ''}
+                                  </option>
+                                ))}
+                            </select>
+                            {product && product.variants.length === 0 && <small className="field-error">لا توجد مقاسات نشطة لهذا الموديل</small>}
+                            {duplicateKeys.has(line.key) && <small className="form-hint">نفس الموديل والمقاس في سطر آخر؛ اجمع الكمية في سطر واحد إلا إذا اختلفت المواصفات.</small>}
+                          </td>
+                          <td>
+                            <input type="number" min="1" step="1" inputMode="numeric" aria-label={`كمية السطر ${idx + 1}`} placeholder="مثال: 100" value={line.quantity} onChange={(e) => update(line.key, { quantity: e.target.value })} />
+                          </td>
+                          <td>
+                            {issue ? <small className="form-hint">{issue}</small>
+                              : !req ? <small className="form-hint">{reqLoading ? 'جاري الحساب…' : '—'}</small>
+                              : req.has_bom ? <span className="status-badge status-badge--done">مستلزمات إصدار {req.bom_version_number}</span>
+                              : <span className="status-badge status-badge--rejected" title={req.issue}>{req.issue.includes('موقوف') ? 'موقوف' : 'بدون مستلزمات'}</span>}
+                          </td>
+                          <td className="new-order__line-actions">
+                            {line.product_id && (
+                              <button type="button" className="md-link" title="إضافة سطر جديد بنفس الموديل لمقاس آخر"
+                                onClick={() => setLines((cur) => {
+                                  const i = cur.findIndex((l) => l.key === line.key);
+                                  const next = cur.slice();
+                                  next.splice(i + 1, 0, emptyLine(line.product_id));
+                                  return next;
+                                })}>
+                                ＋ مقاس
+                              </button>
+                            )}
+                            <button type="button" className="md-link" onClick={() => update(line.key, { showSpecs: !line.showSpecs })} aria-expanded={line.showSpecs}>
+                              {line.showSpecs ? 'إخفاء المواصفات' : 'المواصفات'}
+                            </button>
+                            {lines.length > 1 && (
+                              <button type="button" className="md-link md-link--muted" onClick={() => setLines((cur) => cur.filter((l) => l.key !== line.key))}>حذف</button>
                             )}
                           </td>
-                          <td>
-                            <small>{item.fabric_name} · {item.fabric_color} · {item.fabric_weight} · {item.fabric_area}</small>
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="material-remove-button"
-                              onClick={() => handleRemoveOrderItem(index)}
-                            >
-                              حذف
-                            </button>
-                          </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                ) : (
-                  <div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>
-                    لم تتم إضافة بنود بعد. املأ النموذج أعلاه واضغط على "إضافة البند إلى القائمة".
-                  </div>
-                )}
+                        {line.showSpecs && (
+                          <tr className="new-order__specs">
+                            <td colSpan={5}>
+                              <div className="payroll-add__grid">
+                                <label>نوع التصنيع
+                                  <select value={line.product_type} onChange={(e) => update(line.key, { product_type: e.target.value as DraftLine['product_type'], customer_id: '' })}>
+                                    <option value="factory_brand">إنتاج المصنع</option>
+                                    <option value="private_label" disabled={customersUnavailable}>تصنيع لعميل</option>
+                                  </select>
+                                </label>
+                                {line.product_type === 'private_label' && (
+                                  <label>العميل <span className="field-required" aria-hidden>*</span>
+                                    <select value={line.customer_id} onChange={(e) => update(line.key, { customer_id: e.target.value })}>
+                                      <option value="">— اختر العميل —</option>
+                                      {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                    </select>
+                                  </label>
+                                )}
+                                <label>نوع القماش<input maxLength={128} value={line.fabric_name} placeholder="مثال: قطن مصري" onChange={(e) => update(line.key, { fabric_name: e.target.value })} /></label>
+                                <label>اللون<input maxLength={64} value={line.fabric_color} placeholder="مثال: أبيض" onChange={(e) => update(line.key, { fabric_color: e.target.value })} /></label>
+                                <label>الوزن<input maxLength={64} value={line.fabric_weight} placeholder="مثال: 220 جم" onChange={(e) => update(line.key, { fabric_weight: e.target.value })} /></label>
+                                <label>المساحة<input maxLength={128} value={line.fabric_area} placeholder="مثال: 3.2 متر" onChange={(e) => update(line.key, { fabric_area: e.target.value })} /></label>
+                                <label className="payroll-add__wide">ملاحظات السطر<input maxLength={2000} value={line.notes} onChange={(e) => update(line.key, { notes: e.target.value })} /></label>
+                              </div>
+                              {customersUnavailable && <small className="form-hint">التصنيع لعميل غير متاح بصلاحيتك الحالية.</small>}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <button type="button" className="btn btn--secondary btn--sm" onClick={() => setLines((cur) => [...cur, emptyLine()])}>＋ إضافة موديل / مقاس</button>
+            {validLines.length > 0 && <p className="form-hint">إجمالي الأمر: {qty(totalPieces)} قطعة في {validLines.length} سطر.</p>}
+          </section>
+
+          <section aria-labelledby="order-req-title" className="new-order__req">
+            <h3 id="order-req-title" className="new-order__title">٢. الاحتياجات من مخزن الخامات</h3>
+            {reqError && <p className="notice notice--error" role="alert">{reqError}</p>}
+            {!requirements && !reqLoading && <p className="form-hint">اختر الموديلات والمقاسات والكميات لتظهر الخامات المطلوبة.</p>}
+            {blockedLines.length > 0 && (
+              <div className="notice notice--error" role="alert">
+                <div>
+                  <strong>لا يمكن الإنشاء: مستلزمات التصنيع ناقصة لـ</strong>
+                  <ul>{blockedLines.map((l) => <li key={l.variant_id}>{l.product_name} — {l.variant_label}{l.issue.includes('موقوف') ? ` (${l.issue})` : ''}</li>)}</ul>
+                  <small>يعرّفها مسؤول الإنتاج من «البيانات الأساسية ← الموديلات والمقاسات ← مستلزمات التصنيع»، أو احذف السطر من الأمر.</small>
+                </div>
               </div>
-            </section>
-          )}
+            )}
+            {requirements && requirements.materials.length > 0 && (
+              <div className="new-order__summary" aria-label="ملخص الاحتياجات">
+                <span><strong>{requirements.materials.length}</strong> صنف مطلوب</span>
+                <span className={shortageCount ? 'new-order__summary--bad' : 'new-order__summary--ok'}>
+                  {shortageCount ? <><strong>{shortageCount}</strong> صنف به عجز</> : 'كل الأصناف متوفرة بالكامل'}
+                </span>
+                {reqLoading && <span role="status">جاري التحديث…</span>}
+              </div>
+            )}
+            {requirements && requirements.materials.length > 0 && (
+              <div className="payroll-table-wrap">
+                <table className="md-table new-order__materials">
+                  <thead>
+                    <tr><th>الصنف</th><th>الوحدة</th><th>المطلوب</th><th>المتاح بالخامات</th><th>يمكن صرفه</th><th>العجز</th><th>الحالة</th></tr>
+                  </thead>
+                  <tbody>
+                    {requirements.materials.map((m) => (
+                      <tr key={`${m.item_id}:${m.unit_id}`} className={m.shortage_quantity > 0 ? 'new-order__short' : ''}>
+                        <td><strong>{m.item_name}</strong><br /><small>{m.item_code}</small>{!m.item_active && <small className="field-error">الصنف موقوف أو غير معتمد</small>}</td>
+                        <td data-label="الوحدة">{m.unit_name}</td>
+                        <td data-label="المطلوب">{qty(m.required_quantity)}</td>
+                        <td data-label="المتاح بالخامات">{qty(m.available_quantity)}</td>
+                        <td data-label="يمكن صرفه">{qty(m.dispatchable_quantity)}</td>
+                        <td data-label="العجز">{m.shortage_quantity > 0 ? <strong className="payroll-sheet__minus">{qty(m.shortage_quantity)}</strong> : '—'}</td>
+                        <td data-label="الحالة">
+                          {!m.item_active ? <span className="status-badge status-badge--rejected">صنف موقوف</span>
+                            : m.shortage_quantity > 0 ? <span className="status-badge status-badge--rejected">عجز · يوقف الصرف</span>
+                            : <span className="status-badge status-badge--done">متوفر</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {requirements?.has_shortage && requirements.can_create && (
+              <p className="notice notice--warning">
+                يوجد عجز في بعض الخامات. يمكنك إنشاء الأمر الآن، لكن صرف الخامات لن يتم حتى يتوفر الرصيد كاملاً في مخزن الخامات.
+              </p>
+            )}
+            {requirements && requirements.lines.some((l) => l.materials.length > 0) && (
+              <details className="new-order__breakdown">
+                <summary>تفاصيل المستلزمات لكل سطر</summary>
+                {requirements.lines.filter((l) => l.materials.length > 0).map((l) => (
+                  <div key={`${l.product_id}:${l.variant_id}`}>
+                    <strong>{l.product_name} — {l.variant_label}</strong> <small>({qty(l.quantity)} قطعة · إصدار {l.bom_version_number})</small>
+                    <ul>
+                      {l.materials.map((m) => (
+                        <li key={m.item_id}>{m.item_name}: {qty(m.quantity_per_piece)} {m.unit_name} للقطعة × {qty(l.quantity)} = <strong>{qty(m.total_quantity)} {m.unit_name}</strong></li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </details>
+            )}
+            <p className="form-hint">الأرقام للمعاينة ولا تحجز رصيداً ولا تصرف شيئاً؛ قد يتغير المتاح قبل الصرف بسبب أوامر أخرى.</p>
+          </section>
 
-          <div className="form-grid" style={{ marginTop: '16px' }}>
-            <div className="form-field">
-              <label className="form-label">خط التشغيل المسؤول</label>
-              <input type="text" className="form-input" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} placeholder="مثال: خط الخياطة ١ أو خط القص" />
-            </div>
-            <div className="form-field">
-              <label className="form-label">ملاحظات التشغيل المؤقتة</label>
-              <input type="text" className="form-input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="أي توجيهات خاصة بالوردية" />
-            </div>
-          </div>
+          <section className="payroll-add__grid" aria-label="بيانات الأمر">
+            <label>خط التشغيل المسؤول<input maxLength={128} value={assignedTo} placeholder="مثال: خط الإنتاج 1" onChange={(e) => setAssignedTo(e.target.value)} /></label>
+            <label className="payroll-add__wide">ملاحظات الأمر<input maxLength={2000} value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
+          </section>
 
-          <div className="modal-actions">
-            <button
-              type="button"
-              className="btn btn--secondary"
-              onClick={onClose}
-              disabled={isSubmitting}
-            >
-              إلغاء
-            </button>
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={isSubmitting || (orderMode === 'multiple' && orderItems.length === 0)}
-            >
-              {isSubmitting ? 'جاري الحفظ...' : '＋ تأكيد وإنشاء أمر التشغيل'}
+          {submitError && <p className="field-error" role="alert">{submitError}</p>}
+          <div className="modal-footer">
+            <button type="button" className="btn btn--secondary" onClick={() => void requestClose()}>إلغاء</button>
+            <button type="submit" className="btn btn--primary" disabled={!canCreate}>
+              {submitting ? 'جاري الإنشاء…' : 'إنشاء أمر التشغيل'}
             </button>
           </div>
+          {!allValid && <p className="form-hint">أكمل كل الأسطر (الموديل، المقاس، الكمية) قبل الإنشاء.</p>}
         </form>
       </div>
     </div>

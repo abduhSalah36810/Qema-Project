@@ -47,7 +47,7 @@ app.add_middleware(
     allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
-    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "Origin"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Accept", "Origin", "Idempotency-Key"],
     expose_headers=["X-Request-ID"],
     max_age=600,
 )
@@ -57,5 +57,11 @@ app.add_middleware(RequestTracingMiddleware)
 
 # تسجيل معالجات الأخطاء الموحدة والآمنة
 setup_exception_handlers(app)
+
+
+@app.get("/health", tags=["system"])
+async def root_health():
+    return {"status": "ok"}
+
 
 app.include_router(api_router, prefix="/api/v1")

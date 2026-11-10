@@ -6,6 +6,16 @@ import { AuthProvider, useAuth } from './AuthContext';
 import { apiClient, ApiError, type UserIdentity } from '@/lib/api';
 import App from '@/App';
 
+// صلاحيات أمين المخزن كما يعيدها الخادم (apps/api/app/core/permissions.py)
+const WAREHOUSE_PERMISSIONS = [
+  'catalog:categories:manage', 'catalog:item:create', 'catalog:item:request_revision', 'catalog:item:submit',
+  'catalog:item:update', 'catalog:view', 'customers:deliveries:manage', 'inventory:stocktake:cancel',
+  'inventory:stocktake:count', 'inventory:stocktake:create', 'inventory:stocktake:submit',
+  'inventory:stocktake:view', 'inventory:view', 'production:orders:view', 'suppliers:invoices:create',
+  'suppliers:manage', 'suppliers:payments:request_full_balance', 'suppliers:receive', 'suppliers:view',
+  'warehouse:dispatch', 'warehouse:finished_goods:receive', 'warehouse:returns:receive',
+];
+
 // إعداد كائنات محاكاة لـ Supabase دون استخدام بيانات اعتماد حقيقية
 const mockGetSession = vi.fn();
 const mockSignOut = vi.fn();
@@ -275,9 +285,8 @@ describe('Supabase Auth Integration & Token Handling', () => {
     const { unmount } = render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText(/بيئة معاينة تجريبية محلية/)).toBeInTheDocument();
+      expect(screen.getByText('سجّل الدخول لعرض شاشات المصنع')).toBeInTheDocument();
     });
-    expect(screen.getByText(/لم يتم تسجيل الدخول/)).toBeInTheDocument();
     expect(screen.getAllByText('تسجيل الدخول').length).toBeGreaterThanOrEqual(1);
 
     unmount();
@@ -298,10 +307,11 @@ describe('Supabase Auth Integration & Token Handling', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByText(/جلسة عمل موثقة عبر Supabase & API/)).toBeInTheDocument();
+      expect(screen.getAllByText(/manager@qemma.com/).length).toBeGreaterThanOrEqual(1);
     });
-    expect(screen.getAllByText('manager@qemma.com').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText(/بيئة معاينة تجريبية محلية — لم يتم تسجيل الدخول/)).not.toBeInTheDocument();
+    expect(screen.queryByText('سجّل الدخول لعرض شاشات المصنع')).not.toBeInTheDocument();
+    // شريط «نسخة العرض» يظهر فقط مع الدخول المحلي، لا مع حساب حقيقي
+    expect(screen.queryByText(/نسخة العرض التجريبي/)).not.toBeInTheDocument();
   });
 
   it('6a. sign-out while /auth/me is pending prevents subsequent success from restoring state', async () => {
@@ -575,6 +585,12 @@ describe('Supabase Auth Integration & Token Handling', () => {
         expires_in: 28800,
         user: { id: 'dev-user-00000000-0000-0000-0000-000000000001', email: 'dev@qemma.local' },
       });
+      vi.spyOn(apiClient, 'getAuthMe').mockResolvedValue({
+        id: 'dev-user-00000000-0000-0000-0000-000000000001',
+        email: 'dev@qemma.local',
+        roles: ['general_manager'],
+        permissions: ['reports:view'],
+      });
 
       render(
         <AuthProvider>
@@ -654,6 +670,187 @@ describe('Supabase Auth Integration & Token Handling', () => {
 
       expect(localStorage.getItem('qemma_local_dev_token')).toBeNull();
       expect(apiClient.getAccessToken()).toBeNull();
+    });
+
+    it('takes roles and permissions from /auth/me, never from the token or user_metadata', async () => {
+      let currentAuth: ReturnType<typeof useAuth> | undefined;
+
+      // توكن يدّعي دور المدير العام في user_metadata؛ يجب تجاهله تماماً
+      const token = `header.${btoa(JSON.stringify({
+        sub: 'dev-user-00000000-0000-0000-0000-000000000002',
+        role: 'general_manager',
+        user_metadata: { role: 'general_manager', roles: ['general_manager'] },
+      }))}.sig`;
+
+      vi.spyOn(apiClient, 'localLogin').mockResolvedValue({
+        access_token: token,
+        token_type: 'bearer',
+        expires_in: 28800,
+        user: { id: 'dev-user-00000000-0000-0000-0000-000000000002', email: 'wh@qemma.local' },
+      });
+      const getAuthMeSpy = vi.spyOn(apiClient, 'getAuthMe').mockResolvedValue({
+        id: 'dev-user-00000000-0000-0000-0000-000000000002',
+        email: 'wh@qemma.local',
+        roles: ['warehouse_manager'],
+        permissions: WAREHOUSE_PERMISSIONS,
+      });
+
+      render(
+        <AuthProvider>
+          <AuthTestConsumer onRender={(a) => { currentAuth = a; }} />
+        </AuthProvider>
+      );
+
+      await act(async () => {
+        await currentAuth?.signInLocalDev('warehouse_manager');
+      });
+
+      expect(getAuthMeSpy).toHaveBeenCalledWith(expect.objectContaining({ token }));
+      expect(currentAuth?.roles).toEqual(['warehouse_manager']);
+      expect(currentAuth?.permissionsStatus).toBe('ready');
+      expect(currentAuth?.hasPermission('inventory:stocktake:count')).toBe(true);
+      expect(currentAuth?.hasPermission('warehouse:finished_goods:receive')).toBe(true);
+      expect(currentAuth?.hasPermission('production:wip:receive')).toBe(false);
+      expect(currentAuth?.hasPermission('inventory:stocktake:post')).toBe(false);
+      expect(currentAuth?.hasPermission('catalog:item:approve')).toBe(false);
+      expect(currentAuth?.hasPermission('customers:orders:create')).toBe(false);
+    });
+
+    it('fails closed while /auth/me is loading and grants permissions only after it resolves', async () => {
+      let currentAuth: ReturnType<typeof useAuth> | undefined;
+      let resolveMe!: (value: UserIdentity) => void;
+      const pendingMe = new Promise<UserIdentity>((resolve) => {
+        resolveMe = resolve;
+      });
+
+      vi.spyOn(apiClient, 'localLogin').mockResolvedValue({
+        access_token: 'local-gm-token',
+        token_type: 'bearer',
+        expires_in: 28800,
+        user: { id: 'dev-user-00000000-0000-0000-0000-000000000001', email: 'dev@qemma.local' },
+      });
+      vi.spyOn(apiClient, 'getAuthMe').mockReturnValue(pendingMe);
+
+      render(
+        <AuthProvider>
+          <AuthTestConsumer onRender={(a) => { currentAuth = a; }} />
+        </AuthProvider>
+      );
+
+      let loginPromise: Promise<void> | undefined;
+      await act(async () => {
+        loginPromise = currentAuth?.signInLocalDev('general_manager');
+      });
+
+      // الجلسة موجودة لكن الصلاحيات قيد التحميل: لا أي صلاحية
+      expect(currentAuth?.authState).toBe('authenticated');
+      expect(currentAuth?.permissionsStatus).toBe('loading');
+      expect(currentAuth?.roles).toEqual([]);
+      expect(currentAuth?.hasPermission('reports:view')).toBe(false);
+
+      await act(async () => {
+        resolveMe({
+          id: 'dev-user-00000000-0000-0000-0000-000000000001',
+          email: 'dev@qemma.local',
+          roles: ['general_manager'],
+          permissions: ['reports:view', 'finance:cash:approve'],
+        });
+        await loginPromise;
+      });
+
+      expect(currentAuth?.permissionsStatus).toBe('ready');
+      expect(currentAuth?.hasPermission('reports:view')).toBe(true);
+      expect(currentAuth?.hasPermission('finance:cash:approve')).toBe(true);
+      expect(currentAuth?.hasPermission('inventory:stocktake:post')).toBe(false);
+    });
+
+    it('keeps the user signed in without permissions and surfaces the error when /auth/me fails', async () => {
+      let currentAuth: ReturnType<typeof useAuth> | undefined;
+
+      vi.spyOn(apiClient, 'localLogin').mockResolvedValue({
+        access_token: 'local-token-me-fails',
+        token_type: 'bearer',
+        expires_in: 28800,
+        user: { id: 'dev-user-00000000-0000-0000-0000-000000000001', email: 'dev@qemma.local' },
+      });
+      vi.spyOn(apiClient, 'getAuthMe').mockRejectedValue(new ApiError('خطأ داخلي', { status: 500 }));
+
+      render(
+        <AuthProvider>
+          <AuthTestConsumer onRender={(a) => { currentAuth = a; }} />
+        </AuthProvider>
+      );
+
+      await act(async () => {
+        await currentAuth?.signInLocalDev('general_manager');
+      });
+
+      expect(currentAuth?.authState).toBe('authenticated');
+      expect(currentAuth?.user?.id).toBe('dev-user-00000000-0000-0000-0000-000000000001');
+      expect(currentAuth?.permissionsStatus).toBe('error');
+      expect(currentAuth?.permissions).toEqual([]);
+      expect(currentAuth?.hasPermission('reports:view')).toBe(false);
+      expect(screen.getByTestId('auth-error').textContent).toContain('تعذر تحميل الصلاحيات');
+    });
+
+    it('switches role from general_manager to warehouse_manager cleanly without retaining permissions', async () => {
+      let currentAuth: ReturnType<typeof useAuth> | undefined;
+
+      const localLoginSpy = vi.spyOn(apiClient, 'localLogin');
+      const getAuthMeSpy = vi.spyOn(apiClient, 'getAuthMe');
+
+      render(
+        <AuthProvider>
+          <AuthTestConsumer onRender={(a) => { currentAuth = a; }} />
+        </AuthProvider>
+      );
+
+      // 1. تسجيل الدخول كمدير عام
+      localLoginSpy.mockResolvedValueOnce({
+        access_token: 'gm-token',
+        token_type: 'bearer',
+        expires_in: 28800,
+        user: { id: 'dev-user-00000000-0000-0000-0000-000000000001', email: 'dev@qemma.local' },
+      });
+      getAuthMeSpy.mockResolvedValueOnce({
+        id: 'dev-user-00000000-0000-0000-0000-000000000001',
+        email: 'dev@qemma.local',
+        roles: ['general_manager'],
+        permissions: ['inventory:stocktake:post', 'catalog:item:approve', 'inventory:stocktake:count'],
+      });
+
+      await act(async () => {
+        await currentAuth?.signInLocalDev('general_manager');
+      });
+
+      expect(currentAuth?.roles).toEqual(['general_manager']);
+      expect(currentAuth?.hasPermission('inventory:stocktake:post')).toBe(true);
+      expect(currentAuth?.hasPermission('catalog:item:approve')).toBe(true);
+
+      // 2. التبديل إلى أمين مخزن
+      localLoginSpy.mockResolvedValueOnce({
+        access_token: 'wh-token',
+        token_type: 'bearer',
+        expires_in: 28800,
+        user: { id: 'dev-user-00000000-0000-0000-0000-000000000002', email: 'wh@qemma.local' },
+      });
+      getAuthMeSpy.mockResolvedValueOnce({
+        id: 'dev-user-00000000-0000-0000-0000-000000000002',
+        email: 'wh@qemma.local',
+        roles: ['warehouse_manager'],
+        permissions: WAREHOUSE_PERMISSIONS,
+      });
+
+      await act(async () => {
+        await currentAuth?.signInLocalDev('warehouse_manager');
+      });
+
+      expect(currentAuth?.roles).toEqual(['warehouse_manager']);
+      // تسقط فوراً صلاحيات المدير العام
+      expect(currentAuth?.hasPermission('inventory:stocktake:post')).toBe(false);
+      expect(currentAuth?.hasPermission('catalog:item:approve')).toBe(false);
+      // وتبقى فقط صلاحيات أمين المخزن
+      expect(currentAuth?.hasPermission('inventory:stocktake:count')).toBe(true);
     });
   });
 });

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '@/features/auth/AuthContext';
 import {
   CatalogItemDetail,
   CatalogItemUpdateInput,
@@ -29,6 +30,7 @@ import {
 import { ClassificationBadge } from './ClassificationBadge';
 import { ApprovalStatusBadge } from './ApprovalStatusBadge';
 import { ApiError } from '@/lib/api';
+import { useDialog } from '@/components/feedback/DialogProvider';
 
 interface Props {
   itemId: string | null;
@@ -58,6 +60,14 @@ export const ItemDetailDrawer: React.FC<Props> = ({
   units,
   allApplicationLines,
 }) => {
+  // أذونات الخادم فقط: لا تظهر أزرار الإجراءات لمستخدم موثق بلا أدوار (Deny-by-default)
+  const { hasPermission } = useAuth();
+  const canApprove = hasPermission('catalog:item:approve');
+  const canSubmit = hasPermission('catalog:item:submit');
+  const canRequestRevision = hasPermission('catalog:item:request_revision') || hasPermission('catalog:item:create');
+  const canToggleActive = hasPermission('catalog:item:deactivate');
+  const canUpdate = hasPermission('catalog:item:update') || hasPermission('catalog:item:create');
+
   const [activeTab, setActiveTab] = useState<'details' | 'revisions' | 'history'>('details');
   const [item, setItem] = useState<CatalogItemDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -267,6 +277,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
       setItem((prev) => (prev ? { ...prev, ...updated } : null));
       setSuccessMsg('تم اعتماد الصنف بنجاح وتفعيله تشغيلياً في النظام.');
       onItemUpdated();
+      fetchItemHistory(item.id).then(setHistory).catch(() => {});
     } catch (err: unknown) {
       setError(err instanceof ApiError ? err.message : 'تعذر اعتماد الصنف.');
     } finally {
@@ -290,6 +301,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
       setRejectReason('');
       setSuccessMsg('تم تسجيل رفض الاعتماد مع توثيق السبب.');
       onItemUpdated();
+      fetchItemHistory(item.id).then(setHistory).catch(() => {});
     } catch (err: unknown) {
       setError(err instanceof ApiError ? err.message : 'تعذر رفض الصنف.');
     } finally {
@@ -307,6 +319,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
       setItem((prev) => (prev ? { ...prev, ...updated } : null));
       setSuccessMsg('تمت إعادة فتح الصنف كمسودة لتصحيح النواقص وإعادة التقديم.');
       onItemUpdated();
+      fetchItemHistory(item.id).then(setHistory).catch(() => {});
     } catch (err: unknown) {
       setError(err instanceof ApiError ? err.message : 'تعذر إعادة فتح الصنف.');
     } finally {
@@ -323,10 +336,11 @@ export const ItemDetailDrawer: React.FC<Props> = ({
       const updated = item.is_active
         ? await deactivateCatalogItem(item.id)
         : await reactivateCatalogItem(item.id);
-      setItem((prev) => (prev ? { ...prev, ...updated } : null));
+      setItem((prev) => (prev ? { ...prev, ...updated, is_active: updated.is_active } : null));
       setIsActive(updated.is_active);
       setSuccessMsg(updated.is_active ? 'تم تفعيل الصنف تشغيلياً.' : 'تم تعطيل الصنف من العمليات.');
       onItemUpdated();
+      fetchItemHistory(item.id).then(setHistory).catch(() => {});
     } catch (err: unknown) {
       setError(err instanceof ApiError ? err.message : 'تعذر تغيير حالة تفعيل الصنف.');
     } finally {
@@ -465,15 +479,17 @@ export const ItemDetailDrawer: React.FC<Props> = ({
     }
   };
 
+  const dialog = useDialog();
+
   const handleDeleteItem = async () => {
     if (!item) return;
-    if (
-      !window.confirm(
-        `هل أنت متأكد من حذف الصنف (${item.name_ar})؟ لن يُسمح بالحذف إذا كان الصنف مستخدماً في حركات سابقة أو قوالب إنتاج أو معتمداً.`
-      )
-    ) {
-      return;
-    }
+    const confirmed = await dialog.confirm({
+      title: `حذف الصنف «${item.name_ar}»؟`,
+      message: 'لن يتم الحذف إذا كان الصنف معتمداً أو مستخدماً في حركات أو قوالب إنتاج. الحذف لا يمكن التراجع عنه.',
+      confirmLabel: 'حذف الصنف',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
 
     setSaving(true);
     setError(null);
@@ -503,7 +519,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
             </h2>
             {item && (
               <div className="drawer-header__badges">
-                <code className="drawer-header__code">{item.code}</code>
+                {!isFinishedGood && <code className="drawer-header__code">{item.code}</code>}
                 <ApprovalStatusBadge
                   status={item.approval_status}
                   hasPendingRevision={item.has_pending_revision}
@@ -577,14 +593,16 @@ export const ItemDetailDrawer: React.FC<Props> = ({
               <div className="catalog-alert__text">
                 <strong>صنف مسودة (Draft):</strong> هذا الصنف قيد التجهيز ولا يمكن إدراجه في أوامر التشغيل أو الشراء حتى يتم اعتماده.
               </div>
-              <button
-                type="button"
-                onClick={handleSubmitForReview}
-                disabled={actionLoading}
-                className="btn-teal btn-sm"
-              >
-                {actionLoading ? 'جاري التقديم...' : '🚀 تقديم الصنف للاعتماد'}
-              </button>
+              {canSubmit && (
+                <button
+                  type="button"
+                  onClick={handleSubmitForReview}
+                  disabled={actionLoading}
+                  className="btn-teal btn-sm"
+                >
+                  {actionLoading ? 'جاري التقديم...' : '🚀 تقديم الصنف للاعتماد'}
+                </button>
+              )}
             </div>
           )}
 
@@ -596,22 +614,30 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                 {item?.submitted_by && ` (مقدم من: ${item.submitted_by})`}
               </div>
               <div className="drawer-alert__actions">
-                <button
-                  type="button"
-                  onClick={handleApprove}
-                  disabled={actionLoading}
-                  className="btn-teal btn-sm"
-                >
-                  {actionLoading ? 'جاري الاعتماد...' : '✅ اعتماد الصنف'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowRejectModal(true)}
-                  disabled={actionLoading}
-                  className="btn-danger btn-sm"
-                >
-                  ❌ رفض الاعتماد
-                </button>
+                {canApprove ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleApprove}
+                      disabled={actionLoading}
+                      className="btn-teal btn-sm"
+                    >
+                      {actionLoading ? 'جاري الاعتماد...' : '✅ اعتماد الصنف'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowRejectModal(true)}
+                      disabled={actionLoading}
+                      className="btn-danger btn-sm"
+                    >
+                      ❌ رفض الاعتماد
+                    </button>
+                  </>
+                ) : (
+                  <span className="badge-tag" style={{ background: '#fef3c7', color: '#92400e', padding: '0.4rem 0.8rem' }}>
+                    بانتظار اعتماد المدير العام
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -664,23 +690,27 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                 <strong>صنف معتمد ومحمي (Approved):</strong> متاح للتشغيل. البيانات الأساسية مقفلة للحفاظ على سلامة أوامر الإنتاج وحركات المخزن التاريخية.
               </div>
               <div className="drawer-alert__actions">
-                <button
-                  type="button"
-                  onClick={() => setShowRevisionModal(true)}
-                  disabled={actionLoading || item?.has_pending_revision}
-                  className="btn-secondary btn-sm"
-                  title={item?.has_pending_revision ? 'يوجد طلب تعديل مفتوح بالفعل' : 'تقديم طلب تعديل'}
-                >
-                  📝 طلب تعديل الصنف
-                </button>
-                <button
-                  type="button"
-                  onClick={handleToggleActive}
-                  disabled={actionLoading}
-                  className="btn-link btn-sm"
-                >
-                  {isActive ? 'تعطيل الصنف' : 'إعادة التفعيل'}
-                </button>
+                {canRequestRevision && (
+                  <button
+                    type="button"
+                    onClick={() => setShowRevisionModal(true)}
+                    disabled={actionLoading || item?.has_pending_revision}
+                    className="btn-secondary btn-sm"
+                    title={item?.has_pending_revision ? 'يوجد طلب تعديل مفتوح بالفعل' : 'تقديم طلب تعديل'}
+                  >
+                    📝 طلب تعديل الصنف
+                  </button>
+                )}
+                {canToggleActive && (
+                  <button
+                    type="button"
+                    onClick={handleToggleActive}
+                    disabled={actionLoading}
+                    className="btn-link btn-sm"
+                  >
+                    {isActive ? 'تعطيل الصنف' : 'إعادة التفعيل'}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -882,7 +912,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                       <span className="drawer-field__label">كود الصنف (الرمز الفريد)</span>
                       <input
                         type="text"
-                        value={item.code}
+                        value={isFinishedGood ? 'يُولَّد تلقائياً للمنتج التام' : item.code}
                         readOnly
                         className="drawer-input drawer-input--readonly"
                       />
@@ -1142,13 +1172,29 @@ export const ItemDetailDrawer: React.FC<Props> = ({
 
                 {/* أزرار الإجراءات السفلية */}
                 <div className="drawer-actions">
-                  {!isApproved && !isPendingReview && (
+                  {!isApproved && !isPendingReview && canUpdate && (
                     <button
                       type="submit"
                       disabled={saving}
                       className="btn-teal drawer-actions__save"
                     >
                       {saving ? 'جاري الحفظ...' : 'حفظ التعديلات'}
+                    </button>
+                  )}
+
+                  {canToggleActive && (
+                    <button
+                      type="button"
+                      onClick={() => void handleToggleActive()}
+                      disabled={actionLoading || saving}
+                      className={`btn-secondary ${isActive ? 'btn-danger' : 'btn-teal'}`}
+                      style={{ marginInlineStart: 'auto' }}
+                    >
+                      {actionLoading
+                        ? 'جاري التحديث...'
+                        : isActive
+                        ? '⛔ تعطيل الصنف'
+                        : '✓ تفعيل الصنف'}
                     </button>
                   )}
 
@@ -1313,22 +1359,26 @@ export const ItemDetailDrawer: React.FC<Props> = ({
 
                         {isPending && (
                           <div className="catalog-rev-item__actions">
-                            <button
-                              type="button"
-                              onClick={() => handleApproveRevision(rev.id)}
-                              disabled={actionLoading}
-                              className="btn-teal btn-sm"
-                            >
-                              ✅ اعتماد وتطبيق التعديل
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setRevisionRejectId(rev.id)}
-                              disabled={actionLoading}
-                              className="btn-danger btn-sm"
-                            >
-                              ❌ رفض التعديل
-                            </button>
+                            {canApprove && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleApproveRevision(rev.id)}
+                                  disabled={actionLoading}
+                                  className="btn-teal btn-sm"
+                                >
+                                  ✅ اعتماد وتطبيق التعديل
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setRevisionRejectId(rev.id)}
+                                  disabled={actionLoading}
+                                  className="btn-danger btn-sm"
+                                >
+                                  ❌ رفض التعديل
+                                </button>
+                              </>
+                            )}
                             <button
                               type="button"
                               onClick={() => handleCancelRevision(rev.id)}
@@ -1367,7 +1417,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                       <div className="catalog-timeline__content">
                         <div className="catalog-timeline__header">
                           <strong className="catalog-timeline__type">
-                            {event.event_type === 'legacy_backfill' ? 'اعتماد تاريخي استمراري (Phase 3.5 Backfill)' : event.event_type === 'created' ? 'إنشاء مسودة الصنف' : event.event_type === 'submitted' ? 'تقديم للمراجعة والاعتماد' : event.event_type === 'approved' ? 'اعتماد الصنف رسمياً' : event.event_type === 'rejected' ? 'رفض اعتماد الصنف' : event.event_type === 'reopened' ? 'إعادة فتح كمسودة' : event.event_type === 'deactivated' ? 'تعطيل الصنف' : event.event_type === 'reactivated' ? 'إعادة تفعيل الصنف' : event.event_type === 'revision_submitted' ? 'تقديم طلب تعديل' : event.event_type === 'revision_applied' ? 'اعتماد وتطبيق طلب تعديل' : event.event_type === 'revision_rejected' ? 'رفض طلب تعديل' : event.event_type}
+                            {event.event_type === 'legacy_backfill' ? 'اعتماد سابق (أصناف مسجلة قبل نظام الاعتماد)' : event.event_type === 'created' ? 'إنشاء مسودة الصنف' : event.event_type === 'submitted' ? 'تقديم للمراجعة والاعتماد' : event.event_type === 'approved' ? 'اعتماد الصنف رسمياً' : event.event_type === 'rejected' ? 'رفض اعتماد الصنف' : event.event_type === 'reopened' ? 'إعادة فتح كمسودة' : event.event_type === 'deactivated' ? 'تعطيل الصنف' : event.event_type === 'reactivated' ? 'إعادة تفعيل الصنف' : event.event_type === 'revision_submitted' ? 'تقديم طلب تعديل' : event.event_type === 'revision_applied' ? 'اعتماد وتطبيق طلب تعديل' : event.event_type === 'revision_rejected' ? 'رفض طلب تعديل' : event.event_type}
                           </strong>
                           <span className="catalog-timeline__date">
                             {new Date(event.created_at).toLocaleString('ar-EG')}

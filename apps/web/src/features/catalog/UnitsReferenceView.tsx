@@ -49,7 +49,7 @@ export const UnitsReferenceView: React.FC<Props> = ({
       <div className="catalog-alert catalog-alert--info" role="note">
         <span className="catalog-alert__icon" aria-hidden>📏</span>
         <div className="catalog-alert__text">
-          <strong>سياسة قياس المخزون (Read-Only Reference):</strong> جميع الحركات المخزنية تُقيد بالوحدة الأساسية للصنف دون تحويلات تلقائية ضمنية (No Implicit Unit Conversions)، حمايةً لدقة موازين المخازن ومنعاً لأخطاء التقريب.
+          <strong>سياسة وحدات القياس:</strong> جميع الحركات المخزنية تُقيد بالوحدة الأساسية للصنف دون أي تحويل تلقائي بين الوحدات، حمايةً لدقة موازين المخازن ومنعاً لأخطاء التقريب.
         </div>
       </div>
 

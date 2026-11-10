@@ -23,6 +23,11 @@ DEFAULT_ALLOWED_DEV_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_ALLOWED_TEST_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_APPROVED_DEV_DBS = {"qemma_erp_dev"}
 
+# مسار ترحيلات الإنتاج الوحيد (موافقة صاحب المشروع 2026-11-10): يضبطه سكربت النشر deploy/migrate.sh
+# فقط، بعد أن يكتب المسؤول اسم القاعدة واسمه يدوياً. أي متغير آخر وحده لا يفتح الترحيل.
+PROD_PIPELINE_ENV = "QEMMA_DEPLOY_PIPELINE"
+PROD_PIPELINE_MARKER = "vm-deploy-v1"
+
 FORBIDDEN_KEYWORDS = ["prod", "production", "live", "staging"]
 
 
@@ -151,6 +156,11 @@ def validate_migration_target(
     # 3. بيئة الإنتاج (Production / Prod)
     # ─────────────────────────────────────────────────────────────────────────
     if normalized_env in ("production", "prod"):
+        pipeline = (env_vars.get(PROD_PIPELINE_ENV) or "").strip()
+        confirm_db = (env_vars.get("PROD_MIGRATION_CONFIRM_DB") or "").strip().lower()
+        approved_by = (env_vars.get("PROD_MIGRATION_APPROVED_BY") or "").strip()
+        if pipeline == PROD_PIPELINE_MARKER and confirm_db == normalized_db and approved_by:
+            return host, db_name
         raise MigrationSecurityError(
             "حظر أمني قاطع: ترحيلات بيئة الإنتاج محظورة تماماً عبر مسار Alembic المحلي.\n"
             "ممنوع تشغيل ترحيلات الإنتاج محلياً بصرف النظر عن أي متغيرات بيئية "

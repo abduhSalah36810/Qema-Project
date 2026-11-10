@@ -99,6 +99,10 @@ export function getAccessToken(): string | null {
 export interface UserIdentity {
   id: string;
   email: string | null;
+  /** الأدوار المعتمدة خادمياً كما يعيدها GET /api/v1/auth/me */
+  roles?: string[];
+  /** الصلاحيات الفعلية المشتقة خادمياً — مصدر الحقيقة الوحيد للواجهة */
+  permissions?: string[];
 }
 
 /**
@@ -246,12 +250,20 @@ export interface LocalLoginResponse {
   user: UserIdentity;
 }
 
+export interface LocalLoginOptions {
+  role?: string;
+  timeoutMs?: number;
+}
+
 /**
  * استدعاء مسار تسجيل الدخول المحلي للتطوير POST /api/v1/auth/local-login
  */
-export async function localLogin(options?: { timeoutMs?: number }): Promise<LocalLoginResponse> {
+export async function localLogin(options?: LocalLoginOptions): Promise<LocalLoginResponse> {
+  const hasRole = Boolean(options?.role);
   return apiRequest<LocalLoginResponse>('/api/v1/auth/local-login', {
     method: 'POST',
+    headers: hasRole ? { 'Content-Type': 'application/json' } : undefined,
+    body: hasRole ? JSON.stringify({ role: options?.role }) : undefined,
     timeoutMs: options?.timeoutMs,
   });
 }

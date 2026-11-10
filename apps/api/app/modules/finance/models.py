@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Numeric, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
@@ -85,7 +86,7 @@ class SupplierInvoice(Base):
     __table_args__ = (
         UniqueConstraint("supplier_id", "invoice_number", name="uq_supplier_invoice_number"),
         CheckConstraint("invoice_total > 0", name="ck_supplier_invoice_total_positive"),
-        CheckConstraint("status in ('awaiting_receipt', 'received', 'cancelled')", name="ck_supplier_invoice_status"),
+        CheckConstraint("status in ('awaiting_receipt', 'partially_received', 'received', 'cancelled')", name="ck_supplier_invoice_status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -101,6 +102,8 @@ class SupplierInvoice(Base):
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
+    lines: Mapped[list["SupplierInvoiceLine"]] = relationship("SupplierInvoiceLine", cascade="all, delete-orphan")
+
 
 class SupplierInvoiceLine(Base):
     __tablename__ = "supplier_invoice_lines"
@@ -108,6 +111,7 @@ class SupplierInvoiceLine(Base):
         CheckConstraint("invoiced_quantity > 0", name="ck_supplier_invoice_line_quantity_positive"),
         CheckConstraint("received_quantity >= 0", name="ck_supplier_invoice_line_received_nonnegative"),
         CheckConstraint("unit_price >= 0", name="ck_supplier_invoice_line_price_nonnegative"),
+        CheckConstraint("discount_amount >= 0", name="ck_supplier_invoice_line_discount_nonnegative"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -117,6 +121,7 @@ class SupplierInvoiceLine(Base):
     invoiced_quantity: Mapped[float] = mapped_column(Float, nullable=False)
     received_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     unit_price: Mapped[object] = mapped_column(Numeric(14, 4), nullable=False)
+    discount_amount: Mapped[object] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
 
@@ -137,3 +142,104 @@ class SupplierPayment(Base):
     decided_by: Mapped[str | None] = mapped_column(String(64))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+# ─── الحسابات والدفتر العام (Chart of Accounts & General Ledger) ─────────────
+
+class Account(Base):
+    """دليل الحسابات الموحد لمصنع القمة."""
+    __tablename__ = "accounts"
+    __table_args__ = (
+        CheckConstraint("account_type in ('asset', 'liability', 'equity', 'revenue', 'expense')", name="ck_accounts_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    name_ar: Mapped[str] = mapped_column(String(128), nullable=False)
+    account_type: Mapped[str] = mapped_column(String(32), nullable=False)  # asset, liability, equity, revenue, expense
+    parent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    lines: Mapped[list["JournalEntryLine"]] = relationship("JournalEntryLine", back_populates="account")
+
+
+class JournalEntry(Base):
+    """قيد اليومية العامة المزدوج (Double-Entry Journal Entry)."""
+    __tablename__ = "journal_entries"
+    __table_args__ = (
+        CheckConstraint("status in ('draft', 'submitted', 'pending_approval', 'approved', 'posted', 'reversed')", name="ck_journal_entries_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    entry_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    entry_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    source_doc_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_doc_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="posted", nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(64))
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reversed_entry_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("journal_entries.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    lines: Mapped[list["JournalEntryLine"]] = relationship("JournalEntryLine", back_populates="entry", cascade="all, delete-orphan")
+
+
+class JournalEntryLine(Base):
+    """طرف القيد المحاسبي (مدين أو دائن)."""
+    __tablename__ = "journal_entry_lines"
+    __table_args__ = (
+        CheckConstraint("debit >= 0", name="ck_journal_line_debit_positive"),
+        CheckConstraint("credit >= 0", name="ck_journal_line_credit_positive"),
+        CheckConstraint("(debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0)", name="ck_journal_line_either_debit_or_credit"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    entry_id: Mapped[str] = mapped_column(String(36), ForeignKey("journal_entries.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id: Mapped[str] = mapped_column(String(36), ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
+    debit: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    credit: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    entry: Mapped["JournalEntry"] = relationship("JournalEntry", back_populates="lines")
+    account: Mapped["Account"] = relationship("Account", back_populates="lines")
+
+
+class CustodySettlement(Base):
+    """تسوية العهدة النقدية والمطابقة الرياضية المحكمة."""
+    __tablename__ = "custody_settlements"
+    __table_args__ = (
+        CheckConstraint("status in ('pending', 'approved', 'rejected')", name="ck_custody_settlement_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    settlement_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    custody_account_id: Mapped[str] = mapped_column(String(36), ForeignKey("cash_accounts.id"), nullable=False, index=True)
+    original_custody_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    approved_expenses_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    returned_cash_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    remaining_unsettled_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(64))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    custody_account: Mapped["CashAccount"] = relationship("CashAccount")
+
+
+
+class SupplierReceipt(Base):
+    """مستند استلام فعلي (كلي أو جزئي) لبنود فاتورة مورد."""
+    __tablename__ = "supplier_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    receipt_number: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    invoice_id: Mapped[str] = mapped_column(String(36), ForeignKey("supplier_invoices.id"), nullable=False, index=True)
+    received_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    total_cost: Mapped[object] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")

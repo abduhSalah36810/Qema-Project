@@ -162,7 +162,7 @@ def verify_local_jwt(token: str, request_id: str = "-") -> AuthenticatedUser:
     - يتحقق من التوقيع بالخوارزمية المتماثلة HS256 والمفتاح السري المحلي.
     - يتحقق من الادعاءات الإلزامية: iss, aud, exp, iat, sub.
     """
-    if not settings.dev_auth_enabled or settings.app_env.lower() != "development":
+    if not settings.dev_auth_enabled or settings.app_env.lower() not in ("development", "testing"):
         logger.warning("local_auth_rejected reason=disabled_or_non_dev request_id=%s", request_id)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

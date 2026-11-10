@@ -185,7 +185,7 @@ export function PaymentsCollectionsView() {
                             +{Number(doc.amount).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
                           </strong>
                         </td>
-                        <td>{doc.description}</td>
+                        <td className="cell-wrap">{doc.description}</td>
                         <td>{new Date(doc.occurred_at).toLocaleDateString('ar-EG')}</td>
                         <td>
                           <span

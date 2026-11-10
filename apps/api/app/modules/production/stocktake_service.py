@@ -40,6 +40,7 @@ from app.modules.production.schemas import (
     StocktakeReviewRequest,
 )
 from app.modules.production.service import lock_stock_balance
+from app.modules.finance.ledger_service import get_weighted_average_cost, post_journal_entry
 
 
 async def generate_stocktake_session_number(session: AsyncSession) -> str:
@@ -63,8 +64,10 @@ async def generate_stocktake_session_number(session: AsyncSession) -> str:
     return f"{prefix}{seq:04d}"
 
 
-async def get_live_warehouse_balance(session: AsyncSession, warehouse_id: str, item_id: str) -> float:
-    """احتساب الرصيد الدفتري الفعلي الحاضر للصنف داخل المخزن من واقع دفاتر الأستاذ."""
+async def get_live_warehouse_balance(
+    session: AsyncSession, warehouse_id: str, item_id: str, bucket_reference: str | None = None,
+) -> float:
+    """الرصيد الدفتري الحالي للصنف داخل المخزن (ولحاوية الملكية المحددة إن وُجدت) من دفتر الحركات."""
     stmt = (
         select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
         .where(
@@ -73,8 +76,19 @@ async def get_live_warehouse_balance(session: AsyncSession, warehouse_id: str, i
             StockLedgerEntry.location_type == "warehouse",
         )
     )
+    if bucket_reference is None:
+        stmt = stmt.where(StockLedgerEntry.bucket_reference.is_(None))
+    else:
+        stmt = stmt.where(StockLedgerEntry.bucket_reference == bucket_reference)
     val = (await session.execute(stmt)).scalar()
     return round(float(val or 0.0), 4)
+
+
+INVENTORY_GL_BY_WAREHOUSE = {
+    "main_raw_materials": "1210",
+    "work_in_progress": "1220",
+    "finished_goods": "1230",
+}
 
 
 async def create_stocktake_session(
@@ -123,15 +137,25 @@ async def create_stocktake_session(
 
     # 3. تثبيت لقطة الرصيد الدفتري لكل صنف من واقع قيود الأستاذ
     totals_stmt = (
-        select(StockLedgerEntry.item_id, func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
+        select(
+            StockLedgerEntry.item_id,
+            StockLedgerEntry.bucket_reference,
+            func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0),
+        )
         .where(
             StockLedgerEntry.warehouse_id == wh.id,
             StockLedgerEntry.location_type == "warehouse",
         )
-        .group_by(StockLedgerEntry.item_id)
+        .group_by(StockLedgerEntry.item_id, StockLedgerEntry.bucket_reference)
     )
     totals_res = (await session.execute(totals_stmt)).all()
-    totals_map = {item_id: round(float(qty), 4) for item_id, qty in totals_res}
+    # الرصيد الدفتري لكل (صنف، حاوية ملكية) حتى تُسوى الفروقات في نفس الحاوية التي يقرأ منها التسليم والصرف
+    buckets_by_item: dict[str, dict[str | None, float]] = {}
+    for item_id, bucket, qty in totals_res:
+        qty = round(float(qty or 0.0), 4)
+        if qty != 0.0:
+            buckets_by_item.setdefault(item_id, {})[bucket] = qty
+    default_bucket = "factory_brand" if wh.code == "finished_goods" else None
 
     session_number = await generate_stocktake_session_number(session)
     now = utc_now()
@@ -153,20 +177,21 @@ async def create_stocktake_session(
     session.add(stocktake)
 
     for it in items:
-        book_qty = totals_map.get(it.id, 0.0)
-        line = StocktakeLine(
-            id=str(uuid.uuid4()),
-            stocktake_id=stocktake.id,
-            item_id=it.id,
-            unit_id=it.unit_id,
-            book_quantity=book_qty,
-            counted_quantity=None,  # لم يُعد بعد
-            variance=None,
-            status="uncounted",
-            notes="",
-            created_at=now,
-        )
-        session.add(line)
+        item_buckets = buckets_by_item.get(it.id) or {default_bucket: 0.0}
+        for bucket, book_qty in sorted(item_buckets.items(), key=lambda kv: kv[0] or ""):
+            session.add(StocktakeLine(
+                id=str(uuid.uuid4()),
+                stocktake_id=stocktake.id,
+                item_id=it.id,
+                unit_id=it.unit_id,
+                bucket_reference=bucket,
+                book_quantity=book_qty,
+                counted_quantity=None,  # لم يُعد بعد
+                variance=None,
+                status="uncounted",
+                notes="",
+                created_at=now,
+            ))
 
     audit = StocktakeAuditLog(
         id=str(uuid.uuid4()),
@@ -386,6 +411,23 @@ async def review_stocktake(
     now = utc_now()
 
     if data.decision == "approve":
+        if (stocktake.created_by and stocktake.created_by == reviewer_id) or (getattr(stocktake, "submitted_by", None) and stocktake.submitted_by == reviewer_id):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="لا يجوز لمنشئ أو مقدم جلسة الجرد اعتمادها بنفسه وفق قواعد الفصل الرقابي (Maker-Checker).",
+            )
+        if any(line.counter_id and line.counter_id == reviewer_id for line in stocktake.lines):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="لا يجوز لمن قام بعد الأصناف اعتماد نتائج الجرد بنفسه.",
+            )
+        pending_recount = [line for line in stocktake.lines if line.status == "recount_required"]
+        if pending_recount:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"يوجد ({len(pending_recount)}) صنف مطلوب إعادة عده؛ لا يمكن الاعتماد قبل تسجيل إعادة العد.",
+            )
+
         stocktake.status = "approved"
         stocktake.approved_by = reviewer_id
         stocktake.approved_at = now
@@ -505,6 +547,12 @@ async def post_stocktake_adjustments(
             detail=f"لا يمكن ترحيل الجلسة؛ يلزم اعتمادها أولاً من المدير العام. الحالة الحالية: '{stocktake.status}'.",
         )
 
+    if (stocktake.created_by and stocktake.created_by == poster_id) or (getattr(stocktake, "submitted_by", None) and stocktake.submitted_by == poster_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="لا يجوز لمنشئ أو مقدم جلسة الجرد ترحيل قيود التسوية بنفسه وفق قواعد الفصل الرقابي (Maker-Checker).",
+        )
+
     # تصفية الأسطر التي تم عدها وتتطلب تسوية
     lines_with_variance = [
         l for l in stocktake.lines
@@ -512,13 +560,15 @@ async def post_stocktake_adjustments(
     ]
 
     # قفل الأصناف بترتيب تصاعدي لمنع Deadlock
-    sorted_lines = sorted(lines_with_variance, key=lambda l: l.item_id)
-    for line in sorted_lines:
-        await lock_stock_balance(session, line.item_id, stocktake.warehouse_id)
+    sorted_lines = sorted(lines_with_variance, key=lambda l: (l.item_id, l.bucket_reference or ""))
+    for item_id in sorted({line.item_id for line in sorted_lines}):
+        await lock_stock_balance(session, item_id, stocktake.warehouse_id)
 
     # فحص سلامة اللقطة الدفترية (Snapshot Consistency Check)
     for line in sorted_lines:
-        current_live_balance = await get_live_warehouse_balance(session, stocktake.warehouse_id, line.item_id)
+        current_live_balance = await get_live_warehouse_balance(
+            session, stocktake.warehouse_id, line.item_id, line.bucket_reference,
+        )
         if round(current_live_balance, 4) != round(line.book_quantity, 4):
             item_name = line.item.name_ar if line.item else line.item_id
             raise HTTPException(
@@ -536,8 +586,19 @@ async def post_stocktake_adjustments(
     shortage_count = 0
     surplus_count = 0
 
+    warehouse = await session.get(Warehouse, stocktake.warehouse_id)
+    inventory_account = INVENTORY_GL_BY_WAREHOUSE.get(warehouse.code if warehouse else "", "1210")
+    shortage_cost = Decimal("0.00")
+    surplus_cost = Decimal("0.00")
+
     for line in sorted_lines:
         var = round(line.variance, 4)
+        unit_cost = await get_weighted_average_cost(session, line.item_id, stocktake.warehouse_id)
+        line_cost = (Decimal(str(abs(var))) * unit_cost).quantize(Decimal("0.01"))
+        if var < 0:
+            shortage_cost += line_cost
+        elif var > 0:
+            surplus_cost += line_cost
         if var < 0:
             # عجز: قيد سالب
             shortage_count += 1
@@ -553,6 +614,9 @@ async def post_stocktake_adjustments(
                 entry_type="stocktake_shortage",
                 created_at=now,
                 created_by=poster_id,
+                bucket_reference=line.bucket_reference,
+                unit_cost=unit_cost,
+                total_cost=-line_cost,
             )
             session.add(entry)
             created_entries.append(entry.id)
@@ -571,9 +635,38 @@ async def post_stocktake_adjustments(
                 entry_type="stocktake_surplus",
                 created_at=now,
                 created_by=poster_id,
+                bucket_reference=line.bucket_reference,
+                unit_cost=unit_cost,
+                total_cost=line_cost,
             )
             session.add(entry)
             created_entries.append(entry.id)
+
+    # قيود اليومية لتسويات الجرد بمتوسط التكلفة (في نفس المعاملة)
+    if shortage_cost > Decimal("0.00"):
+        await post_journal_entry(
+            session,
+            source_doc_type="stocktake_shortage",
+            source_doc_id=stocktake.id,
+            description=f"عجز جرد {stocktake.session_number}",
+            lines=[
+                {"account_code": "5200", "debit": shortage_cost, "credit": 0, "description": "عجز مخزون بالجرد"},
+                {"account_code": inventory_account, "debit": 0, "credit": shortage_cost, "description": "تخفيض المخزون بالعجز"},
+            ],
+            user_id=poster_id,
+        )
+    if surplus_cost > Decimal("0.00"):
+        await post_journal_entry(
+            session,
+            source_doc_type="stocktake_surplus",
+            source_doc_id=stocktake.id,
+            description=f"زيادة جرد {stocktake.session_number}",
+            lines=[
+                {"account_code": inventory_account, "debit": surplus_cost, "credit": 0, "description": "زيادة المخزون بالجرد"},
+                {"account_code": "5200", "debit": 0, "credit": surplus_cost, "description": "زيادة مخزون بالجرد"},
+            ],
+            user_id=poster_id,
+        )
 
     # تحديث حالة الجلسة إلى مرحلة
     stocktake.status = "posted"

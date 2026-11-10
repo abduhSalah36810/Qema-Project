@@ -44,9 +44,28 @@ async def test_create_cash_document_rejects_duplicate_source_reference():
         source_reference="payment-123",
     )
     with pytest.raises(HTTPException) as exc_info:
-        await create_cash_document(session, payload, user_id="user-1")
+        await create_cash_document(session, payload, user_id="user-1", allow_system_source=True)
     assert exc_info.value.status_code == 409
     assert "تسجيل" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_generic_cash_document_cannot_impersonate_system_sources():
+    """شاشة المستند النقدي العام لا تُنشئ تحصيل عميل أو دفعة مورد أو رواتب (تُنشأ من شاشاتها فقط)."""
+    session = AsyncMock()
+    payload = CashDocumentCreate(
+        document_type="income",
+        to_account_id="treasury-id",
+        amount=Decimal("100.00"),
+        description="محاولة تخفيض ذمة عميل دون إيصال",
+        occurred_at=datetime.now(timezone.utc),
+        source_system="customer_payment",
+        source_reference="fake-payment",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await create_cash_document(session, payload, user_id="user-1")
+    assert exc_info.value.status_code == 422
+    session.add.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -78,7 +97,8 @@ async def test_decide_cash_document_rejects_insufficient_balance():
 
 
 @pytest.mark.asyncio
-async def test_decide_cash_document_approves_when_balance_sufficient():
+@patch("app.modules.finance.service.post_journal_entry", new_callable=AsyncMock)
+async def test_decide_cash_document_approves_when_balance_sufficient(mock_post_je):
     session = AsyncMock()
     session.add = MagicMock()
     doc = CashDocument(
@@ -108,6 +128,7 @@ async def test_decide_cash_document_approves_when_balance_sufficient():
     assert isinstance(ledger_entry, CashLedgerEntry)
     assert ledger_entry.amount == -Decimal("500.00")
     session.commit.assert_awaited_once()
+    mock_post_je.assert_awaited_once()
 
 
 @pytest.mark.asyncio

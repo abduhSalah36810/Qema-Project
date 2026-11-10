@@ -1,0 +1,345 @@
+/**
+ * أنماط صندوق المهام التشغيلية الموحد (Task Inbox Styles)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * واجهة عربية RTL متناسقة مع هوية نظام مصنع القمة ومبنية على تصميم حديث ونظيف.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+.task-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+}
+
+/* ── ترويسة الصندوق ── */
+.inbox-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  background: #ffffff;
+  padding: 1.5rem 1.75rem;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.inbox-header__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.inbox-header__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #0f766e;
+  background: #ccfbf1;
+  padding: 0.2rem 0.65rem;
+  border-radius: 9999px;
+  width: fit-content;
+}
+
+.inbox-header__title {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.inbox-header__subtitle {
+  margin: 0;
+  font-size: 0.92rem;
+  color: #64748b;
+}
+
+/* ── مؤشرات المهام (KPIs) ── */
+.inbox-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.inbox-kpi {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1.1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.inbox-kpi:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.06);
+}
+
+.inbox-kpi__label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.inbox-kpi__value {
+  font-size: 1.85rem;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.inbox-kpi__hint {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.inbox-kpi--urgent {
+  border-color: #fecdd3;
+  background: #fff1f2;
+}
+
+.inbox-kpi--urgent .inbox-kpi__value {
+  color: #e11d48;
+}
+
+.inbox-kpi--gov {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.inbox-kpi--gov .inbox-kpi__value {
+  color: #ea580c;
+}
+
+/* ── شريط الأدوات ── */
+.inbox-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.inbox-toolbar__tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.inbox-tab {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  font-weight: 600;
+  font-size: 0.88rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.inbox-tab:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.inbox-tab--active {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+.inbox-tab--urgent.inbox-tab--active {
+  background: #e11d48;
+  border-color: #e11d48;
+  color: #ffffff;
+}
+
+.inbox-toolbar__search {
+  flex: 1;
+  max-width: 380px;
+  min-width: 240px;
+}
+
+.inbox-toolbar__search .search-input {
+  width: 100%;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  font-size: 0.88rem;
+}
+
+/* ── قائمة المهام (Grid / Feed) ── */
+.inbox-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.inbox-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: all 0.15s ease;
+}
+
+.inbox-card:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.06);
+}
+
+.inbox-card--urgent {
+  border-right: 5px solid #e11d48;
+}
+
+.inbox-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.inbox-card__tags {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tag {
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+}
+
+.tag--red {
+  background: #ffe4e6;
+  color: #e11d48;
+}
+
+.tag--blue {
+  background: #e0f2fe;
+  color: #0284c7;
+}
+
+.tag--slate {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.inbox-card__ref {
+  font-family: monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #0f766e;
+  background: #f0fdfa;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+}
+
+.inbox-card__status {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+  background: #f8fafc;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.inbox-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.inbox-card__title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.inbox-card__desc {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.inbox-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #f1f5f9;
+  flex-wrap: wrap;
+}
+
+.inbox-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  font-size: 0.82rem;
+  color: #64748b;
+  flex-wrap: wrap;
+}
+
+.inbox-card__action {
+  font-weight: 700;
+  font-size: 0.88rem;
+  padding: 0.45rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+/* ── حالة التحميل والخطأ والفراغ ── */
+.inbox-loading,
+.inbox-empty {
+  background: #ffffff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 3.5rem 2rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.inbox-empty__icon {
+  font-size: 3rem;
+  margin-bottom: 0.25rem;
+}
+
+.inbox-empty h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.inbox-empty p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.92rem;
+  max-width: 450px;
+}
+

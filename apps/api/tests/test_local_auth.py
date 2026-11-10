@@ -34,7 +34,7 @@ from app.core.auth import (
     verify_token,
 )
 from app.core.config import Settings, settings
-from app.core.permissions import require_permission
+from app.core.permissions import ROLE_PERMISSIONS_MAP, get_user_roles, require_permission
 from app.main import app
 
 STRONG_TEST_SECRET = "super-secret-development-key-that-is-at-least-32-chars-long!"
@@ -286,3 +286,251 @@ async def test_auth_config_endpoint(enable_dev_auth):
     data = response.json()
     assert data["dev_auth_enabled"] is True
     assert data["app_env"] == "development"
+
+
+# ─── 5. اختبارات الأمان الحرجة للتبديل بين الأدوار المحلية (Task 05.2) ─────────
+
+@pytest.mark.asyncio
+async def test_local_login_general_manager_produces_only_gm_role_and_permissions(enable_dev_auth):
+    """1. تسجيل الدخول المحلي كمدير عام ينتج حصراً دور GM وصلاحياته الفعلية."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/auth/local-login", json={"role": "general_manager"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user"]["id"] == LOCAL_DEV_USER_ID
+    assert data["user"]["email"] == "dev@qemma.local"
+
+    decoded = jwt.decode(
+        data["access_token"],
+        key=STRONG_TEST_SECRET,
+        algorithms=["HS256"],
+        audience="authenticated",
+        issuer="qemma-local-auth",
+    )
+    assert decoded["role"] == "general_manager"
+    assert decoded["roles"] == ["general_manager"]
+
+    user = verify_local_jwt(data["access_token"])
+    roles = await get_user_roles(user)
+    assert roles == {"general_manager"}
+
+    gm_perms = ROLE_PERMISSIONS_MAP["general_manager"]
+    assert "inventory:stocktake:post" in gm_perms
+    assert "inventory:stocktake:approve" in gm_perms
+    assert "catalog:item:approve" in gm_perms
+
+
+@pytest.mark.asyncio
+async def test_local_login_warehouse_manager_produces_only_warehouse_role_and_permissions(enable_dev_auth):
+    """2. تسجيل الدخول المحلي كأمين مخزن ينتج حصراً دور أمين المخزن وصلاحياته فقط."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/auth/local-login", json={"role": "warehouse_manager"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user"]["id"] == "dev-user-00000000-0000-0000-0000-000000000002"
+    assert data["user"]["email"] == "wh@qemma.local"
+
+    decoded = jwt.decode(
+        data["access_token"],
+        key=STRONG_TEST_SECRET,
+        algorithms=["HS256"],
+        audience="authenticated",
+        issuer="qemma-local-auth",
+    )
+    assert decoded["role"] == "warehouse_manager"
+    assert decoded["roles"] == ["warehouse_manager"]
+
+    user = verify_local_jwt(data["access_token"])
+    roles = await get_user_roles(user)
+    assert roles == {"warehouse_manager"}
+
+    wh_perms = ROLE_PERMISSIONS_MAP["warehouse_manager"]
+    assert "inventory:stocktake:count" in wh_perms
+    assert "inventory:stocktake:submit" in wh_perms
+    assert "warehouse:dispatch" in wh_perms
+    assert "warehouse:finished_goods:receive" in wh_perms
+    assert "suppliers:invoices:create" in wh_perms
+    # محظورات أمين المخزن
+    assert "inventory:stocktake:post" not in wh_perms
+    assert "inventory:stocktake:approve" not in wh_perms
+    assert "catalog:item:approve" not in wh_perms
+    assert "production:wip:receive" not in wh_perms
+    assert "production:orders:create" not in wh_perms
+    assert "customers:orders:create" not in wh_perms
+    assert "pricing:manage" not in wh_perms
+
+
+@pytest.mark.asyncio
+async def test_local_login_finance_manager_produces_only_finance_role_and_permissions(enable_dev_auth):
+    """3. تسجيل الدخول كمدير مالي ينتج حصراً دور مدير المالية وصلاحياته فقط."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/auth/local-login", json={"role": "finance_manager"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user"]["id"] == "dev-user-00000000-0000-0000-0000-000000000003"
+    assert data["user"]["email"] == "fin@qemma.local"
+
+    decoded = jwt.decode(
+        data["access_token"],
+        key=STRONG_TEST_SECRET,
+        algorithms=["HS256"],
+        audience="authenticated",
+        issuer="qemma-local-auth",
+    )
+    assert decoded["role"] == "finance_manager"
+    assert decoded["roles"] == ["finance_manager"]
+
+    user = verify_local_jwt(data["access_token"])
+    roles = await get_user_roles(user)
+    assert roles == {"finance_manager"}
+
+    fin_perms = ROLE_PERMISSIONS_MAP["finance_manager"]
+    assert "finance:expenses:manage" in fin_perms
+    assert "finance:payroll:manage" in fin_perms
+    assert "finance:reports:view" in fin_perms
+    # محظورات المدير المالي
+    assert "warehouse:finished_goods:receive" not in fin_perms
+    assert "production:wip:receive" not in fin_perms
+    assert "suppliers:invoices:create" not in fin_perms
+    assert "catalog:item:create" not in fin_perms
+    assert "inventory:stocktake:post" not in fin_perms
+    assert "production:templates:manage" not in fin_perms
+
+
+@pytest.mark.asyncio
+async def test_local_login_invalid_role_rejected(enable_dev_auth):
+    """4. رفض أي دور خارج القائمة البيضاء المعتمدة برمز 400 Bad Request."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/auth/local-login", json={"role": "superadmin"})
+
+    assert response.status_code == 400
+    assert "غير صالح" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_local_login_rejects_arbitrary_permission_injection(enable_dev_auth):
+    """5. حظر أي محاولة لحقن صلاحيات أو ادعاءات عشوائية من جانب العميل."""
+    malicious_body = {
+        "role": "warehouse_manager",
+        "permissions": ["*"],
+        "admin": True,
+        "is_superuser": True,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/auth/local-login", json=malicious_body)
+
+    assert response.status_code == 200
+    token = response.json()["access_token"]
+    decoded = jwt.decode(
+        token,
+        key=STRONG_TEST_SECRET,
+        algorithms=["HS256"],
+        audience="authenticated",
+        issuer="qemma-local-auth",
+    )
+    assert "permissions" not in decoded
+    assert "admin" not in decoded
+    assert "is_superuser" not in decoded
+    assert decoded["role"] == "warehouse_manager"
+
+
+@pytest.mark.asyncio
+async def test_production_configuration_cannot_enable_local_role_switching():
+    """6. إعدادات الإنتاج تحظر مسار تسجيل الدخول المحلي مهما كانت معاملات الطلب."""
+    with patch.object(settings, "app_env", "production"), \
+         patch.object(settings, "dev_auth_enabled", True):
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp_body = await client.post("/api/v1/auth/local-login", json={"role": "general_manager"})
+            resp_query = await client.post("/api/v1/auth/local-login?role=general_manager")
+
+        assert resp_body.status_code == 404
+        assert resp_query.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_warehouse_manager_cannot_post_stocktake(enable_dev_auth):
+    """8. أمين المخزن لا يملك صلاحية ترحيل الجرد المخزني ويُحظر بـ 403 Forbidden."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        login_resp = await client.post("/api/v1/auth/local-login", json={"role": "warehouse_manager"})
+        token = login_resp.json()["access_token"]
+
+        response = await client.post(
+            "/api/v1/inventory/stocktakes/stk-test-id/post",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
+    assert "الصلاحية" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_finance_manager_cannot_perform_unauthorized_inventory_operations(enable_dev_auth):
+    """9. المدير المالي لا يملك صلاحية إنشاء جلسات جرد أو إدارة المخزون ويُحظر بـ 403 Forbidden."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        login_resp = await client.post("/api/v1/auth/local-login", json={"role": "finance_manager"})
+        token = login_resp.json()["access_token"]
+
+        response = await client.post(
+            "/api/v1/inventory/stocktakes",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"warehouse_id": "wh-raw", "scope_type": "full_warehouse", "counting_date": "2026-11-02"},
+        )
+
+    assert response.status_code == 403
+    assert "الصلاحية" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_backend_authorization_effective_even_if_frontend_bypassed(enable_dev_auth):
+    """10. التحقق الخادمي في الـ API هو السلطة المطلقة حتى لو تم تجاوز قيود الواجهة."""
+    from app.core.permissions import require_permission
+
+    dep = require_permission("inventory:stocktake:approve")
+
+    wh_user = AuthenticatedUser(
+        id="dev-user-00000000-0000-0000-0000-000000000002",
+        email="wh@qemma.local",
+        claims={"role": "warehouse_manager", "roles": ["warehouse_manager"]},
+    )
+
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await dep(current_user=wh_user, db=None)
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_switching_roles_replaces_token_and_does_not_retain_permissions(enable_dev_auth):
+    """11. تبديل الأدوار يولد توكن وهوية جديدة مستقلة تماماً ولا يحتفظ بصلاحيات الجلسة السابقة."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp_gm = await client.post("/api/v1/auth/local-login", json={"role": "general_manager"})
+        resp_wh = await client.post("/api/v1/auth/local-login", json={"role": "warehouse_manager"})
+
+    gm_data = resp_gm.json()
+    wh_data = resp_wh.json()
+
+    assert gm_data["user"]["id"] != wh_data["user"]["id"]
+    assert gm_data["user"]["email"] != wh_data["user"]["email"]
+    assert gm_data["access_token"] != wh_data["access_token"]
+
+    user_wh = verify_local_jwt(wh_data["access_token"])
+    roles_wh = await get_user_roles(user_wh)
+    assert roles_wh == {"warehouse_manager"}
+    assert "general_manager" not in roles_wh
+
+
+@pytest.mark.asyncio
+async def test_verify_stocktake_same_user_approval_behavior(enable_dev_auth):
+    """التحقق الصريح من سلوك النظام الحالي بخصوص اعتماد المستخدم لجلسته الجردية بنفسه."""
+    from app.modules.production.stocktake_service import review_stocktake
+    import inspect
+
+    sig = inspect.signature(review_stocktake)
+    assert "reviewer_id" in sig.parameters
+    # النظام الحالي يعتمد على التحقق من الصلاحيات (require_permission)
+    # دون فرض قيد إضافي يمنع المدير العام من اعتماد جرد شارك في إنشائه.

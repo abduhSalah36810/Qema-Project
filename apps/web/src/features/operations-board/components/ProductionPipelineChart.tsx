@@ -82,7 +82,7 @@ export function ProductionPipelineChart({
       id: 'materials',
       number: '١',
       name: 'صرف وتجهيز الخامات',
-      sub: 'تحت التشغيل (WIP)',
+      sub: 'خامات بالورشة',
       icon: '🧵',
       count: stagesMap.materials.count,
       totalPieces: stagesMap.materials.pieces,
@@ -150,7 +150,8 @@ export function ProductionPipelineChart({
     },
   ];
 
-  const totalActiveOrders = orderList.length;
+  // الأوامر المغلقة ليست نشطة
+  const totalActiveOrders = orderList.filter((o) => o.status !== 'closed').length;
 
   return (
     <section

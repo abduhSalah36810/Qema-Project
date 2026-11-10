@@ -108,9 +108,12 @@ class CustomerOrderLineRead(BaseModel):
     delivered_quantity: float
     production_orders: list["CustomerLinkedProductionOrderRead"]
     notes: str
+    returned_quantity: float = 0.0
+    remaining_quantity: float = 0.0
 
 
 class CustomerDeliveryLineRead(BaseModel):
+    id: str | None = None
     order_line_id: str
     product_name: str
     variant_info: str
@@ -135,6 +138,8 @@ class CustomerPaymentRead(BaseModel):
     reference: str
     notes: str
     recorded_by: str
+    status: str = "approved"
+    cash_document_id: str | None = None
 
 
 class CustomerOrderRead(BaseModel):
@@ -152,6 +157,11 @@ class CustomerOrderRead(BaseModel):
     paid_amount: float
     balance_amount: float
     lines: list[CustomerOrderLineRead]
+    delivered_value: float = 0.0
+    returned_value: float = 0.0
+    receivable_amount: float = 0.0
+    pending_payments_amount: float = 0.0
+    returns: list["CustomerDeliveryReturnRead"] = []
     deliveries: list[CustomerDeliveryRead]
     payments: list[CustomerPaymentRead]
 
@@ -204,3 +214,31 @@ class CustomerDeliveryReturnRead(BaseModel):
     received_by: str
     disposition: str
     lines: list[CustomerDeliveryReturnLineRead]
+
+
+class PendingDeliveryItemRead(BaseModel):
+    order_id: str
+    order_number: str
+    order_date: datetime
+    customer_id: str
+    customer_name: str
+    customer_code: str
+    order_line_id: str
+    product_id: str
+    variant_id: str
+    product_name: str
+    variant_info: str
+    requested_quantity: float
+    delivered_quantity: float
+    remaining_quantity: float
+    available_stock: float
+    status: str
+
+
+class CustomerReturnInspectionCreate(BaseModel):
+    """نتيجة فحص المرتجع: إعادة للمخزون القابل للبيع أو إعدام كهالك."""
+    disposition: Literal["restocked", "scrapped"]
+    notes: str = Field(default="", max_length=1000)
+
+
+CustomerOrderRead.model_rebuild()

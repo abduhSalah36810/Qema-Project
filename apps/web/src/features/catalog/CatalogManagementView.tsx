@@ -20,12 +20,16 @@ import { CategoriesExplorer } from './CategoriesExplorer';
 import { ApplicationLinesView } from './ApplicationLinesView';
 import { UnitsReferenceView } from './UnitsReferenceView';
 import { ApiError } from '@/lib/api';
+import { useAuth } from '@/features/auth/AuthContext';
 
 type TabKey = 'items' | 'categories' | 'applications' | 'units';
 
 const PAGE_SIZE = 50;
 
 export const CatalogManagementView: React.FC = () => {
+  const { hasPermission } = useAuth();
+  // نفس قاعدة لوحة تفاصيل الصنف: زر الإضافة لمن يملك صلاحية إنشاء الأصناف فقط (Deny-by-default)
+  const canCreate = hasPermission('catalog:item:create');
   const [activeTab, setActiveTab] = useState<TabKey>('items');
 
   // Shared Reference Data
@@ -175,18 +179,21 @@ export const CatalogManagementView: React.FC = () => {
           <span className="catalog-page__eyebrow">إدارة المخزون والتوصيف القياسي</span>
           <h1 className="catalog-page__title">دليل الأصناف والتصنيفات وخطوط الاستخدام</h1>
           <p className="catalog-page__subtitle">
-            سجل موحد وشامل للخامات والمستلزمات وقطع الغيار والتعبئة والمنتجات التامة، مصنف هرمياً لخدمة كافة خطوط التشغيل.
+            سجل موحد للخامات والمستلزمات وقطع الغيار والتعبئة والمنتجات التامة، مصنف هرمياً لخدمة كافة خطوط التشغيل.
+          </p>
+          <p className="catalog-page__subtitle">
+            خطوات إضافة خامة جديدة: أضف الصنف بتصنيفه ووحدته ← قدّمه للاعتماد ← بعد اعتماده يظهر بعلامة «يصلح للمستلزمات» ويمكن اختياره في مستلزمات تصنيع الموديلات.
           </p>
         </div>
 
         <div className="catalog-page__header-actions">
-          <button
+          {canCreate && <button
             type="button"
             onClick={() => setCreateModalOpen(true)}
             className="btn-teal"
           >
             ＋ إضافة صنف جديد
-          </button>
+          </button>}
         </div>
       </header>
 
@@ -274,6 +281,7 @@ export const CatalogManagementView: React.FC = () => {
             onFilterChange={handleFilterChange}
             onResetFilters={handleResetFilters}
             pageSize={PAGE_SIZE}
+            canCreate={canCreate}
           />
         )}
 

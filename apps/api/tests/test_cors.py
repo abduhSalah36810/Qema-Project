@@ -299,3 +299,20 @@ def test_cors_production_safety_validation():
         dev_auth_enabled=False,
     )
     assert prod_settings.cors_allowed_origins == ["https://app.qemma-factory.com"]
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_allows_idempotency_key_for_protected_operations():
+    """عمليات الإنتاج والمخزن المحمية من التكرار ترسل Idempotency-Key؛ رفضه في CORS كان يوقف
+    استلام الخامات بالورشة واستلام المنتج التام والتسوية والإغلاق من المتصفح بالكامل."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.options(
+            "/api/v1/production/orders/any-id/receive",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization, content-type, idempotency-key",
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert "idempotency-key" in response.headers.get("access-control-allow-headers", "").lower()

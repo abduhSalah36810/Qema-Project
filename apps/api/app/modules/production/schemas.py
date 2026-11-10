@@ -10,6 +10,7 @@
 ─────────────────────────────────────────────────────────────────────────────
 """
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -294,6 +295,10 @@ class ProductVariantRead(BaseModel):
     letter_size: str = Field(..., description="المقاس الحرفي كبُعد منفصل: S, M, L, XL, 2XL")
     season: str = Field(..., description="الموسم: summer, autumn, winter")
     sku: str
+    is_active: bool = True
+    # حالة مستلزمات التصنيع للمقاس (الإصدار النشط) — تُملأ في قائمة الموديلات
+    has_bom: bool = False
+    bom_version_number: Optional[int] = None
 
 
 class ProductRead(BaseModel):
@@ -302,7 +307,41 @@ class ProductRead(BaseModel):
     name_ar: str
     style_type: str = Field(..., description="نوع الموديل (مثل: half_collar_cuff, sharwal)")
     description: str = ""
+    is_active: bool = True
     variants: List[ProductVariantRead] = []
+
+
+PRODUCT_SEASONS = ("summer", "autumn", "winter")
+
+
+class ProductVariantCreate(BaseModel):
+    """مقاس/موسم جديد لموديل. الكود (SKU) يُولد تلقائياً إذا تُرك فارغاً."""
+    numeric_size: int = Field(..., ge=1, le=999, description="المقاس الرقمي مثل 56 أو 58")
+    letter_size: str = Field(default="", max_length=16, description="المقاس الحرفي (اختياري) مثل M أو XL")
+    season: str = Field(default="summer", description="summer / autumn / winter")
+    sku: Optional[str] = Field(default=None, max_length=64)
+
+
+class ProductCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=64)
+    name_ar: str = Field(..., min_length=1, max_length=128)
+    style_type: str = Field(default="custom", min_length=1, max_length=64)
+    description: str = Field(default="", max_length=2000)
+    variants: List[ProductVariantCreate] = Field(default_factory=list, max_length=60)
+
+
+class ProductUpdate(BaseModel):
+    """تعديل اسم الموديل ووصفه. لا يغير أسماء أصناف المنتج التام المسجلة سابقاً ولا الحركات."""
+    name_ar: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    style_type: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    is_active: Optional[bool] = Field(default=None, description="إيقاف الموديل أو إعادة تفعيله")
+
+
+class ProductVariantUpdate(BaseModel):
+    """إيقاف مقاس أو إعادة تفعيله، أو تعديل المقاس الحرفي. المقاس الرقمي والموسم والكود ثابتة."""
+    is_active: Optional[bool] = None
+    letter_size: Optional[str] = Field(default=None, max_length=16)
 
 
 # ─── قوالب الإنتاج ─────────────────────────────────────────────────────────
@@ -463,6 +502,115 @@ class ProductionOrderItemRead(BaseModel):
     fabric_color: str
     fabric_weight: str
     notes: str
+    received_quantity: float = 0.0
+    rejected_quantity: float = 0.0
+    # النسخة الثابتة من مستلزمات التصنيع المحفوظة في الأمر وقت إنشائه
+    bom_lines: List["OrderItemBomLineRead"] = []
+    bom_version_number: Optional[int] = None
+
+
+class OrderItemBomLineRead(BaseModel):
+    item_id: str
+    item_name: str
+    unit_name: str
+    quantity_per_piece: float
+    total_quantity: float
+
+
+# ─── مستلزمات التصنيع لكل مقاس (BOM) ────────────────────────────────────────
+
+class BomLineInput(BaseModel):
+    item_id: str
+    quantity_per_piece: Decimal = Field(..., gt=0, max_digits=14, decimal_places=4)
+    notes: str = Field(default="", max_length=500)
+
+
+class BomSaveRequest(BaseModel):
+    lines: List[BomLineInput] = Field(..., min_length=1, max_length=200)
+    notes: str = Field(default="", max_length=1000)
+
+
+class BomLineRead(BaseModel):
+    item_id: str
+    item_code: str = ""
+    item_name: str = ""
+    unit_id: str
+    unit_name: str = ""
+    quantity_per_piece: float
+    notes: str = ""
+    item_usable: bool = True
+
+
+class VariantBomRead(BaseModel):
+    variant_id: str
+    sku: str
+    numeric_size: int
+    letter_size: str
+    season: str
+    label: str
+    is_active: bool = True
+    has_bom: bool
+    version_id: Optional[str] = None
+    version_number: Optional[int] = None
+    updated_at: Optional[datetime] = None
+    lines: List[BomLineRead] = []
+
+
+class ProductBomRead(BaseModel):
+    product_id: str
+    product_code: str
+    product_name: str
+    variants: List[VariantBomRead] = []
+
+
+class RequirementLineInput(BaseModel):
+    product_id: str
+    variant_id: str
+    quantity: float = Field(..., gt=0)
+
+
+class RequirementsRequest(BaseModel):
+    lines: List[RequirementLineInput] = Field(..., min_length=1, max_length=100)
+
+
+class RequirementLineMaterial(BaseModel):
+    item_id: str
+    item_name: str
+    unit_name: str
+    quantity_per_piece: float
+    total_quantity: float
+
+
+class RequirementLineRead(BaseModel):
+    product_id: str
+    variant_id: str
+    product_name: str
+    variant_label: str
+    quantity: float
+    has_bom: bool
+    bom_version_number: Optional[int] = None
+    issue: str = ""
+    materials: List[RequirementLineMaterial] = []
+
+
+class RequirementMaterialRead(BaseModel):
+    item_id: str
+    item_code: str
+    item_name: str
+    unit_id: str
+    unit_name: str
+    required_quantity: float
+    available_quantity: float
+    dispatchable_quantity: float
+    shortage_quantity: float
+    item_active: bool
+
+
+class RequirementsRead(BaseModel):
+    lines: List[RequirementLineRead]
+    materials: List[RequirementMaterialRead]
+    can_create: bool
+    has_shortage: bool
 
 
 class OrderRead(BaseModel):
@@ -479,6 +627,13 @@ class OrderRead(BaseModel):
     assigned_to: str
     created_at: datetime
     notes: str
+    # من صرف خامات التحويل المعلق (بالطريق) إن وجد؛ لا يؤكد هذا المستخدم استلامه بنفسه
+    pending_transfer_dispatched_by: Optional[str] = None
+    # مرتجعات الورشة: بانتظار استلام المخزن / بانتظار تسوية العجز أو المرفوض
+    returns_awaiting_receipt: int = 0
+    returns_awaiting_resolution: int = 0
+    returns_pending_declared_by: List[str] = []
+    returns_pending_received_by: List[str] = []
     items: List[ProductionOrderItemRead] = []
     materials: List[OrderMaterialSnapshotRead] = []
     stage_events: List[ProductionStageEventRead] = []
@@ -592,11 +747,49 @@ class OrderShortagesReport(BaseModel):
 
 # ─── استلام المنتج التام ───────────────────────────────────────────────────
 
+class FinishedGoodsReceiptLine(BaseModel):
+    """استلام منتج تام لبند واحد من أمر التشغيل (مقاس/موسم/ملكية محددة)."""
+    order_item_id: str
+    accepted_quantity: float = Field(..., ge=0, description="الكمية السليمة المستلمة بمخزن التام")
+    rejected_quantity: float = Field(default=0.0, ge=0, description="الكمية المرفوضة بالفحص (لا تدخل المخزون)")
+
+
 class FinishedGoodsReceiptCreate(BaseModel):
-    received_quantity: float = Field(..., gt=0)
-    accepted_quantity: float = Field(..., gt=0)
+    """
+    استلام المنتج التام. يجب تحديد الكميات لكل بند (lines) عندما يحتوي الأمر على أكثر من بند.
+    للأوامر ذات البند الواحد يُقبل الشكل المختصر (accepted_quantity/rejected_quantity).
+    """
+    lines: Optional[List[FinishedGoodsReceiptLine]] = Field(default=None, max_length=200)
+    received_quantity: Optional[float] = Field(default=None, ge=0)
+    accepted_quantity: Optional[float] = Field(default=None, ge=0)
     rejected_quantity: float = Field(default=0.0, ge=0)
     notes: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_shape(self):
+        if self.lines:
+            if not any(line.accepted_quantity > 0 or line.rejected_quantity > 0 for line in self.lines):
+                raise ValueError("يجب إدخال كمية مستلمة أو مرفوضة لبند واحد على الأقل.")
+            if len({line.order_item_id for line in self.lines}) != len(self.lines):
+                raise ValueError("لا تكرر البند نفسه في سند الاستلام.")
+        elif self.accepted_quantity is None or (self.accepted_quantity <= 0 and self.rejected_quantity <= 0):
+            raise ValueError("حدد الكمية المستلمة السليمة.")
+        if not self.lines and self.received_quantity is not None and self.accepted_quantity is not None:
+            if abs(self.received_quantity - (self.accepted_quantity + self.rejected_quantity)) > 1e-9:
+                raise ValueError("الكمية المستلمة يجب أن تساوي السليم + المرفوض.")
+        return self
+
+
+class FinishedGoodsReceiptLineRead(BaseModel):
+    order_item_id: str
+    variant_id: str
+    variant_label: str = ""
+    bucket_reference: str
+    target_quantity: float
+    accepted_quantity: float
+    rejected_quantity: float
+    total_received: float
+    remaining_quantity: float
 
 
 class FinishedGoodsReceiptRead(BaseModel):
@@ -611,6 +804,134 @@ class FinishedGoodsReceiptRead(BaseModel):
     confirmed_at: datetime
     confirmed_by: str
     notes: str
+    lines: List[FinishedGoodsReceiptLineRead] = []
+
+
+class MaterialReconciliationLine(BaseModel):
+    """تسوية خامة واحدة بالورشة: ما استُهلك فعلياً، وما رُد للمخزن، وما تلف."""
+    item_id: str
+    consumed_quantity: float = Field(default=0.0, ge=0)
+    returned_quantity: float = Field(default=0.0, ge=0)
+    scrapped_quantity: float = Field(default=0.0, ge=0)
+    # حالة الخامة المرتجعة كما يقدّرها مسؤول الإنتاج؛ القرار النهائي بعد فحص المخزن
+    return_condition: Literal["good", "needs_inspection", "damaged"] = "good"
+    notes: str = Field(default="", max_length=1000)
+
+    @model_validator(mode="after")
+    def require_notes_for_doubtful_returns(self):
+        if self.returned_quantity > 0 and self.return_condition != "good" and not self.notes.strip():
+            raise ValueError("اكتب ملاحظة توضح حالة الخامة المرتجعة غير السليمة.")
+        return self
+
+
+class MaterialReconciliationCreate(BaseModel):
+    lines: List[MaterialReconciliationLine] = Field(..., min_length=1, max_length=200)
+    notes: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_lines(self):
+        if len({line.item_id for line in self.lines}) != len(self.lines):
+            raise ValueError("لا تكرر الخامة نفسها في مستند التسوية.")
+        if not any(l.consumed_quantity + l.returned_quantity + l.scrapped_quantity > 0 for l in self.lines):
+            raise ValueError("أدخل كمية مستهلكة أو مرتجعة أو تالفة لخامة واحدة على الأقل.")
+        return self
+
+
+class MaterialReconciliationLineRead(BaseModel):
+    item_id: str
+    item_name_ar: str
+    unit_name_ar: str
+    consumed_quantity: float
+    returned_quantity: float
+    scrapped_quantity: float
+    remaining_wip_balance: float
+
+
+class MaterialReconciliationRead(BaseModel):
+    id: str
+    reconciliation_number: str
+    order_id: str
+    created_by: str
+    created_at: datetime
+    notes: str
+    lines: List[MaterialReconciliationLineRead]
+    # مستند مرتجع الورشة بالطريق (إن وُجدت كميات مرتجعة) بانتظار تأكيد أمين المخزن
+    return_transfer_id: Optional[str] = None
+    return_transfer_number: Optional[str] = None
+
+
+# ─── مرتجعات الورشة إلى مخزن الخامات ───────────────────────────────────────
+
+class ReturnReceiptLine(BaseModel):
+    item_id: str
+    accepted_quantity: float = Field(..., ge=0)
+    rejected_quantity: float = Field(default=0.0, ge=0)
+    notes: str = Field(default="", max_length=1000)
+
+
+class ReturnReceiptRequest(BaseModel):
+    lines: List[ReturnReceiptLine] = Field(..., min_length=1, max_length=200)
+    notes: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def unique_items(self):
+        if len({line.item_id for line in self.lines}) != len(self.lines):
+            raise ValueError("لا تكرر الخامة نفسها في تأكيد الاستلام.")
+        return self
+
+
+class ReturnResolutionLine(BaseModel):
+    item_id: str
+    kind: Literal["shortage", "rejected"]
+    disposition: Literal["write_off", "restock", "scrap"]
+    quantity: float = Field(..., gt=0)
+    reason: str = Field(..., min_length=3, max_length=1000)
+
+    @model_validator(mode="after")
+    def disposition_matches_kind(self):
+        if self.kind == "shortage" and self.disposition != "write_off":
+            raise ValueError("العجز يُسوّى بإثبات الفقد فقط (write_off).")
+        if self.kind == "rejected" and self.disposition not in ("restock", "scrap"):
+            raise ValueError("المرفوض يُسوّى بإعادته للمخزن (restock) أو اعتباره هالكاً (scrap).")
+        if not self.reason.strip():
+            raise ValueError("سبب التسوية مطلوب.")
+        return self
+
+
+class ReturnResolutionRequest(BaseModel):
+    lines: List[ReturnResolutionLine] = Field(..., min_length=1, max_length=200)
+
+
+class ReturnLineRead(BaseModel):
+    line_id: str
+    item_id: str
+    item_name_ar: str = ""
+    unit_name_ar: str = ""
+    declared_quantity: float
+    accepted_quantity: float
+    rejected_quantity: float
+    rejected_open_quantity: float
+    rejected_restocked_quantity: float
+    rejected_scrapped_quantity: float
+    shortage_quantity: float
+    shortage_open_quantity: float
+    notes: str = ""
+
+
+class ReturnTransferRead(BaseModel):
+    id: str
+    transfer_number: str
+    order_id: str
+    status: str
+    status_ar: str
+    declared_by: str
+    declared_at: datetime
+    received_by: Optional[str] = None
+    received_at: Optional[datetime] = None
+    awaiting_receipt: bool
+    awaiting_resolution: bool
+    notes: str = ""
+    lines: List[ReturnLineRead] = []
 
 
 # ─── أداء مراحل الإنتاج ───────────────────────────────────────────────────
@@ -661,6 +982,8 @@ class OrderWipSummary(BaseModel):
     stages_completed: bool
     pending_transfers_count: int
     unresolved_discrepancies_count: int
+    # مرتجعات ورشة مستلمة بها عجز أو مرفوض لم يُسوَّ بعد (تمنع الإغلاق)
+    returns_pending_resolution_count: int = 0
     net_wip_balance: float
     can_close: bool
     blocking_reasons: List[str]
@@ -732,10 +1055,13 @@ class StocktakeCancelRequest(BaseModel):
 class StocktakeCountHistoryRead(BaseModel):
     id: str
     line_id: str
+    count_sequence: int = 1
     counted_quantity: float
     previous_quantity: Optional[float] = None
     counter_id: str
+    counter_role: str = ""
     counted_at: datetime
+    recorded_at: Optional[datetime] = None
     reason: str
     notes: str
 
@@ -743,6 +1069,7 @@ class StocktakeCountHistoryRead(BaseModel):
 class StocktakeLineRead(BaseModel):
     id: str
     stocktake_id: str
+    bucket_reference: Optional[str] = None
     item_id: str
     item_code: str
     item_name_ar: str
@@ -751,20 +1078,31 @@ class StocktakeLineRead(BaseModel):
     book_quantity: float
     counted_quantity: Optional[float] = None
     variance: Optional[float] = None
+    variance_quantity: Optional[float] = None
+    variance_type: Optional[str] = None
+    unit_cost: float = 0.0
+    total_variance_cost: float = 0.0
+    needs_recount: bool = False
     status: str
     counter_id: Optional[str] = None
+    last_counted_by: Optional[str] = None
     counted_at: Optional[datetime] = None
+    last_counted_at: Optional[datetime] = None
     notes: str
     count_history: Optional[List[StocktakeCountHistoryRead]] = None
+    history: Optional[List[StocktakeCountHistoryRead]] = None
 
 
 class StocktakeAuditLogRead(BaseModel):
     id: str
     stocktake_id: str
     action: str
+    event_type: str = ""
+    event_name_ar: str = ""
     actor_id: str
     actor_role: str
     timestamp: datetime
+    created_at: Optional[datetime] = None
     details: Optional[dict] = None
     notes: str
 
@@ -786,6 +1124,10 @@ class StocktakeSessionRead(BaseModel):
     shortage_count: int = 0
     surplus_count: int = 0
     exact_count: int = 0
+    shortage_lines: int = 0
+    surplus_lines: int = 0
+    exact_lines: int = 0
+    net_variance_cost: float = 0.0
     created_by: str
     submitted_by: Optional[str] = None
     submitted_at: Optional[datetime] = None

@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from '@/lib/api';
+import { useAuth } from '@/features/auth/AuthContext';
 import {
   createCustomerOrder,
   createCustomerProductionOrder,
@@ -28,6 +29,8 @@ interface CustomerAccountPageProps {
 interface DraftLine { product_id: string; variant_id: string; quantity: string; unit_price: string; notes: string }
 const blankLine = (): DraftLine => ({ product_id: '', variant_id: '', quantity: '', unit_price: '', notes: '' });
 
+const SEASON_AR: Record<string, string> = { summer: 'صيفي', autumn: 'خريفي', winter: 'شتوي' };
+
 function formatMoney(amount: number): string {
   return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(amount);
 }
@@ -53,6 +56,15 @@ function methodLabel(method: CustomerPayment['method']): string {
 }
 
 export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustomerUpdated }: CustomerAccountPageProps) {
+  // أذونات الخادم فقط: لا تظهر أزرار الإجراءات لمستخدم موثق بلا أدوار (Deny-by-default)
+  const { hasPermission } = useAuth();
+  const canManageCustomers = hasPermission('customers:manage');
+  // طلب البيع يحدد السعر والخصم: يلزم إنشاء الطلب وتفويض التسعير معاً (كما يفرض الخادم)
+  const canCreateSalesOrder = hasPermission('customers:orders:create') && hasPermission('pricing:manage');
+  const canManageDeliveries = hasPermission('customers:deliveries:manage');
+  const canRecordPayments = hasPermission('finance:payments:manage');
+  const canCreateProductionOrder = hasPermission('production:orders:create');
+
   const [account, setAccount] = useState<CustomerAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +95,10 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
     invoiced: result.invoiced + order.total_amount,
     collected: result.collected + order.paid_amount,
     balance: result.balance + order.balance_amount,
-  }), { orders: 0, invoiced: 0, collected: 0, balance: 0 }), [account]);
+    delivered: result.delivered + (order.delivered_value ?? 0),
+    receivable: result.receivable + (order.receivable_amount ?? 0),
+    pending: result.pending + (order.pending_payments_amount ?? 0),
+  }), { orders: 0, invoiced: 0, collected: 0, balance: 0, delivered: 0, receivable: 0, pending: 0 }), [account]);
 
   const setErrorFrom = (operationError: unknown) => setError(apiError(operationError));
   const toggleStatus = async () => {
@@ -112,32 +127,38 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
           <div><span>{customer.code}</span><h2 id="customer-account-title">{customer.name}</h2><p>{customer.city || 'المدينة غير مسجلة'} · {customer.phone || 'الهاتف غير مسجل'}</p></div>
         </div>
         <div className="customer-account__actions">
-          <button className="btn btn--secondary" type="button" onClick={() => onEditCustomer(customer)}>تعديل بيانات العميل</button>
-          <button className="btn btn--secondary" type="button" onClick={() => void toggleStatus()} disabled={saving}>{customer.status === 'active' ? 'إيقاف العميل' : 'إعادة تفعيل العميل'}</button>
-          <button className="btn btn--primary" type="button" onClick={() => setOrderModalOpen(true)} disabled={customer.status !== 'active'}>＋ معاملة جديدة</button>
+          {canManageCustomers && (
+            <>
+              <button className="btn btn--secondary" type="button" onClick={() => onEditCustomer(customer)}>تعديل بيانات العميل</button>
+              <button className="btn btn--secondary" type="button" onClick={() => void toggleStatus()} disabled={saving}>{customer.status === 'active' ? 'إيقاف العميل' : 'إعادة تفعيل العميل'}</button>
+            </>
+          )}
+          {canCreateSalesOrder && (
+            <button className="btn btn--primary" type="button" onClick={() => setOrderModalOpen(true)} disabled={customer.status !== 'active'}>＋ طلب جديد</button>
+          )}
         </div>
       </header>
 
       {error && <div className="customers-alert" role="alert">{error}<button type="button" onClick={() => void reload()}>إعادة المحاولة</button></div>}
 
       <div className="customer-account__summary">
-        <article><span>عدد المعاملات</span><strong>{totals.orders}</strong></article>
-        <article><span>إجمالي قيمة الطلبات المسجلة</span><strong>{formatMoney(totals.invoiced)}</strong></article>
-        <article><span>المدفوعات المسجلة</span><strong>{formatMoney(totals.collected)}</strong></article>
-        <article><span>الرصيد المبدئي</span><strong>{formatMoney(totals.balance)}</strong></article>
+        <article><span>إجمالي الطلبات ({totals.orders})</span><strong>{formatMoney(totals.invoiced)}</strong></article>
+        <article><span>قيمة ما تم تسليمه</span><strong>{formatMoney(totals.delivered)}</strong></article>
+        <article><span>المحصّل (معتمد في الخزينة)</span><strong>{formatMoney(totals.collected)}</strong>{totals.pending > 0 && <small>+ {formatMoney(totals.pending)} بانتظار الاعتماد</small>}</article>
+        <article><span>مستحق على العميل الآن</span><strong>{formatMoney(totals.receivable)}</strong><small>المتبقي على الطلبات كاملة: {formatMoney(totals.balance)}</small></article>
       </div>
 
       <div className="customer-account__columns">
         <section className="customers-card customer-account__details">
-          <div className="customer-section-heading"><div><span>الملف</span><h3>بيانات العميل وطريقة التعامل</h3></div><span className="customer-provisional-label">تصور مبدئي</span></div>
+          <div className="customer-section-heading"><div><span>الملف</span><h3>بيانات العميل وطريقة التعامل</h3></div></div>
           <dl><div><dt>كود العميل</dt><dd>{customer.code}</dd></div><div><dt>الاسم</dt><dd>{customer.name}</dd></div><div><dt>الهاتف</dt><dd>{customer.phone || '—'}</dd></div><div><dt>المدينة</dt><dd>{customer.city || '—'}</dd></div><div><dt>العنوان</dt><dd>{customer.address || '—'}</dd></div><div><dt>مسجل منذ</dt><dd>{formatDate(customer.created_at)}</dd></div></dl>
           <div className="customer-method-note"><strong>طريقة التعامل تُحدد داخل كل معاملة</strong><p>يمكن تسجيل شراء منتج جاهز أو تصنيع خاص للعميل، ويمكن للعميل نفسه استخدام المسارين في معاملات مختلفة.</p></div>
         </section>
 
         <section className="customers-card customer-transactions" aria-label="سجل معاملات العميل">
           <div className="customer-section-heading"><div><span>السجل الكامل</span><h3>الطلبات والتصنيع والتسليمات والمدفوعات</h3></div><button className="btn btn--secondary" type="button" onClick={() => void reload()} disabled={loading}>تحديث</button></div>
-          <div className="customer-provisional-banner">الأرقام المالية سجل تشغيلي مبدئي وليست دفترًا محاسبيًا. تسجيل دفعة تسليم لا يخصم مخزون المنتج التام حاليًا.</div>
-          {loading ? <div className="customers-empty" role="status">جاري تحميل ملف العميل…</div> : !account?.orders.length ? <div className="customers-empty">لا توجد معاملات مسجلة لهذا العميل بعد. ابدأ بإنشاء معاملة جديدة.</div> : (
+          <div className="customer-provisional-banner">سجل تشغيلي لمعاملات العميل. يتم صرف دفعات التسليم مع الخصم الفعلي والمباشر من رصيد مخزن المنتجات التامة.</div>
+          {loading ? <div className="customers-empty" role="status">جاري تحميل ملف العميل…</div> : !account?.orders.length ? <div className="customers-empty">لا توجد طلبات لهذا العميل بعد. اضغط «＋ طلب جديد».</div> : (
             <div className="customer-order-list">{account.orders.map((order) => (
               <article className="customer-order-card" key={order.id}>
                 <header className="customer-order-card__header"><div><span className="customer-order-code">{order.order_number}</span><h4>{typeLabel(order.order_type)}</h4><small>{formatDate(order.order_date)}</small></div><span className={`customer-order-status customer-order-status--${order.status}`}>{statusLabel(order.status)}</span></header>
@@ -147,17 +168,17 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
                   const remainingProduction = Math.max(0, line.quantity - line.production_orders.reduce((sum, item) => sum + (item.status === 'cancelled' ? 0 : item.target_quantity), 0));
                   return <div className="customer-line" key={line.id}>
                     <div><strong>{line.product_name}</strong><span>{line.variant_info} · المطلوب {line.quantity} · المسلّم {line.delivered_quantity}</span><small>{formatMoney(line.unit_price)} للوحدة · إجمالي {formatMoney(line.line_total)}</small></div>
-                    {order.order_type === 'custom_manufacturing' && <button type="button" className="customer-link-action" onClick={() => setProductionOrder({ order, line })} disabled={remainingProduction <= 0}>＋ أمر تشغيل</button>}
+                    {order.order_type === 'custom_manufacturing' && canCreateProductionOrder && <button type="button" className="customer-link-action" onClick={() => setProductionOrder({ order, line })} disabled={remainingProduction <= 0}>＋ أمر تشغيل</button>}
                     {line.production_orders.length > 0 && <span className="customer-linked-orders">أوامر تشغيل: {line.production_orders.map((linked) => linked.order_number).join('، ')}</span>}
                   </div>;
                 })}</div>
                 <div className="customer-records-grid">
                   <section><h5>دفعات التسليم <span>{order.deliveries.length}</span></h5>{order.deliveries.length ? order.deliveries.map((delivery) => <div className="customer-record-row" key={delivery.id}><strong>{delivery.delivery_number}</strong><span>{formatDate(delivery.delivered_at)} · {delivery.lines.map((line) => `${line.product_name} (${line.quantity})`).join('، ')}</span></div>) : <p className="customer-muted">لم تسجل دفعات تسليم.</p>}</section>
-                  <section><h5>المدفوعات <span>{order.payments.length}</span></h5>{order.payments.length ? order.payments.map((payment) => <div className="customer-record-row" key={payment.id}><strong>{formatMoney(payment.amount)} · {methodLabel(payment.method)}</strong><span>{payment.receipt_number} · {formatDate(payment.received_at)}{payment.reference ? ` · ${payment.reference}` : ''}</span></div>) : <p className="customer-muted">لم تسجل دفعات مالية.</p>}</section>
+                  <section><h5>المدفوعات <span>{order.payments.length}</span></h5>{order.payments.length ? order.payments.map((payment) => <div className="customer-record-row" key={payment.id}><strong>{formatMoney(payment.amount)} · {methodLabel(payment.method)} · {payment.status === 'approved' ? 'معتمد في الخزينة' : payment.status === 'rejected' ? 'مرفوض' : 'بانتظار اعتماد الخزينة'}</strong><span>{payment.receipt_number} · {formatDate(payment.received_at)}{payment.reference ? ` · ${payment.reference}` : ''}</span></div>) : <p className="customer-muted">لم تسجل دفعات مالية.</p>}</section>
                 </div>
                 <footer className="customer-order-card__actions">
-                  {order.status !== 'delivered' && order.status !== 'cancelled' && <button className="btn btn--secondary" type="button" onClick={() => setDeliveryOrder(order)}>＋ تسجيل دفعة تسليم</button>}
-                  {order.status !== 'cancelled' && <button className="btn btn--secondary" type="button" onClick={() => setPaymentOrder(order)}>＋ تسجيل تحصيل مالي</button>}
+                  {order.status !== 'delivered' && order.status !== 'cancelled' && canManageDeliveries && <button className="btn btn--secondary" type="button" onClick={() => setDeliveryOrder(order)}>＋ تسجيل دفعة تسليم</button>}
+                  {order.status !== 'cancelled' && canRecordPayments && <button className="btn btn--secondary" type="button" onClick={() => setPaymentOrder(order)}>＋ تسجيل تحصيل مالي</button>}
                 </footer>
               </article>
             ))}</div>
@@ -206,15 +227,15 @@ function CustomerOrderModal({ customerId, onClose, onSaved }: { customerId: stri
     } catch (e) { setError(apiError(e)); } finally { setSaving(false); }
   };
 
-  return <ModalFrame title="إنشاء معاملة جديدة" onClose={onClose}><form className="customer-flow-form" onSubmit={(event) => void submit(event)}>
+  return <ModalFrame title="طلب جديد للعميل" onClose={onClose}><form className="customer-flow-form" onSubmit={(event) => void submit(event)}>
     {error && <div className="customers-alert" role="alert">{error}</div>}
-    <label>نوع التعامل<select value={type} onChange={(event) => setType(event.target.value as CustomerOrder['order_type'])}><option value="ready_goods">شراء منتج جاهز</option><option value="custom_manufacturing">تصنيع خاص للعميل</option></select></label>
+    <label>نوع الطلب<select value={type} onChange={(event) => setType(event.target.value as CustomerOrder['order_type'])}><option value="ready_goods">شراء منتج جاهز</option><option value="custom_manufacturing">تصنيع خاص للعميل</option></select></label>
     {loading ? <p className="customer-muted">جاري تحميل المنتجات المسجلة…</p> : !products.length ? <p className="customers-alert">لا توجد منتجات مسجلة في قاعدة البيانات؛ لا يمكن إنشاء الطلب.</p> : <>
       <div className="customer-draft-lines">{lines.map((line, index) => {
         const product = products.find((item) => item.id === line.product_id);
         return <fieldset key={index}><legend>الصنف {index + 1}</legend>
           <label>الموديل<select required value={line.product_id} onChange={(event) => changeLine(index, { product_id: event.target.value, variant_id: '' })}><option value="">اختر موديلًا</option>{products.map((item) => <option key={item.id} value={item.id}>{item.name_ar} · {item.code}</option>)}</select></label>
-          <label>المقاس والموسم<select required value={line.variant_id} onChange={(event) => changeLine(index, { variant_id: event.target.value })}><option value="">اختر المتغير</option>{product?.variants.map((variant) => <option key={variant.id} value={variant.id}>{[variant.numeric_size, variant.letter_size, variant.season].filter(Boolean).join(' · ')}</option>)}</select></label>
+          <label>المقاس<select required value={line.variant_id} onChange={(event) => changeLine(index, { variant_id: event.target.value })}><option value="">اختر المقاس</option>{product?.variants.map((variant) => <option key={variant.id} value={variant.id}>{`مقاس ${variant.numeric_size}${variant.letter_size ? ` (${variant.letter_size})` : ''} — ${SEASON_AR[variant.season ?? ''] ?? variant.season ?? ''}`}</option>)}</select></label>
           <div className="customer-form-grid"><label>الكمية<input required type="number" min="0.001" step="0.001" value={line.quantity} onChange={(event) => changeLine(index, { quantity: event.target.value })} /></label><label>سعر الوحدة (ج.م)<input required type="number" min="0" step="0.01" value={line.unit_price} onChange={(event) => changeLine(index, { unit_price: event.target.value })} /></label></div>
           <label>ملاحظات الصنف<input value={line.notes} onChange={(event) => changeLine(index, { notes: event.target.value })} /></label>
           {lines.length > 1 && <button className="customer-remove-line" type="button" onClick={() => setLines((current) => current.filter((_, i) => i !== index))}>حذف البند</button>}
@@ -222,11 +243,16 @@ function CustomerOrderModal({ customerId, onClose, onSaved }: { customerId: stri
       })}</div>
       <button className="btn btn--secondary" type="button" onClick={() => setLines((current) => [...current, blankLine()])}>＋ إضافة صنف آخر</button>
     </>}
-    <div className="customer-form-grid"><label>خصم إجمالي مؤقت (ج.م)<input type="number" min="0" max={gross} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} /></label><label>موعد التسليم المتوقع<input type="date" value={expectedDate} onChange={(event) => setExpectedDate(event.target.value)} /></label></div>
+    <div className="customer-form-grid"><label>خصم على الطلب (ج.م)<input type="number" min="0" max={gross} step="0.01" value={discount} onChange={(event) => setDiscount(event.target.value)} /></label><label>موعد التسليم المتوقع<input type="date" value={expectedDate} onChange={(event) => setExpectedDate(event.target.value)} /></label></div>
+    <dl className="customer-order-total" aria-live="polite">
+      <div><dt>إجمالي الأصناف</dt><dd>{formatMoney(gross)}</dd></div>
+      <div><dt>الخصم</dt><dd>{formatMoney(Number(discount) || 0)}</dd></div>
+      <div className="customer-order-total__net"><dt>صافي الطلب</dt><dd>{formatMoney(Math.max(0, gross - (Number(discount) || 0)))}</dd></div>
+    </dl>
     <label>طريقة/شروط التعامل<textarea rows={2} maxLength={2000} value={paymentTerms} onChange={(event) => setPaymentTerms(event.target.value)} placeholder="مثال: دفعة مقدمة والباقي عند الاستلام — نص توثيقي فقط" /></label>
     <label>ملاحظات<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
-    <p className="customer-provisional-banner">الأسعار والخصم وموعد التسليم قيم تسجيل مبدئية؛ لا يوجد اعتماد سعر أو حجز مخزون آلي في هذه النسخة.</p>
-    <footer><button type="button" className="btn btn--secondary" onClick={onClose}>إلغاء</button><button className="btn btn--primary" type="submit" disabled={saving || loading || !products.length}>{saving ? 'جاري الحفظ…' : 'حفظ المعاملة'}</button></footer>
+    <p className="customer-provisional-banner">حفظ الطلب لا يخصم شيئاً من المخزون ولا يُعد تحصيلاً. يُخصم المخزون عند تسجيل التسليم، ويُسجل المال عند التحصيل واعتماده في الخزينة.</p>
+    <footer><button type="button" className="btn btn--secondary" onClick={onClose}>إلغاء</button><button className="btn btn--primary" type="submit" disabled={saving || loading || !products.length}>{saving ? 'جاري الحفظ…' : 'حفظ الطلب'}</button></footer>
   </form></ModalFrame>;
 }
 
@@ -245,9 +271,9 @@ function DeliveryModal({ customerId, order, onClose, onSaved, onError }: { custo
     } catch (e) { const message = apiError(e); setError(e instanceof Error && !(e instanceof ApiError) ? e.message : message); onError(e instanceof ApiError ? e : new ApiError(message)); } finally { setSaving(false); }
   };
   return <ModalFrame title={`دفعة تسليم · ${order.order_number}`} onClose={onClose}><form className="customer-flow-form" onSubmit={(event) => void submit(event)}>{error && <div className="customers-alert" role="alert">{error}</div>}
-    {order.lines.map((line) => { const remaining = line.quantity - line.delivered_quantity; return <label key={line.id}>{line.product_name} · {line.variant_info} (متبقي {remaining})<input type="number" min="0" max={remaining} step="0.001" value={quantities[line.id] || ''} onChange={(event) => setQuantities((current) => ({ ...current, [line.id]: event.target.value }))} /></label>; })}
+    {order.lines.map((line) => { const remaining = line.quantity - line.delivered_quantity; return <label key={line.id}>{line.product_name} · {(line.variant_info || '').replace(/summer/g, 'صيفي').replace(/autumn/g, 'خريفي').replace(/winter/g, 'شتوي')} (متبقي {remaining})<input type="number" min="0" max={remaining} step="0.001" value={quantities[line.id] || ''} onChange={(event) => setQuantities((current) => ({ ...current, [line.id]: event.target.value }))} /></label>; })}
     <label>اسم مستلم البضاعة<input maxLength={128} value={receivedBy} onChange={(event) => setReceivedBy(event.target.value)} /></label><label>ملاحظات<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
-    <p className="customer-provisional-banner">سيُسجل هذا كدفعة تسليم للعميل، دون خصم مخزون المنتج التام حاليًا.</p><footer><button type="button" className="btn btn--secondary" onClick={onClose}>إلغاء</button><button className="btn btn--primary" type="submit" disabled={saving}>{saving ? 'جاري التسجيل…' : 'تسجيل دفعة التسليم'}</button></footer>
+    <p className="customer-provisional-banner">سيُسجل هذا كدفعة تسليم للعميل مع خصم الكمية المسلّمة مباشرة من رصيد مخزن المنتجات التامة.</p><footer><button type="button" className="btn btn--secondary" onClick={onClose}>إلغاء</button><button className="btn btn--primary" type="submit" disabled={saving}>{saving ? 'جاري التسجيل…' : 'تسجيل دفعة التسليم'}</button></footer>
   </form></ModalFrame>;
 }
 
@@ -260,10 +286,10 @@ function PaymentModal({ customerId, order, onClose, onSaved, onError }: { custom
   const [error, setError] = useState<string | null>(null);
   const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); setError(null); try { await recordCustomerPayment(customerId, order.id, { amount: Number(amount), method, reference, notes }); onSaved(); } catch (e) { setError(apiError(e)); onError(e); } finally { setSaving(false); } };
   return <ModalFrame title={`تسجيل تحصيل · ${order.order_number}`} onClose={onClose}><form className="customer-flow-form" onSubmit={(event) => void submit(event)}>{error && <div className="customers-alert" role="alert">{error}</div>}
-    <p>المتبقي المبدئي على المعاملة: <strong>{formatMoney(order.balance_amount)}</strong></p><label>المبلغ المستلم (ج.م)<input required autoFocus type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
+    <p>المتبقي على الطلب: <strong>{formatMoney(order.balance_amount)}</strong>{(order.pending_payments_amount ?? 0) > 0 && <> (منها {formatMoney(order.pending_payments_amount ?? 0)} تحصيلات بانتظار الاعتماد)</>}</p><label>المبلغ المستلم (ج.م)<input required autoFocus type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} /></label>
     <label>طريقة الدفع<select value={method} onChange={(event) => setMethod(event.target.value as CustomerPayment['method'])}><option value="cash">نقدي</option><option value="bank_transfer">تحويل بنكي</option><option value="other">أخرى</option></select></label>
     <label>رقم مرجعي / إيصال<input maxLength={128} value={reference} onChange={(event) => setReference(event.target.value)} /></label><label>ملاحظات<textarea rows={2} value={notes} onChange={(event) => setNotes(event.target.value)} /></label>
-    <p className="customer-provisional-banner">التسجيل متاح مؤقتًا للمدير المالي فقط، ويحفظ كإيصال تشغيلي ولا ينشئ قيدًا محاسبيًا.</p><footer><button type="button" className="btn btn--secondary" onClick={onClose}>إلغاء</button><button className="btn btn--primary" type="submit" disabled={saving}>{saving ? 'جاري التسجيل…' : 'تسجيل التحصيل'}</button></footer>
+    <p className="customer-provisional-banner">يُسجل التحصيل «بانتظار الاعتماد». لا يتغير رصيد الخزنة ولا مديونية العميل حتى يعتمده شخص آخر من شاشة «الخزينة والاعتمادات».</p><footer><button type="button" className="btn btn--secondary" onClick={onClose}>إلغاء</button><button className="btn btn--primary" type="submit" disabled={saving}>{saving ? 'جاري التسجيل…' : 'تسجيل التحصيل'}</button></footer>
   </form></ModalFrame>;
 }
 

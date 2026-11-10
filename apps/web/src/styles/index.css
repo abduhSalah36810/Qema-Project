@@ -2346,6 +2346,45 @@ button {
   border: 1px solid var(--status-green-bd);
 }
 
+.modal-alert--warning {
+  background: var(--status-amber-bg, #fffbeb);
+  color: var(--status-amber-tx, #92400e);
+  border: 1px solid var(--status-amber-bd, #fde68a);
+}
+
+.modal-alert__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.modal-alert__resync-btn {
+  background: #ffffff;
+  color: inherit;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 0.15s ease;
+}
+
+.modal-alert__resync-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modal-alert__resync-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
 /* شبكة الحقول في النموذج */
 .form-grid {
   display: grid;
@@ -2990,4 +3029,42 @@ button {
   .payroll-period-card { gap: 14px; }
   .payroll-period-card > button { margin-right: 0; }
   .payroll-metrics { grid-template-columns: 1fr 1fr; }
+}
+
+/* بطاقات المؤشرات: نفس شكل البطاقات لعناصر .warehouse-summary__card (كانت تظهر نصاً باهتاً بلا إطار) */
+.warehouse-summary { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.warehouse-summary__card {
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
+  border: 1px solid #e4e9f0; border-radius: 12px; background: #fff; padding: 16px 18px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.warehouse-summary__card > span { color: #64748b; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.warehouse-summary__card > strong {
+  color: #0f172a; font-size: 24px; font-weight: 800; line-height: 1.2;
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.warehouse-summary__card > small { color: #94a3b8; font-size: 12px; }
+
+/* خلايا نصية طويلة داخل الجداول: تلتف داخل عمودها بدل تجاوزه */
+td.cell-wrap, .warehouse-table td.cell-wrap { white-space: normal; min-width: 220px; max-width: 380px; line-height: 1.7; overflow-wrap: anywhere; }
+.cell-tag {
+  display: inline-block; margin-inline-end: 6px; margin-bottom: 2px; padding: 1px 8px; border-radius: 999px;
+  background: #f1f5f9; color: #334155; font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.warehouse-table td.cell-money { font-variant-numeric: tabular-nums; }
+
+/* شاشة انتظار تحميل الشاشات المُقيَّلة (React.lazy) داخل لوحة العرض الرئيسية */
+.screen-loader {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  min-height: 320px; padding: 48px 24px; color: #475569; text-align: center;
+}
+.screen-loader__spinner {
+  width: 36px; height: 36px; border-radius: 50%;
+  border: 3px solid #e2e8f0; border-top-color: #0d9488;
+  animation: screen-loader-spin 0.8s linear infinite;
+}
+.screen-loader__text { margin: 0; font-size: 15px; font-weight: 600; }
+@keyframes screen-loader-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .screen-loader__spinner { animation: none; }
 }

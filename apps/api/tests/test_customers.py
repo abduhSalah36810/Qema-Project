@@ -64,18 +64,24 @@ def test_customer_order_account_totals_include_delivery_and_recorded_payments():
     delivery = SimpleNamespace(
         id="delivery-1", delivery_number="DL-1", delivered_at=datetime.now(timezone.utc),
         received_by="المستلم", notes="", lines=[SimpleNamespace(
-            order_line_id="line-1", order_line=line, quantity=Decimal("1"),
+            id="dline-1", order_line_id="line-1", order_line=line, quantity=Decimal("1"),
         )],
     )
     payment = SimpleNamespace(
         id="payment-1", receipt_number="RC-1", amount=Decimal("50.00"),
         received_at=datetime.now(timezone.utc), method="cash", reference="", notes="", recorded_by="finance-1",
+        status="approved", cash_document_id="doc-1",
+    )
+    pending_payment = SimpleNamespace(
+        id="payment-2", receipt_number="RC-2", amount=Decimal("20.00"),
+        received_at=datetime.now(timezone.utc), method="cash", reference="", notes="", recorded_by="finance-1",
+        status="pending", cash_document_id="doc-2",
     )
     order = SimpleNamespace(
         id="order-1", order_number="CO-1", order_type="custom_manufacturing", status="partially_delivered",
         order_date=datetime.now(timezone.utc), expected_delivery_at=None,
         discount_amount=Decimal("10.00"), payment_terms="دفعة مقدمة", notes="",
-        lines=[line], deliveries=[delivery], payments=[payment],
+        lines=[line], deliveries=[delivery], payments=[payment, pending_payment], returns=[],
     )
 
     result = _order_payload(order)
@@ -85,6 +91,11 @@ def test_customer_order_account_totals_include_delivery_and_recorded_payments():
     assert result["paid_amount"] == Decimal("50.00")
     assert result["balance_amount"] == Decimal("140.00")
     assert result["lines"][0]["delivered_quantity"] == Decimal("1")
+    # الخصم يوزع نسبياً: قيمة المسلم = 100 × (190 ÷ 200) = 95، والمديونية = 95 − 50 المعتمد
+    assert result["delivered_value"] == Decimal("95.00")
+    assert result["receivable_amount"] == Decimal("45.00")
+    # التحصيل المعلق لا يخفض الرصيد قبل اعتماد الخزينة
+    assert result["pending_payments_amount"] == Decimal("20.00")
     assert result["deliveries"][0]["lines"][0]["product_name"] == "جلابية"
     response = CustomerOrderRead.model_validate(result)
     assert response.order_type == "custom_manufacturing"

@@ -11,6 +11,7 @@
  */
 import React, { useState } from 'react';
 import { useAuth } from './AuthContext';
+import { ChangePasswordForm } from './ChangePasswordForm';
 
 interface SignInModalProps {
   isOpen: boolean;
@@ -22,6 +23,7 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
     authState,
     user,
     session,
+    roles,
     error,
     isConfigured,
     isDevAuthAvailable,
@@ -30,30 +32,56 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
     signOut,
     retryVerification,
     clearError,
+    authMode,
   } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isLocalDevSubmitting, setIsLocalDevSubmitting] = useState(false);
+  const [submittingRole, setSubmittingRole] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
-  const handleLocalDevLogin = async () => {
+  const activeRole = roles[0] || 'general_manager';
+
+  const roleLabels: Record<string, { title: string; desc: string; icon: string }> = {
+    general_manager: {
+      title: 'دخول كمدير عام',
+      desc: 'صلاحيات كاملة (اعتماد أصناف، ترحيل جرد، إدارة إنتاج)',
+      icon: '⚡',
+    },
+    warehouse_manager: {
+      title: 'دخول كأمين مخزن',
+      desc: 'حركات المخازن والعد الفعلي (محظور من الاعتماد والترحيل)',
+      icon: '📦',
+    },
+    production_manager: {
+      title: 'دخول كمدير إنتاج',
+      desc: 'استلام الخامات بالورشة، تسجيل المراحل، العيوب والهالك، والإغلاق',
+      icon: '⚙️',
+    },
+    finance_manager: {
+      title: 'دخول كمدير مالي',
+      desc: 'الخزينة والمصروفات والمدفوعات (محظور من حركات المخزن المباشرة)',
+      icon: '💰',
+    },
+  };
+
+  const handleLocalDevLogin = async (roleName: string) => {
     setLocalError(null);
     clearError();
-    setIsLocalDevSubmitting(true);
+    setSubmittingRole(roleName);
     try {
-      await signInLocalDev();
+      await signInLocalDev(roleName);
       onClose();
     } catch (err: unknown) {
       if (err instanceof Error) {
         setLocalError(err.message);
       }
     } finally {
-      setIsLocalDevSubmitting(false);
+      setSubmittingRole(null);
     }
   };
 
@@ -142,14 +170,59 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                 </div>
                 <div className="auth-modal__user-info">
                   <span className="auth-modal__user-email">{user.email || 'مستخدم موثق بدون بريد'}</span>
-                  <span className="auth-modal__user-id" title={user.id}>
-                    معرّف المستخدم (ID): {user.id.slice(0, 13)}...
-                  </span>
-                  <span className="auth-modal__status-tag">✓ موثق من خادم الـ API</span>
+                  <span className="auth-modal__status-tag">✓ تم تسجيل الدخول</span>
                 </div>
               </div>
 
-              <div className="auth-modal__notice">
+              {/* بطاقة عرض الدور المفعل مع إمكانية التبديل السريع */}
+              <div className="auth-modal__active-role-card" style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                  <span style={{ fontWeight: 600, fontSize: '0.875rem', color: '#475569' }}>الدور النشط في الجلسة:</span>
+                  <span style={{
+                    fontWeight: 700,
+                    fontSize: '0.875rem',
+                    padding: '0.2rem 0.6rem',
+                    borderRadius: '9999px',
+                    background: activeRole === 'general_manager' ? '#ccfbf1' : activeRole === 'warehouse_manager' ? '#e0f2fe' : '#f3e8ff',
+                    color: activeRole === 'general_manager' ? '#0f766e' : activeRole === 'warehouse_manager' ? '#0369a1' : '#6b21a8',
+                  }}>
+                    {roleLabels[activeRole]?.title || activeRole}
+                  </span>
+                </div>
+                {isDevAuthAvailable && (
+                  <div>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
+                      تبديل الدور (نسخة العرض): كل عملية مالية يعتمدها شخص غير الذي أنشأها، فبدّل الدور لتجربة الاعتماد.
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
+                      {Object.entries(roleLabels).map(([rKey, rInfo]) => (
+                        <button
+                          key={rKey}
+                          type="button"
+                          disabled={rKey === activeRole || submittingRole !== null}
+                          onClick={() => handleLocalDevLogin(rKey)}
+                          style={{
+                            padding: '0.4rem 0.25rem',
+                            fontSize: '0.75rem',
+                            fontWeight: 600,
+                            borderRadius: '0.375rem',
+                            border: rKey === activeRole ? '2px solid #0d9488' : '1px solid #cbd5e1',
+                            background: rKey === activeRole ? '#f0fdfa' : '#ffffff',
+                            color: rKey === activeRole ? '#0f766e' : '#334155',
+                            cursor: rKey === activeRole ? 'default' : 'pointer',
+                          }}
+                        >
+                          {submittingRole === rKey ? '...' : rInfo.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {authMode === 'supabase' && <ChangePasswordForm />}
+
+              <div className="auth-modal__notice" style={{ marginTop: '0.75rem' }}>
                 <span>🔒 تسجيل الدخول يثبت هويتك فقط. صلاحيات الأدوار التشغيلية تُدار وتُعتمد خادمياً.</span>
               </div>
 
@@ -157,6 +230,7 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                 type="button"
                 className="btn-danger-outline"
                 onClick={handleSignOut}
+                style={{ marginTop: '0.5rem' }}
               >
                 تسجيل الخروج
               </button>
@@ -217,57 +291,58 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                 </div>
               )}
 
-              {/* خيار الدخول المحلي للمطور عند توفره في بيئة التطوير */}
+              {/* خيارات الدخول المحلي للأدوار الثلاثة في بيئة التطوير والاختبار */}
               {isDevAuthAvailable && (
                 <div className="auth-alert auth-alert--teal" style={{ marginBottom: '1.25rem', borderColor: '#0d9488' }}>
                   <span className="auth-alert__icon" aria-hidden>💻</span>
-                  <div className="auth-alert__content">
-                    <strong style={{ color: '#0f766e', fontSize: '1rem' }}>
-                      المصادقة المحلية المستقلة (Local Development Auth):
+                  <div className="auth-alert__content" style={{ width: '100%' }}>
+                    <strong style={{ color: '#0f766e', fontSize: '1rem', display: 'block', marginBottom: '0.25rem' }}>
+                      اختر دورك في نسخة العرض:
                     </strong>
-                    <p style={{ margin: '0.35rem 0 0.75rem' }}>
-                      يمكنك الدخول فورياً بصلاحيات <strong>المدير العام (General Manager)</strong> وتجربة كامل وظائف النظام وحفظ العمليات على قاعدة البيانات دون الحاجة إلى حساب Supabase.
+                    <p style={{ margin: '0 0 0.75rem', fontSize: '0.825rem', color: '#334155' }}>
+                      كل دور يرى الشاشات والعمليات المسموح بها له فقط.
                     </p>
-                    <button
-                      type="button"
-                      className="btn-teal"
-                      style={{ width: '100%', padding: '0.65rem' }}
-                      onClick={handleLocalDevLogin}
-                      disabled={isLocalDevSubmitting}
-                    >
-                      {isLocalDevSubmitting ? 'جاري تسجيل الدخول المحلي...' : '⚡ دخول كمطور محلي (صلاحيات كاملة)'}
-                    </button>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {Object.entries(roleLabels).map(([rKey, rInfo]) => (
+                        <button
+                          key={rKey}
+                          type="button"
+                          className="btn-teal"
+                          style={{
+                            width: '100%',
+                            padding: '0.6rem 0.75rem',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            textAlign: 'right',
+                            background: rKey === 'general_manager' ? '#0d9488' : rKey === 'warehouse_manager' ? '#0284c7' : '#7c3aed',
+                            borderColor: 'transparent',
+                          }}
+                          onClick={() => handleLocalDevLogin(rKey)}
+                          disabled={submittingRole !== null}
+                        >
+                          <span style={{ fontWeight: 700 }}>
+                            {rInfo.icon} {submittingRole === rKey ? 'جاري التحضير والدخول...' : rInfo.title}
+                          </span>
+                          <span style={{ fontSize: '0.75rem', opacity: 0.9 }}>
+                            {rKey === 'general_manager' ? 'مدير عام' : rKey === 'warehouse_manager' ? 'أمين مخزن' : rKey === 'production_manager' ? 'مدير إنتاج' : 'مدير مالي'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
 
-              <div className="auth-alert auth-alert--amber">
-                <span className="auth-alert__icon" aria-hidden>⚙️</span>
-                <div className="auth-alert__content">
-                  <strong>إعدادات Supabase السحابية (للإنتاج):</strong>
-                  <p>
-                    لربط المصادقة السحابية عبر Supabase، اضبط المتغيرات في ملف <code>.env</code> للواجهة الأمامية:
-                  </p>
-                  <ul>
-                    <li><code>VITE_SUPABASE_URL=https://&lt;project&gt;.supabase.co</code></li>
-                    <li><code>VITE_SUPABASE_ANON_KEY=&lt;anon-key&gt;</code></li>
-                  </ul>
-                  <small>تنبيه أمني: لا تضع المفاتيح السرية أو رابط قاعدة البيانات في متغيرات المتصفح VITE_*.</small>
+              {!isDevAuthAvailable && (
+                <div className="auth-alert auth-alert--amber">
+                  <span className="auth-alert__icon" aria-hidden>⚙️</span>
+                  <div className="auth-alert__content">
+                    <strong>تسجيل الدخول غير مُهيأ بعد</strong>
+                    <p>اطلب من مسؤول النظام إعداد حسابات الدخول (راجع دليل التثبيت والتشغيل).</p>
+                  </div>
                 </div>
-              </div>
-
-              <div className="auth-modal__demo-action">
-                <p>
-                  وضع المعاينة التجريبي مخصص للاستعراض البصري فقط؛ لا يمثل جلسة موثقة ولا يحفظ أو يعدل أي بيانات على خادم المصنع.
-                </p>
-                <button
-                  type="button"
-                  className="btn-teal-outline"
-                  onClick={onClose}
-                >
-                  المتابعة في وضع العرض التجريبي
-                </button>
-              </div>
+              )}
             </div>
           )}
 

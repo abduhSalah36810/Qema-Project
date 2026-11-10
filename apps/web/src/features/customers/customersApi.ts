@@ -56,6 +56,8 @@ export interface CustomerPayment {
   reference: string;
   notes: string;
   recorded_by: string;
+  status?: 'pending' | 'approved' | 'rejected';
+  cash_document_id?: string | null;
 }
 
 export interface CustomerOrder {
@@ -72,6 +74,10 @@ export interface CustomerOrder {
   total_amount: number;
   paid_amount: number;
   balance_amount: number;
+  delivered_value?: number;
+  returned_value?: number;
+  receivable_amount?: number;
+  pending_payments_amount?: number;
   lines: CustomerOrderLine[];
   deliveries: CustomerDelivery[];
   payments: CustomerPayment[];
@@ -160,6 +166,30 @@ export async function recordCustomerPayment(customerId: string, orderId: string,
   return apiClient.request<CustomerPayment>(`/api/v1/customers/${encodeURIComponent(customerId)}/orders/${encodeURIComponent(orderId)}/payments`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   });
+}
+
+export interface PendingDeliveryItem {
+  customer_id: string;
+  customer_name: string;
+  customer_code: string;
+  order_id: string;
+  order_number: string;
+  order_date: string;
+  order_line_id: string;
+  product_id: string;
+  product_name: string;
+  variant_id: string;
+  variant_sku?: string;
+  variant_info: string;
+  requested_quantity: number;
+  delivered_quantity: number;
+  remaining_quantity: number;
+  available_stock: number;
+  status: string;
+}
+
+export async function fetchPendingDeliveries(): Promise<PendingDeliveryItem[]> {
+  return apiClient.request<PendingDeliveryItem[]>('/api/v1/customers/pending-deliveries');
 }
 
 export async function createCustomerProductionOrder(customerId: string, orderId: string, input: {

@@ -144,6 +144,23 @@ def create_error_response(
     return JSONResponse(status_code=status_code, content=content, headers=response_headers)
 
 
+_ARABIC_LETTER_RANGE = ("؀", "ۿ")
+_BUSINESS_STATUS_CODES = {400, 404, 409, 422, 503}
+
+
+def _safe_business_message(status_code: int, detail: Any) -> Optional[str]:
+    """إرجاع رسالة قاعدة عمل عربية آمنة للعرض، أو None إذا وجب حجب النص."""
+    if status_code not in _BUSINESS_STATUS_CODES or not isinstance(detail, str):
+        return None
+    text_value = detail.strip()
+    if not text_value or len(text_value) > 600:
+        return None
+    arabic_chars = sum(1 for ch in text_value if _ARABIC_LETTER_RANGE[0] <= ch <= _ARABIC_LETTER_RANGE[1])
+    if arabic_chars < 3:
+        return None
+    return text_value
+
+
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     """
     معالج استثناءات HTTP الصادرة من FastAPI أو Starlette.
@@ -153,8 +170,13 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
     request_id = get_request_id(request)
     code = get_status_code_identifier(exc.status_code)
 
-    # استخدام الرسالة الآمنة المستقرة المقابلة لرمز الحالة دون تمرير exc.detail الاعتباطي
+    # الرسالة الافتراضية الآمنة المقابلة لرمز الحالة
     message = DEFAULT_ERROR_MESSAGES.get(exc.status_code, "حدث خطأ أثناء معالجة الطلب.")
+    # رسائل قواعد العمل العربية التي يكتبها المطور (مثل: الرصيد غير كافٍ، الكمية تتجاوز المتبقي)
+    # تُمرر للمستخدم كي يعرف سبب الرفض. أي نص آخر (إنجليزي/تقني/أخطاء خادم 5xx) يبقى محجوباً.
+    business_message = _safe_business_message(exc.status_code, getattr(exc, "detail", None))
+    if business_message:
+        message = business_message
 
     return create_error_response(
         status_code=exc.status_code,

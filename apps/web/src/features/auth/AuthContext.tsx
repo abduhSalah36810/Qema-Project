@@ -3,9 +3,13 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * يربط بين:
  * 1. عميل Supabase Auth لإدارة تسجيل الدخول والجلسات في المتصفح.
- * 2. خادم FastAPI والتحقق من الهوية الأدنى عبر مسار GET /api/v1/auth/me.
+ * 2. خادم FastAPI عبر GET /api/v1/auth/me الذي يعيد الهوية والأدوار والصلاحيات الفعلية.
  * 3. تزويد عميل API بتوكن الوصول (Bearer Token) بنطاق محمي لخادم المصنع حصراً.
  * 4. التعامل الصارم مع انتهاء الصلاحية، إلغاء الجلسات، فشل التجديد، وتعطل الخادم.
+ *
+ * الصلاحيات تُقرأ من استجابة الخادم فقط (مصدر الحقيقة الوحيد)، ولا تُشتق من التوكن
+ * أو من user_metadata أو من خريطة أدوار منسوخة في الواجهة. أثناء التحميل أو عند الفشل
+ * تُعامل الجلسة بلا أي صلاحية (Fail closed).
  * ─────────────────────────────────────────────────────────────────────────────
  */
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
@@ -22,116 +26,45 @@ export type AuthState =
 
 export type AuthMode = 'supabase' | 'local_dev' | 'none';
 
+/** حالة تحميل الصلاحيات الخادمية من GET /api/v1/auth/me */
+export type PermissionsStatus = 'idle' | 'loading' | 'ready' | 'error';
+
 export const LOCAL_DEV_STORAGE_KEY = 'qemma_local_dev_token';
 
-export const ROLE_PERMISSIONS_MAP: Record<string, string[]> = {
-  general_manager: [
-    'reports:view',
-    'finance:reports:view',
-    'inventory:view',
-    'inventory:manage',
-    'inventory:stocktake:view',
-    'inventory:stocktake:create',
-    'inventory:stocktake:count',
-    'inventory:stocktake:submit',
-    'inventory:stocktake:review',
-    'inventory:stocktake:approve',
-    'inventory:stocktake:post',
-    'inventory:stocktake:cancel',
-    'catalog:view',
-    'production:orders:view',
-    'production:orders:manage',
-    'production:stages:manage',
-    'production:templates:manage',
-    'customers:view',
-    'customers:manage',
-    'customers:deliveries:manage',
-    'finance:manage',
-    'finance:cash:view',
-    'suppliers:view',
-    'suppliers:manage',
-    'suppliers:receive',
-    'pricing:manage',
-  ],
-  finance_manager: [
-    'reports:view',
-    'finance:reports:view',
-    'finance:cash:view',
-    'finance:cash:manage',
-    'finance:expenses:manage',
-    'finance:payroll:manage',
-    'finance:payments:manage',
-    'inventory:stocktake:view',
-    'suppliers:view',
-    'suppliers:manage',
-    'customers:view',
-    'production:orders:view',
-  ],
-  warehouse_manager: [
-    'inventory:view',
-    'inventory:manage',
-    'inventory:stocktake:view',
-    'inventory:stocktake:create',
-    'inventory:stocktake:count',
-    'inventory:stocktake:submit',
-    'inventory:stocktake:cancel',
-    'catalog:view',
-    'warehouse:confirm_receipt',
-    'warehouse:dispatch',
-    'production:orders:view',
-    'customers:deliveries:manage',
-    'suppliers:view',
-    'suppliers:receive',
-  ],
-};
+interface AuthorizationState {
+  roles: string[];
+  permissions: string[];
+  status: PermissionsStatus;
+  error: string | null;
+}
 
-export function extractRolesFromToken(token: string | null): string[] {
-  if (!token || typeof token !== 'string') return [];
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) return [];
-    const base64Url = parts[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonStr = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const payload = JSON.parse(jsonStr) as Record<string, unknown>;
-    const roles: string[] = [];
+const EMPTY_AUTHZ: AuthorizationState = { roles: [], permissions: [], status: 'idle', error: null };
+const LOADING_AUTHZ: AuthorizationState = { roles: [], permissions: [], status: 'loading', error: null };
 
-    if (typeof payload.role === 'string') {
-      roles.push(payload.role.toLowerCase());
-    }
-    if (Array.isArray(payload.roles)) {
-      payload.roles.forEach((r) => {
-        if (typeof r === 'string') roles.push(r.toLowerCase());
-      });
-    }
-    const appMeta = payload.app_metadata as Record<string, unknown> | undefined;
-    if (appMeta) {
-      if (typeof appMeta.role === 'string') roles.push(appMeta.role.toLowerCase());
-      if (Array.isArray(appMeta.roles)) {
-        appMeta.roles.forEach((r) => {
-          if (typeof r === 'string') roles.push(r.toLowerCase());
-        });
-      }
-    }
-    const userMeta = payload.user_metadata as Record<string, unknown> | undefined;
-    if (userMeta) {
-      if (typeof userMeta.role === 'string') roles.push(userMeta.role.toLowerCase());
-      if (Array.isArray(userMeta.roles)) {
-        userMeta.roles.forEach((r) => {
-          if (typeof r === 'string') roles.push(r.toLowerCase());
-        });
-      }
-    }
+function toStringList(value: unknown, lowerCase = false): string[] {
+  if (!Array.isArray(value)) return [];
+  const out = value
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => (lowerCase ? v.trim().toLowerCase() : v.trim()));
+  return Array.from(new Set(out));
+}
 
-    return Array.from(new Set(roles));
-  } catch {
-    return [];
+function authzFromIdentity(identity: UserIdentity): AuthorizationState {
+  return {
+    roles: toStringList(identity.roles, true),
+    permissions: toStringList(identity.permissions),
+    status: 'ready',
+    error: null,
+  };
+}
+
+function describeAuthMeError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return 'رفض خادم الـ API توكن الدخول (غير صالح أو منتهي الصلاحية).';
+    if (err.isNetworkError || err.isTimeout) return 'تعذر الاتصال بخادم الـ API للتحقق من هوية المستخدم.';
+    return err.message;
   }
+  return 'تعذر التحقق من هوية المستخدم مع الخادم الخلفي.';
 }
 
 interface AuthContextValue {
@@ -139,14 +72,19 @@ interface AuthContextValue {
   authMode: AuthMode;
   user: UserIdentity | null;
   session: Session | null;
+  /** الأدوار المعتمدة خادمياً (فارغة أثناء التحميل أو عند الفشل) */
   roles: string[];
+  /** الصلاحيات الفعلية من الخادم (فارغة أثناء التحميل أو عند الفشل) */
+  permissions: string[];
+  permissionsStatus: PermissionsStatus;
+  permissionsError: string | null;
   hasPermission: (permission: string) => boolean;
   hasRole: (role: string) => boolean;
   error: string | null;
   isConfigured: boolean;
   isDevAuthAvailable: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signInLocalDev: () => Promise<void>;
+  signInLocalDev: (role?: string) => Promise<void>;
   signOut: () => Promise<void>;
   retryVerification: () => Promise<void>;
   clearError: () => void;
@@ -161,6 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authMode, setAuthMode] = useState<AuthMode>('none');
   const [user, setUser] = useState<UserIdentity | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [authz, setAuthz] = useState<AuthorizationState>(EMPTY_AUTHZ);
   const [error, setError] = useState<string | null>(null);
   const isDevAuthAvailable = !isSupabaseConfigured() && import.meta.env.DEV;
 
@@ -170,6 +109,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearError = useCallback(() => setError(null), []);
 
+  /** إخلاء كامل للهوية والتوكن والصلاحيات محلياً */
+  const clearLocalIdentity = useCallback(() => {
+    apiClient.setAccessToken(null);
+    setUser(null);
+    setSession(null);
+    setAuthz(EMPTY_AUTHZ);
+  }, []);
+
   /**
    * مطابقة جلسة Supabase مع الخادم الخلفي عبر GET /api/v1/auth/me
    */
@@ -178,9 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (!activeSession || !activeSession.access_token) {
       syncSequenceRef.current += 1;
-      apiClient.setAccessToken(null);
-      setUser(null);
-      setSession(null);
+      clearLocalIdentity();
       setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
       return;
     }
@@ -189,15 +134,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const nowSec = Math.floor(Date.now() / 1000);
     if (activeSession.expires_at && activeSession.expires_at <= nowSec) {
       syncSequenceRef.current += 1;
-      apiClient.setAccessToken(null);
-      setUser(null);
-      setSession(null);
+      clearLocalIdentity();
       setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
       setError('انتهت صلاحية جلسة الدخول. يرجى تسجيل الدخول مجدداً.');
       return;
     }
 
     const syncId = ++syncSequenceRef.current;
+    // Fail closed: لا صلاحيات حتى تصل استجابة الخادم
+    setAuthz(LOADING_AUTHZ);
 
     try {
       apiClient.setAccessToken(activeSession.access_token);
@@ -210,6 +155,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       apiClient.setAccessToken(activeSession.access_token);
       setUser(identity);
       setSession(activeSession);
+      setAuthz(authzFromIdentity(identity));
+      setAuthMode('supabase');
       setAuthState('authenticated');
       setError(null);
     } catch (err: unknown) {
@@ -218,20 +165,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       // إخلاء التوكن المعتمد وعدم إبقاء الواجهة في حالة توثيق زائف
+      const errorMsg = describeAuthMeError(err);
       apiClient.setAccessToken(null);
       setUser(null);
       setSession(activeSession);
+      setAuthz({ roles: [], permissions: [], status: 'error', error: errorMsg });
       setAuthState('unverified');
-
-      let errorMsg = 'تعذر التحقق من هوية المستخدم مع الخادم الخلفي.';
-      if (err instanceof ApiError) {
-        if (err.status === 401) {
-          errorMsg = 'رفض خادم الـ API توكن الدخول (غير صالح أو منتهي الصلاحية).';
-        } else if (err.isNetworkError || err.isTimeout) {
-          errorMsg = 'تعذر الاتصال بخادم الـ API للتحقق من هوية المستخدم.';
-        }
-      }
       setError(errorMsg);
+    }
+  }, [clearLocalIdentity]);
+
+  /**
+   * جلب الصلاحيات الخادمية لجلسة التطوير المحلي بعد الحصول على التوكن.
+   * عند الفشل يبقى المستخدم مسجلاً لكن بلا صلاحيات مع إظهار الخطأ.
+   */
+  const loadLocalDevPermissions = useCallback(async (token: string, syncId: number) => {
+    setAuthz(LOADING_AUTHZ);
+    try {
+      const identity = await apiClient.getAuthMe({ token });
+      if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
+      setUser(identity);
+      setAuthz(authzFromIdentity(identity));
+      setError(null);
+    } catch (err: unknown) {
+      if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
+      const msg = `تم تسجيل الدخول لكن تعذر تحميل الصلاحيات من الخادم: ${describeAuthMeError(err)}`;
+      setAuthz({ roles: [], permissions: [], status: 'error', error: msg });
+      setError(msg);
     }
   }, []);
 
@@ -249,12 +209,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (storedDevToken && storedDevToken.trim()) {
       const syncId = ++syncSequenceRef.current;
-      apiClient.setAccessToken(storedDevToken);
+      const token = storedDevToken;
+      apiClient.setAccessToken(token);
+      setAuthz(LOADING_AUTHZ);
       void apiClient
-        .getAuthMe({ token: storedDevToken })
+        .getAuthMe({ token })
         .then((identity) => {
           if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
           setUser(identity);
+          setAuthz(authzFromIdentity(identity));
           setAuthMode('local_dev');
           setAuthState('authenticated');
           setError(null);
@@ -266,18 +229,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           } catch {
             /* no-op */
           }
-          apiClient.setAccessToken(null);
-          setUser(null);
+          clearLocalIdentity();
           setAuthMode('none');
           setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
         });
-      return;
+      return () => {
+        isMountedRef.current = false;
+      };
     }
 
     // 2. إذا لم توجد جلسة محلية، المتابعة مع Supabase إن كان مهيأً
     if (!isSupabaseConfigured() || !supabase) {
       setAuthState('config_missing');
-      return;
+      return () => {
+        isMountedRef.current = false;
+      };
     }
 
     const initialSeq = syncSequenceRef.current;
@@ -287,9 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!isMountedRef.current || syncSequenceRef.current !== initialSeq) return;
       if (sessionError) {
         syncSequenceRef.current += 1;
-        apiClient.setAccessToken(null);
-        setUser(null);
-        setSession(null);
+        clearLocalIdentity();
         setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
         setError('تعذر استعادة الجلسة السابقة.');
         return;
@@ -308,9 +272,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (event === 'SIGNED_OUT') {
         syncSequenceRef.current += 1;
-        apiClient.setAccessToken(null);
-        setUser(null);
-        setSession(null);
+        clearLocalIdentity();
         setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
         setError(null);
       } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
@@ -318,9 +280,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           void syncWithBackend(newSession);
         } else {
           syncSequenceRef.current += 1;
-          apiClient.setAccessToken(null);
-          setUser(null);
-          setSession(null);
+          clearLocalIdentity();
           setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
         }
       }
@@ -330,7 +290,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isMountedRef.current = false;
       subscription.unsubscribe();
     };
-  }, [syncWithBackend]);
+  }, [syncWithBackend, clearLocalIdentity]);
 
   /**
    * تسجيل الدخول بالبريد وكلمة المرور
@@ -376,9 +336,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [syncWithBackend]);
 
   /**
-   * إعادة محاولة التحقق مع الخادم الخلفي
+   * إعادة محاولة التحقق وجلب الصلاحيات من الخادم الخلفي
    */
   const retryVerification = useCallback(async () => {
+    if (authMode === 'local_dev') {
+      const token = apiClient.getAccessToken();
+      if (token) {
+        setError(null);
+        await loadLocalDevPermissions(token, syncSequenceRef.current);
+      }
+      return;
+    }
     if (session) {
       setAuthState('loading');
       setError(null);
@@ -389,47 +357,61 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data: { session: currentSession } } = await supabase.auth.getSession();
       await syncWithBackend(currentSession);
     }
-  }, [session, syncWithBackend]);
+  }, [authMode, session, syncWithBackend, loadLocalDevPermissions]);
 
   /**
-   * تسجيل الدخول كمطور محلي (بيئة التطوير فقط بدون اعتماد على Supabase)
+   * تسجيل الدخول كمطور محلي مع اختيار الدور المصرح به (بيئة التطوير والاختبار فقط).
+   * الدور المختار يحدد التوكن فقط؛ الصلاحيات الفعلية تأتي من GET /api/v1/auth/me.
    */
-  const signInLocalDev = useCallback(async () => {
+  const signInLocalDev = useCallback(async (selectedRole?: string) => {
+    const syncId = ++syncSequenceRef.current;
     setError(null);
     setAuthState('loading');
 
+    // إخلاء التوكن وحالة الجلسة السابقة بالكامل لمنع الاحتفاظ بأي صلاحيات قديمة
+    clearLocalIdentity();
     try {
-      const resp = await apiClient.localLogin();
+      localStorage.removeItem(LOCAL_DEV_STORAGE_KEY);
+    } catch {
+      /* no-op */
+    }
+
+    let accessToken: string;
+    try {
+      const resp = await apiClient.localLogin({ role: selectedRole });
+      if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
+      accessToken = resp.access_token;
       try {
-        localStorage.setItem(LOCAL_DEV_STORAGE_KEY, resp.access_token);
+        localStorage.setItem(LOCAL_DEV_STORAGE_KEY, accessToken);
       } catch {
         /* no-op */
       }
-      apiClient.setAccessToken(resp.access_token);
+      apiClient.setAccessToken(accessToken);
       setUser(resp.user);
       setSession(null);
+      setAuthz(LOADING_AUTHZ);
       setAuthState('authenticated');
       setAuthMode('local_dev');
-      setError(null);
     } catch (err: unknown) {
+      if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
       try {
         localStorage.removeItem(LOCAL_DEV_STORAGE_KEY);
       } catch {
         /* no-op */
       }
-      apiClient.setAccessToken(null);
-      setUser(null);
-      setSession(null);
+      clearLocalIdentity();
       setAuthMode('none');
       setAuthState('config_missing');
       const msg = err instanceof ApiError ? err.message : 'تعذر تسجيل الدخول كمطور محلي.';
       setError(msg);
       throw new Error(msg);
     }
-  }, []);
+
+    await loadLocalDevPermissions(accessToken, syncId);
+  }, [clearLocalIdentity, loadLocalDevPermissions]);
 
   /**
-   * تسجيل الخروج وضمان مسح التوكن والهوية محلياً حتى لو فشل طلب Supabase
+   * تسجيل الخروج وضمان مسح التوكن والهوية والصلاحيات محلياً حتى لو فشل طلب Supabase
    */
   const signOut = useCallback(async () => {
     // 1. مسار الخروج لجلسة المطور المحلي
@@ -440,9 +422,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         /* no-op */
       }
       syncSequenceRef.current += 1;
-      apiClient.setAccessToken(null);
-      setUser(null);
-      setSession(null);
+      clearLocalIdentity();
       setAuthMode('none');
       setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
       setError(null);
@@ -451,9 +431,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // 2. مسار الخروج لجلسة Supabase
     syncSequenceRef.current += 1;
-    apiClient.setAccessToken(null);
-    setUser(null);
-    setSession(null);
+    clearLocalIdentity();
+    setAuthMode('none');
     setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
     setError(null);
 
@@ -465,38 +444,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // نتجاهل خطأ الشبكة لضمان الإخلاء المحلي التام
     } finally {
       syncSequenceRef.current += 1;
-      apiClient.setAccessToken(null);
-      setUser(null);
-      setSession(null);
+      clearLocalIdentity();
       setAuthState(isSupabaseConfigured() ? 'signed_out' : 'config_missing');
       setError(null);
     }
-  }, [authMode]);
+  }, [authMode, clearLocalIdentity]);
 
-  const roles = React.useMemo(() => {
-    if (authMode === 'local_dev') {
-      return ['general_manager'];
-    }
-    const token = session?.access_token || apiClient.getAccessToken();
-    return extractRolesFromToken(token);
-  }, [authMode, session, authState]);
+  // الصلاحيات سارية فقط لمستخدم موثق اكتمل تحميل صلاحياته من الخادم (Fail closed)
+  const isAuthorized = authState === 'authenticated' && user !== null && authz.status === 'ready';
+  const roles = React.useMemo(() => (isAuthorized ? authz.roles : []), [isAuthorized, authz.roles]);
+  const permissions = React.useMemo(
+    () => (isAuthorized ? authz.permissions : []),
+    [isAuthorized, authz.permissions]
+  );
+  const permissionSet = React.useMemo(() => new Set(permissions), [permissions]);
 
-  const hasRole = useCallback((role: string) => {
-    return roles.includes(role.toLowerCase());
-  }, [roles]);
-
-  const hasPermission = useCallback((permission: string) => {
-    if (authMode === 'local_dev') {
-      return true;
-    }
-    for (const r of roles) {
-      const perms = ROLE_PERMISSIONS_MAP[r] || [];
-      if (perms.includes(permission)) {
-        return true;
-      }
-    }
-    return false;
-  }, [authMode, roles]);
+  const hasRole = useCallback((role: string) => roles.includes(role.toLowerCase()), [roles]);
+  const hasPermission = useCallback((permission: string) => permissionSet.has(permission), [permissionSet]);
 
   const value: AuthContextValue = {
     authState,
@@ -504,6 +468,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     session,
     roles,
+    permissions,
+    permissionsStatus: user ? authz.status : 'idle',
+    permissionsError: authz.error,
     hasPermission,
     hasRole,
     error,
@@ -519,10 +486,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+const FALLBACK_AUTH_CONTEXT: AuthContextValue = {
+  authState: 'signed_out',
+  authMode: 'none',
+  user: null,
+  session: null,
+  roles: [],
+  permissions: [],
+  permissionsStatus: 'idle',
+  permissionsError: null,
+  hasPermission: () => false,
+  hasRole: () => false,
+  error: null,
+  isConfigured: true,
+  isDevAuthAvailable: true,
+  signIn: async () => {},
+  signInLocalDev: async () => {},
+  signOut: async () => {},
+  retryVerification: async () => {},
+  clearError: () => {},
+};
+
 export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
+  return context ?? FALLBACK_AUTH_CONTEXT;
 }

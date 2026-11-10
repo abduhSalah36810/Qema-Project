@@ -380,3 +380,18 @@ async def test_cleanup_only_deletes_own_test_data(session: AsyncSession):
     finally:
         await session.execute(delete(CashDocument).where(CashDocument.id == doc_external_id))
         await session.commit()
+
+
+def test_production_migration_allowed_only_through_deploy_pipeline_with_confirmation():
+    """ترحيلات الإنتاج تُفتح فقط بأمر النشر المخصص + تأكيد اسم القاعدة + اسم من وافق."""
+    prod_url = "postgresql+asyncpg://admin:secret@aws-0-eu.pooler.supabase.com:5432/postgres"
+    ok_env = {"QEMMA_DEPLOY_PIPELINE": "vm-deploy-v1", "PROD_MIGRATION_CONFIRM_DB": "postgres", "PROD_MIGRATION_APPROVED_BY": "owner"}
+    assert validate_migration_target(prod_url, app_env="production", env_vars=ok_env) == ("aws-0-eu.pooler.supabase.com", "postgres")
+    for missing in ok_env:
+        partial = {k: v for k, v in ok_env.items() if k != missing}
+        with pytest.raises(MigrationSecurityError):
+            validate_migration_target(prod_url, app_env="production", env_vars=partial)
+    with pytest.raises(MigrationSecurityError):
+        validate_migration_target(prod_url, app_env="production", env_vars={**ok_env, "PROD_MIGRATION_CONFIRM_DB": "other_db"})
+    with pytest.raises(MigrationSecurityError):
+        validate_migration_target(prod_url, app_env="production", env_vars={**ok_env, "QEMMA_DEPLOY_PIPELINE": "manual"})

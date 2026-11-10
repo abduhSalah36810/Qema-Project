@@ -50,8 +50,8 @@ export const StocktakeListView: React.FC<StocktakeListViewProps> = ({
 
   // Metrics calculation
   const totalSessions = sessions.length;
-  const activeSessions = sessions.filter((s) => s.status === 'draft' || s.status === 'counting' || s.status === 'recounting').length;
-  const underReviewSessions = sessions.filter((s) => s.status === 'under_review').length;
+  const activeSessions = sessions.filter((s) => s.status === 'draft' || s.status === 'counting').length;
+  const underReviewSessions = sessions.filter((s) => s.status === 'submitted' || s.status === 'under_review').length;
   const postedSessions = sessions.filter((s) => s.status === 'posted').length;
 
   const getStatusBadge = (status: string) => {
@@ -60,10 +60,10 @@ export const StocktakeListView: React.FC<StocktakeListViewProps> = ({
         return <span style={{ backgroundColor: '#f1f5f9', color: '#475569', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>مسودة</span>;
       case 'counting':
         return <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>جارٍ العد الفعلي</span>;
+      case 'submitted':
+        return <span style={{ backgroundColor: '#fef3c7', color: '#b45309', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>بانتظار المراجعة</span>;
       case 'under_review':
-        return <span style={{ backgroundColor: '#fef3c7', color: '#b45309', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>قيد الاعتماد والمراجعة</span>;
-      case 'recounting':
-        return <span style={{ backgroundColor: '#f3e8ff', color: '#7e22ce', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>إعادة العد مطلوبة</span>;
+        return <span style={{ backgroundColor: '#f3e8ff', color: '#7e22ce', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>قيد المراجعة (إعادة عد)</span>;
       case 'approved':
         return <span style={{ backgroundColor: '#dcfce7', color: '#15803d', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 600 }}>معتمد للترحيل</span>;
       case 'posted':
@@ -157,8 +157,8 @@ export const StocktakeListView: React.FC<StocktakeListViewProps> = ({
               <option value="all">كافة الحالات</option>
               <option value="draft">مسودة</option>
               <option value="counting">جارٍ العد الفعلي</option>
-              <option value="under_review">قيد المراجعة والاعتماد</option>
-              <option value="recounting">إعادة العد مطلوبة</option>
+              <option value="submitted">بانتظار المراجعة</option>
+              <option value="under_review">قيد المراجعة (إعادة عد)</option>
               <option value="approved">معتمد للترحيل</option>
               <option value="posted">مرحل للأستاذ</option>
               <option value="cancelled">ملغى</option>
@@ -206,7 +206,6 @@ export const StocktakeListView: React.FC<StocktakeListViewProps> = ({
               <th style={{ textAlign: 'center' }}>الحالة</th>
               <th style={{ textAlign: 'center' }}>تقدم العد</th>
               <th style={{ textAlign: 'center' }}>فروقات الجرد</th>
-              <th style={{ textAlign: 'center' }}>صافي الأثر المالي</th>
               <th>تاريخ الإنشاء</th>
               <th style={{ textAlign: 'center' }}>الإجراءات</th>
             </tr>
@@ -214,13 +213,13 @@ export const StocktakeListView: React.FC<StocktakeListViewProps> = ({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
+                <td colSpan={8} style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
                   جاري تحميل جلسات الجرد...
                 </td>
               </tr>
             ) : sessions.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
+                <td colSpan={8} style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
                   لا توجد جلسات جرد مسجلة مطابقة للخيارات المحددة
                 </td>
               </tr>
@@ -271,15 +270,6 @@ export const StocktakeListView: React.FC<StocktakeListViewProps> = ({
                         )}
                         {st.counted_lines === 0 && <span style={{ color: '#cbd5e1' }}>—</span>}
                       </div>
-                    </td>
-                    <td style={{ textAlign: 'center', fontSize: '0.85rem', fontWeight: 600 }}>
-                      {st.net_variance_cost !== 0 ? (
-                        <span style={{ color: st.net_variance_cost < 0 ? '#b91c1c' : '#15803d' }}>
-                          {Number(st.net_variance_cost).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
-                        </span>
-                      ) : (
-                        <span style={{ color: '#94a3b8' }}>0.00</span>
-                      )}
                     </td>
                     <td style={{ fontSize: '0.85rem', color: '#475569' }}>
                       {new Date(st.created_at).toLocaleDateString('ar-EG')}

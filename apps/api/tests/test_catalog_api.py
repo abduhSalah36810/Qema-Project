@@ -100,21 +100,21 @@ async def test_unauthenticated_requests_return_401():
 
 
 @pytest.mark.asyncio
-async def test_finance_manager_lacks_inventory_manage_returns_403(auth_finance_manager):
-    """المستخدم بدور مدير مالي لا يملك صلاحية إدارة المخزون والدليل وتُرفض طلباته بـ 403 Forbidden."""
+async def test_finance_manager_reads_catalog_but_cannot_manage_it(auth_finance_manager):
+    """المدير المالي يقرأ الدليل (catalog:view) ولا يملك إنشاء التصنيفات أو الأصناف (403)."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # قراءة الفئات تحتاج inventory:view
+        # قراءة الفئات تحتاج catalog:view (متاحة للمدير المالي للقراءة فقط)
         res_view = await client.get("/api/v1/catalog/categories")
-        assert res_view.status_code == 403
+        assert res_view.status_code == 200
 
-        # إنشاء فئة يحتاج inventory:manage
+        # إنشاء فئة يحتاج catalog:categories:manage
         res_create_cat = await client.post(
             "/api/v1/catalog/categories",
             json={"code": "CAT_FIN_TEST", "name_ar": "فئة مالية"},
         )
         assert res_create_cat.status_code == 403
 
-        # إنشاء صنف يحتاج inventory:manage
+        # إنشاء صنف يحتاج catalog:item:create
         res_create_item = await client.post(
             "/api/v1/catalog/items",
             json={"code": "RAW_FIN_TEST", "name_ar": "صنف"},
@@ -423,6 +423,15 @@ async def test_finished_goods_identity_protection(auth_general_manager, session:
         existing_fg = (await session.scalars(
             select(CatalogItem).where(CatalogItem.item_type == "finished_garment").limit(1)
         )).first()
+        if not existing_fg:
+            from app.modules.production.models import Product, ProductVariant
+            from app.modules.production.service import get_or_create_finished_goods_item
+            product = (await session.scalars(select(Product).limit(1))).first()
+            if product:
+                variant = (await session.scalars(select(ProductVariant).where(ProductVariant.product_id == product.id).limit(1))).first()
+                if variant:
+                    existing_fg = await get_or_create_finished_goods_item(session, product.id, variant.id)
+                    await session.commit()
         assert existing_fg is not None
 
         # محاولة تغيير حالة التصنيف لـ confirmed بدلاً من not_applicable
@@ -628,12 +637,12 @@ async def test_catalog_items_listing_filtering_and_pagination(auth_general_manag
         assert item2.code not in codes_cat
 
         # فلترة بنوع الصنف
-        res_type = await client.get("/api/v1/catalog/items?item_type=fabric")
+        res_type = await client.get(f"/api/v1/catalog/items?item_type=fabric&search={item1.code}")
         assert res_type.status_code == 200
         assert any(i["code"] == item1.code for i in res_type.json())
 
         # فلترة بحالة التصنيف
-        res_stat = await client.get("/api/v1/catalog/items?classification_status=confirmed")
+        res_stat = await client.get(f"/api/v1/catalog/items?classification_status=confirmed&search={item1.code}")
         assert res_stat.status_code == 200
         assert any(i["code"] == item1.code for i in res_stat.json())
 

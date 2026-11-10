@@ -9,7 +9,7 @@ import * as catalogApi from '@/features/catalog/catalogApi';
 import { AuthProvider } from '@/features/auth/AuthContext';
 import { ApiError } from '@/lib/api';
 
-const mockHasPermission = vi.fn((_perm: string) => true);
+const mockHasPermission = vi.fn<(perm: string) => boolean>(() => true);
 
 vi.mock('@/features/auth/AuthContext', () => ({
   useAuth: () => ({
@@ -68,7 +68,7 @@ const mockCatalogItems: catalogApi.CatalogItem[] = [
     reorder_level: 10,
     attributes: {},
     approval_status: 'approved',
-    created_at: '2026-10-01T00:00:00Z',
+    has_pending_revision: false,
   },
   {
     id: 'item-2',
@@ -82,7 +82,7 @@ const mockCatalogItems: catalogApi.CatalogItem[] = [
     reorder_level: 5,
     attributes: {},
     approval_status: 'approved',
-    created_at: '2026-10-01T00:00:00Z',
+    has_pending_revision: false,
   },
 ];
 
@@ -146,9 +146,11 @@ const mockCountingSession: stocktakeApi.StocktakeSession = {
   counting_started_at: '2026-11-02T10:15:00Z',
 };
 
-const mockUnderReviewSession: stocktakeApi.StocktakeSession = {
+// الحالة الفعلية بعد الرفع للمراجعة من الخادم هي submitted
+const mockSubmittedSession: stocktakeApi.StocktakeSession = {
   ...mockDraftSession,
-  status: 'under_review',
+  status: 'submitted',
+  submitted_by: 'counter-1',
   counted_lines: 2,
   shortage_lines: 1,
   surplus_lines: 1,
@@ -157,6 +159,8 @@ const mockUnderReviewSession: stocktakeApi.StocktakeSession = {
   lines: [
     {
       ...mockDraftSession.lines![0],
+      bucket_reference: null,
+      status: 'counted',
       counted_quantity: 90,
       variance_quantity: -10,
       variance_type: 'shortage',
@@ -166,6 +170,8 @@ const mockUnderReviewSession: stocktakeApi.StocktakeSession = {
     },
     {
       ...mockDraftSession.lines![1],
+      bucket_reference: 'factory_brand',
+      status: 'counted',
       counted_quantity: 60,
       variance_quantity: 10,
       variance_type: 'surplus',
@@ -176,11 +182,22 @@ const mockUnderReviewSession: stocktakeApi.StocktakeSession = {
   ],
 };
 
+// بعد طلب إعادة عد سطر محدد يصبح الوضع under_review والسطر recount_required
+const mockUnderReviewSession: stocktakeApi.StocktakeSession = {
+  ...mockSubmittedSession,
+  status: 'under_review',
+  reviewed_by: 'gm-user',
+  lines: [
+    { ...mockSubmittedSession.lines![0], status: 'recount_required', needs_recount: true },
+    { ...mockSubmittedSession.lines![1] },
+  ],
+};
+
 const mockApprovedSession: stocktakeApi.StocktakeSession = {
-  ...mockUnderReviewSession,
+  ...mockSubmittedSession,
   status: 'approved',
-  reviewer_id: 'gm-user',
-  review_decision: 'approve',
+  reviewed_by: 'gm-user',
+  approved_by: 'gm-user',
   reviewed_at: '2026-11-02T12:00:00Z',
 };
 
@@ -303,8 +320,8 @@ describe('Stocktake & Inventory Adjustments Frontend Module', () => {
     });
   });
 
-  it('enforces maker-checker review and approval flow for under_review sessions', async () => {
-    vi.mocked(stocktakeApi.fetchStocktakeSession).mockResolvedValue(mockUnderReviewSession);
+  it('shows review actions for a submitted session and approves it', async () => {
+    vi.mocked(stocktakeApi.fetchStocktakeSession).mockResolvedValue(mockSubmittedSession);
     vi.mocked(stocktakeApi.approveStocktakeSession).mockResolvedValue(mockApprovedSession);
 
     render(
@@ -317,9 +334,10 @@ describe('Stocktake & Inventory Adjustments Frontend Module', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('قيد المراجعة والاعتماد')).toBeInTheDocument();
+      expect(screen.getByText('بانتظار المراجعة')).toBeInTheDocument();
       expect(screen.getByText('اعتماد نتائج الجرد')).toBeInTheDocument();
       expect(screen.getByText('طلب إعادة عد')).toBeInTheDocument();
+      expect(screen.getByText('رفض النتائج')).toBeInTheDocument();
       expect(screen.getByText('عجز مخزني')).toBeInTheDocument();
       expect(screen.getByText('زيادة مخزنية')).toBeInTheDocument();
     });
@@ -331,6 +349,68 @@ describe('Stocktake & Inventory Adjustments Frontend Module', () => {
     await waitFor(() => {
       expect(stocktakeApi.approveStocktakeSession).toHaveBeenCalledWith('stk-001', expect.any(String));
     });
+    // لا تعرض الشاشة أثر تكلفة صفرياً كقيمة حقيقية
+    expect(screen.queryByText(/صافي أثر التكلفة/)).not.toBeInTheDocument();
+    expect(screen.getByText('متاح للبيع')).toBeInTheDocument();
+  });
+
+  it('requests a recount with the backend decision value and shows the backend error on failure', async () => {
+    vi.mocked(stocktakeApi.fetchStocktakeSession).mockResolvedValue(mockSubmittedSession);
+    vi.mocked(stocktakeApi.reviewStocktakeSession).mockRejectedValueOnce(
+      new ApiError('الجلسة ليست في حالة مراجعة.', { status: 409 })
+    );
+
+    render(<StocktakeDetailView sessionId="stk-001" onBack={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText('طلب إعادة عد'));
+    fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    fireEvent.click(screen.getByText('إرسال طلب إعادة العد'));
+
+    await waitFor(() => {
+      expect(stocktakeApi.reviewStocktakeSession).toHaveBeenCalledWith('stk-001', expect.objectContaining({
+        decision: 'recount_required',
+        recount_line_ids: ['line-1'],
+      }));
+    });
+    expect(await screen.findByText('الجلسة ليست في حالة مراجعة.')).toBeInTheDocument();
+    expect(screen.queryByText(/تم توجيه طلب إعادة العد/)).not.toBeInTheDocument();
+  });
+
+  it('allows recounting only the lines flagged recount_required while under_review and blocks approval', async () => {
+    vi.mocked(stocktakeApi.fetchStocktakeSession).mockResolvedValue(mockUnderReviewSession);
+    vi.mocked(stocktakeApi.recordStocktakeCounts).mockResolvedValue(mockUnderReviewSession);
+
+    render(<StocktakeDetailView sessionId="stk-001" onBack={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('قيد المراجعة (إعادة عد)')).toBeInTheDocument();
+    });
+    const inputs = screen.getAllByPlaceholderText('أدخل الكمية...');
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toHaveValue(null);
+    expect(screen.getByText('اعتماد نتائج الجرد')).toBeDisabled();
+    expect(screen.getByText('⚠️ مطلوب إعادة عده')).toBeInTheDocument();
+
+    fireEvent.change(inputs[0], { target: { value: '92' } });
+    fireEvent.click(screen.getByText('حفظ إعادة العد'));
+
+    await waitFor(() => {
+      expect(stocktakeApi.recordStocktakeCounts).toHaveBeenCalledWith('stk-001', {
+        counts: [{ line_id: 'line-1', counted_quantity: 92 }],
+      });
+    });
+  });
+
+  it('hides review actions from users without review or approve permissions', async () => {
+    mockHasPermission.mockImplementation((perm: string) => !perm.includes('review') && !perm.includes('approve'));
+    vi.mocked(stocktakeApi.fetchStocktakeSession).mockResolvedValue(mockSubmittedSession);
+
+    render(<StocktakeDetailView sessionId="stk-001" onBack={vi.fn()} />);
+
+    await screen.findByText('بانتظار المراجعة');
+    expect(screen.queryByText('اعتماد نتائج الجرد')).not.toBeInTheDocument();
+    expect(screen.queryByText('طلب إعادة عد')).not.toBeInTheDocument();
+    mockHasPermission.mockImplementation(() => true);
   });
 
   it('opens posting confirmation modal on approved session and passes Idempotency-Key', async () => {

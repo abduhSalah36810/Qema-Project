@@ -100,32 +100,21 @@ async def test_create_employee_success():
 
 @pytest.mark.asyncio
 async def test_disburse_payroll_insufficient_treasury_raises_409():
-    """يجب رفض الصرف إذا كان رصيد الخزينة أقل من إجمالي الرواتب."""
+    """يُرفض تقديم الكشف للصرف إذا كان رصيد الخزينة أقل من إجمالي الرواتب."""
     from fastapi import HTTPException
-    from app.api.v1.endpoints.payroll import disburse_period_payroll
+    from app.api.v1.endpoints.payroll import submit_period_for_payment
 
-    period = _make_period(status="draft")
-    treasury, treasury_balance = _make_treasury(balance=100.0)  # رصيد صغير جداً
+    period = _make_period(status="calculated")
+    treasury, _ = _make_treasury(balance=100.0)  # رصيد صغير جداً
 
     run1 = MagicMock()
     run1.net_amount = Decimal("5000")
     run1.id = _uid()
 
     db = AsyncMock()
-    call_count = 0
-
-    async def mock_get(model, pk):
-        return period
-
-    async def mock_scalar(stmt):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return treasury  # treasury account
-        return Decimal("100.0")  # treasury balance — insufficient
-
-    db.get = AsyncMock(side_effect=mock_get)
-    db.scalar = AsyncMock(side_effect=mock_scalar)
+    # 1) قفل الفترة  2) رصيد الخزنة
+    db.scalar = AsyncMock(side_effect=[period, Decimal("100.0")])
+    db.get = AsyncMock(return_value=treasury)
     db.scalars = AsyncMock()
     db.scalars.return_value.all = MagicMock(return_value=[run1])
 
@@ -133,7 +122,24 @@ async def test_disburse_payroll_insufficient_treasury_raises_409():
     user.id = _uid()
 
     with pytest.raises(HTTPException) as exc:
-        await disburse_period_payroll(period_id=period.id, current_user=user, db=db)
+        await submit_period_for_payment(period_id=period.id, current_user=user, db=db)
+    assert exc.value.status_code == 409
+    db.add.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_submit_payroll_twice_is_rejected():
+    """لا يمكن تقديم فترة للصرف مرتين (حماية من الصرف المزدوج)."""
+    from fastapi import HTTPException
+    from app.api.v1.endpoints.payroll import submit_period_for_payment
+
+    period = _make_period(status="submitted")
+    db = AsyncMock()
+    db.scalar = AsyncMock(side_effect=[period])
+    user = MagicMock()
+    user.id = _uid()
+    with pytest.raises(HTTPException) as exc:
+        await submit_period_for_payment(period_id=period.id, current_user=user, db=db)
     assert exc.value.status_code == 409
 
 
@@ -146,7 +152,7 @@ async def test_calculate_period_already_paid_raises_409():
     period = _make_period(status="paid")
 
     db = AsyncMock()
-    db.get = AsyncMock(return_value=period)
+    db.scalar = AsyncMock(return_value=period)
 
     user = MagicMock()
     user.id = _uid()

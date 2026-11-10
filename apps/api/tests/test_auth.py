@@ -173,10 +173,10 @@ async def test_auth_me_endpoint_success(rsa_keypair):
         assert response.status_code == 200
         assert "x-request-id" in response.headers
         data = response.json()
-        assert data == {
-            "id": "550e8400-e29b-41d4-a716-446655440000",
-            "email": "factory_worker@qemma.com",
-        }
+        assert data["id"] == "550e8400-e29b-41d4-a716-446655440000"
+        assert data["email"] == "factory_worker@qemma.com"
+        # الأدوار والصلاحيات تُحسب خادمياً فقط (لا يوجد دور معتمد لهذا المستخدم)
+        assert data["roles"] == [] and data["permissions"] == []
         # التأكد التام من عدم كشف التوكن أو الادعاءات الخام
         assert "claims" not in data
         assert "token" not in data

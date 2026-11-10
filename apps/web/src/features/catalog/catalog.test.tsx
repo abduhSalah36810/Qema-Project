@@ -3,6 +3,27 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CatalogManagementView } from './CatalogManagementView';
 import * as catalogApi from './catalogApi';
 
+const grantedPermissions = vi.hoisted(() => new Set<string>());
+const mockHasPermission = vi.hoisted(() => vi.fn((perm: string) => grantedPermissions.has(perm)));
+
+vi.mock('@/features/auth/AuthContext', () => ({
+  useAuth: () => ({
+    hasPermission: mockHasPermission,
+    roles: grantedPermissions.size > 0 ? ['general_manager'] : [],
+    user: { id: 'test-user', email: 'test@qemma.com' },
+  }),
+}));
+
+const ALL_CATALOG_PERMISSIONS = [
+  'catalog:item:create',
+  'catalog:item:update',
+  'catalog:item:submit',
+  'catalog:item:approve',
+  'catalog:item:request_revision',
+  'catalog:item:deactivate',
+  'catalog:item:manage_revisions',
+];
+
 // Sample mock data matching backend schema
 const mockCategories: catalogApi.ItemCategory[] = [
   {
@@ -155,6 +176,8 @@ const mockItemDetail: catalogApi.CatalogItemDetail = {
 describe('Catalog Management Feature — Frontend Tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    grantedPermissions.clear();
+    ALL_CATALOG_PERMISSIONS.forEach((perm) => grantedPermissions.add(perm));
     vi.spyOn(catalogApi, 'fetchCategories').mockResolvedValue(mockCategories);
     vi.spyOn(catalogApi, 'fetchCategoriesTree').mockResolvedValue(mockCategoriesTree);
     vi.spyOn(catalogApi, 'fetchUnits').mockResolvedValue(mockUnits);
@@ -366,5 +389,25 @@ describe('Catalog Management Feature — Frontend Tests', () => {
         screen.getByText('تقديم طلب تعديل (Revision) للصنف المعتمد')
       ).toBeInTheDocument();
     });
+  });
+
+  it('8. hides create and revision actions when authenticated user has no roles/permissions (fail-closed)', async () => {
+    grantedPermissions.clear();
+    render(<CatalogManagementView />);
+
+    await waitFor(() => {
+      expect(screen.getByText('قماش قطن أبيض 100%')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('button', { name: '＋ إضافة صنف جديد' })).not.toBeInTheDocument();
+
+    const editButtons = screen.getAllByRole('button', { name: 'عرض وتعديل' });
+    fireEvent.click(editButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('بطاقة مواصفات وحوكمة الصنف')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('button', { name: '📝 طلب تعديل الصنف' })).not.toBeInTheDocument();
   });
 });
