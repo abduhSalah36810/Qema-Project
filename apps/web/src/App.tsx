@@ -16,6 +16,8 @@ const CustomersView = lazy(() =>
   import('@/features/customers/CustomersView').then((m) => ({ default: m.CustomersView })));
 const CustomerDeliveriesView = lazy(() =>
   import('@/features/customers/CustomerDeliveriesView').then((m) => ({ default: m.CustomerDeliveriesView })));
+const CustomerReturnsView = lazy(() =>
+  import('@/features/customers/CustomerReturnsView').then((m) => ({ default: m.CustomerReturnsView })));
 const MainWarehouseView = lazy(() =>
   import('@/features/inventory/MainWarehouseView').then((m) => ({ default: m.MainWarehouseView })));
 const MachineryView = lazy(() =>
@@ -125,6 +127,7 @@ const GENERAL_NAV: NavEntry[] = [
     children: [
       { id: 'finance-customers', name: 'العملاء وطلبات البيع', requiredPermission: 'customers:view' },
       { id: 'orders', name: 'تسليم طلبات العملاء', requiredPermission: 'customers:deliveries:manage' },
+      { id: 'customer-returns', name: 'مرتجعات العملاء', requiredPermission: 'customers:deliveries:manage' },
     ],
   },
   {
@@ -157,6 +160,7 @@ const WAREHOUSE_NAV: NavEntry[] = [
   { type: 'item', id: 'finance-suppliers', name: 'فواتير الشراء والاستلام', icon: '🧾', requiredPermission: 'suppliers:view' },
   { type: 'item', id: 'batches', name: 'صرف الخامات واستلام التام', icon: '🧵', requiredPermission: 'production:orders:view' },
   { type: 'item', id: 'orders', name: 'تسليم طلبات العملاء', icon: '🚚', requiredPermission: 'customers:deliveries:manage' },
+  { type: 'item', id: 'customer-returns', name: 'مرتجعات العملاء', icon: '↩️', requiredPermission: 'customers:deliveries:manage' },
   {
     type: 'group',
     id: 'warehouses',
@@ -195,6 +199,7 @@ const FINANCE_NAV: NavEntry[] = [
   { type: 'item', id: 'inbox', name: 'الرئيسية · مهامي واعتماداتي', icon: '🏠' },
   { type: 'item', id: 'finance-treasury', name: 'الخزينة والاعتمادات', icon: '🏦', requiredPermission: 'finance:cash:view' },
   { type: 'item', id: 'finance-customers', name: 'العملاء والطلبات والتحصيل', icon: '👥', requiredPermission: 'customers:view' },
+  { type: 'item', id: 'customer-returns', name: 'مرتجعات العملاء', icon: '↩️', requiredPermission: 'customers:view' },
   { type: 'item', id: 'finance-suppliers', name: 'مستحقات الموردين', icon: '🧾', requiredPermission: 'suppliers:view' },
   {
     type: 'group',
@@ -223,6 +228,7 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   dashboard: ['reports:view'],
   batches: ['production:orders:view'],
   orders: ['customers:deliveries:manage'],
+  'customer-returns': ['customers:deliveries:manage', 'customers:view'],
   'warehouse-raw': ['inventory:view'],
   'warehouse-machinery': ['inventory:view'],
   'warehouse-finished': ['inventory:view'],
@@ -868,6 +874,8 @@ function AppContent() {
             <ProductionOrdersView focus={navFocus} onFocusHandled={() => setNavFocus(undefined)} />
           ) : activeNav === 'orders' ? (
             <CustomerDeliveriesView />
+          ) : activeNav === 'customer-returns' ? (
+            <CustomerReturnsView />
           ) : activeNav === 'warehouse-guide' ? (
             <WarehouseGuideView />
           ) : activeNav === 'warehouse-catalog' || activeNav === 'catalog' ? (

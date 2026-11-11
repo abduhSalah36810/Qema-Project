@@ -17,6 +17,7 @@ import {
   recordCustomerDelivery,
   recordCustomerPayment,
   updateCustomer,
+  RETURN_DISPOSITION_LABELS,
 } from './customersApi';
 
 interface CustomerAccountPageProps {
@@ -174,6 +175,7 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
                 })}</div>
                 <div className="customer-records-grid">
                   <section><h5>دفعات التسليم <span>{order.deliveries.length}</span></h5>{order.deliveries.length ? order.deliveries.map((delivery) => <div className="customer-record-row" key={delivery.id}><strong>{delivery.delivery_number}</strong><span>{formatDate(delivery.delivered_at)} · {delivery.lines.map((line) => `${line.product_name} (${line.quantity})`).join('، ')}</span></div>) : <p className="customer-muted">لم تسجل دفعات تسليم.</p>}</section>
+                  <section><h5>المرتجعات <span>{order.returns?.length ?? 0}</span></h5>{order.returns && order.returns.length ? order.returns.map((ret) => <div className="customer-record-row" key={ret.id}><strong>{ret.return_number}</strong><span>{formatDate(ret.returned_at)} · {RETURN_DISPOSITION_LABELS[ret.disposition] ?? ret.disposition} · {ret.lines.map((line) => `${line.product_name} (${line.quantity})`).join('، ')} · السبب: {ret.reason}</span></div>) : <p className="customer-muted">لا توجد مرتجعات على هذا الطلب.</p>}</section>
                   <section><h5>المدفوعات <span>{order.payments.length}</span></h5>{order.payments.length ? order.payments.map((payment) => <div className="customer-record-row" key={payment.id}><strong>{formatMoney(payment.amount)} · {methodLabel(payment.method)} · {payment.status === 'approved' ? 'معتمد في الخزينة' : payment.status === 'rejected' ? 'مرفوض' : 'بانتظار اعتماد الخزينة'}</strong><span>{payment.receipt_number} · {formatDate(payment.received_at)}{payment.reference ? ` · ${payment.reference}` : ''}</span></div>) : <p className="customer-muted">لم تسجل دفعات مالية.</p>}</section>
                 </div>
                 <footer className="customer-order-card__actions">

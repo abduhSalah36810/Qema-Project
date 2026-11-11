@@ -2,7 +2,7 @@ import hashlib
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.auth import AuthenticatedUser
-from app.core.permissions import get_user_roles, require_permission
+from app.core.permissions import get_user_roles, require_any_permission, require_permission
 from app.db.session import get_db
 from app.modules.customers.schemas import CustomerCreate, CustomerRead, CustomerUpdate
 from app.modules.customers.schemas import (
@@ -28,7 +28,10 @@ from app.modules.customers.schemas import (
     CustomerDeliveryReturnLineRead,
     CustomerDeliveryReturnRead,
     CustomerReturnInspectionCreate,
+    CustomerReturnListItemRead,
     PendingDeliveryItemRead,
+    ReturnableDeliveryLineRead,
+    ReturnableDeliveryRead,
     ProductionOrderForCustomerCreate,
 )
 from app.modules.customers.models import (
@@ -110,6 +113,10 @@ def _return_payload(return_doc: CustomerDeliveryReturn) -> dict:
         "reason": return_doc.reason,
         "received_by": return_doc.received_by,
         "disposition": return_doc.disposition,
+        "created_by": return_doc.created_by or "",
+        "inspected_by": return_doc.inspected_by,
+        "inspected_at": return_doc.inspected_at,
+        "inspection_notes": return_doc.inspection_notes or "",
         "lines": [
             {
                 "id": line.id,
@@ -119,6 +126,9 @@ def _return_payload(return_doc: CustomerDeliveryReturn) -> dict:
                 "variant_info": _variant_label(line.order_line.variant),
                 "quantity": float(line.quantity),
                 "notes": line.notes,
+                "condition": line.condition or "unknown",
+                "restocked_quantity": float(line.restocked_quantity or 0),
+                "scrapped_quantity": float(line.scrapped_quantity or 0),
             }
             for line in return_doc.lines
         ],
@@ -328,6 +338,117 @@ async def list_pending_deliveries(
             )
 
     return pending_items
+
+
+ReturnsViewer = Annotated[
+    AuthenticatedUser, Depends(require_any_permission("customers:deliveries:manage", "customers:view"))
+]
+
+_RETURN_LIST_OPTIONS = (
+    selectinload(CustomerDeliveryReturn.lines).selectinload(CustomerDeliveryReturnLine.order_line).selectinload(CustomerOrderLine.product),
+    selectinload(CustomerDeliveryReturn.lines).selectinload(CustomerDeliveryReturnLine.order_line).selectinload(CustomerOrderLine.variant),
+    selectinload(CustomerDeliveryReturn.delivery),
+    selectinload(CustomerDeliveryReturn.order),
+    selectinload(CustomerDeliveryReturn.customer),
+)
+
+
+@router.get("/returns", response_model=list[CustomerReturnListItemRead])
+async def list_customer_returns(
+    current_user: ReturnsViewer,
+    db: Database,
+    status_filter: Literal["pending", "inspected", "all"] = Query("all", alias="status"),
+    order_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+):
+    """سجل مرتجعات العملاء (كميات وحالات فقط، بلا مبالغ) لأمين المخزن ومن يرى العملاء."""
+    del current_user
+    stmt = select(CustomerDeliveryReturn).options(*_RETURN_LIST_OPTIONS)
+    if status_filter == "pending":
+        stmt = stmt.where(CustomerDeliveryReturn.disposition == "pending_inspection")
+    elif status_filter == "inspected":
+        stmt = stmt.where(CustomerDeliveryReturn.disposition != "pending_inspection")
+    if order_id:
+        stmt = stmt.where(CustomerDeliveryReturn.order_id == order_id)
+    stmt = stmt.order_by(CustomerDeliveryReturn.returned_at.desc()).limit(limit)
+    rows = (await db.scalars(stmt)).all()
+    return [
+        CustomerReturnListItemRead(
+            **_return_payload(r),
+            delivery_number=r.delivery.delivery_number if r.delivery else "",
+            order_number=r.order.order_number if r.order else "",
+            customer_name=r.customer.name if r.customer else "",
+            customer_code=r.customer.code if r.customer else "",
+        )
+        for r in rows
+    ]
+
+
+@router.get("/returnable-deliveries", response_model=list[ReturnableDeliveryRead])
+async def list_returnable_deliveries(
+    current_user: DeliveryManager,
+    db: Database,
+    search: str = Query(default="", max_length=100),
+    limit: int = Query(default=30, ge=1, le=100),
+):
+    """سندات التسليم التي يتبقى فيها كمية يمكن إرجاعها (المسلم − المرتجع سابقاً)، الأحدث أولاً."""
+    del current_user
+    stmt = (
+        select(CustomerDelivery)
+        .join(CustomerOrder, CustomerOrder.id == CustomerDelivery.order_id)
+        .join(Customer, Customer.id == CustomerOrder.customer_id)
+        .options(
+            selectinload(CustomerDelivery.lines).selectinload(CustomerDeliveryLine.order_line).selectinload(CustomerOrderLine.product),
+            selectinload(CustomerDelivery.lines).selectinload(CustomerDeliveryLine.order_line).selectinload(CustomerOrderLine.variant),
+            selectinload(CustomerDelivery.returns).selectinload(CustomerDeliveryReturn.lines),
+            selectinload(CustomerDelivery.order).selectinload(CustomerOrder.customer),
+        )
+        .order_by(CustomerDelivery.delivered_at.desc())
+    )
+    term = search.strip()
+    if term:
+        like = f"%{term}%"
+        stmt = stmt.where(or_(
+            CustomerDelivery.delivery_number.ilike(like),
+            CustomerOrder.order_number.ilike(like),
+            Customer.name.ilike(like),
+            Customer.code.ilike(like),
+        ))
+    result: list[ReturnableDeliveryRead] = []
+    for delivery in (await db.scalars(stmt.limit(limit * 3))).all():
+        returned: dict[str, Decimal] = {}
+        for ret in delivery.returns:
+            for rl in ret.lines:
+                returned[rl.delivery_line_id] = returned.get(rl.delivery_line_id, Decimal("0")) + Decimal(str(rl.quantity))
+        lines = []
+        for dl in delivery.lines:
+            delivered = Decimal(str(dl.quantity))
+            done = returned.get(dl.id, Decimal("0"))
+            lines.append(ReturnableDeliveryLineRead(
+                delivery_line_id=dl.id,
+                product_name=dl.order_line.product.name_ar,
+                variant_info=_variant_label(dl.order_line.variant),
+                delivered_quantity=float(delivered),
+                returned_quantity=float(done),
+                returnable_quantity=float(max(Decimal("0"), delivered - done)),
+            ))
+        if not any(line.returnable_quantity > 0 for line in lines):
+            continue
+        order = delivery.order
+        result.append(ReturnableDeliveryRead(
+            delivery_id=delivery.id,
+            delivery_number=delivery.delivery_number,
+            delivered_at=delivery.delivered_at,
+            order_id=order.id,
+            order_number=order.order_number,
+            customer_id=order.customer_id,
+            customer_name=order.customer.name if order.customer else "",
+            customer_code=order.customer.code if order.customer else "",
+            lines=lines,
+        ))
+        if len(result) >= limit:
+            break
+    return result
 
 
 @router.get("/{customer_id}/account", response_model=CustomerAccountRead)
@@ -695,29 +816,7 @@ async def record_customer_delivery_return(
         )
         if existing_return:
             _validate_return_idempotency_fingerprint(existing_return, delivery.id, data)
-            return CustomerDeliveryReturnRead(
-                id=existing_return.id,
-                return_number=existing_return.return_number,
-                delivery_id=existing_return.delivery_id,
-                order_id=existing_return.order_id,
-                customer_id=existing_return.customer_id,
-                returned_at=existing_return.returned_at,
-                reason=existing_return.reason,
-                received_by=existing_return.received_by,
-                disposition=existing_return.disposition,
-                lines=[
-                    CustomerDeliveryReturnLineRead(
-                        id=line.id,
-                        delivery_line_id=line.delivery_line_id,
-                        order_line_id=line.order_line_id,
-                        product_name=line.order_line.product.name_ar,
-                        variant_info=_variant_label(line.order_line.variant),
-                        quantity=float(line.quantity),
-                        notes=line.notes,
-                    )
-                    for line in existing_return.lines
-                ],
-            )
+            return CustomerDeliveryReturnRead(**_return_payload(existing_return))
 
     # 4. فحص البنود والكميات المرتجعة التراكمية
     delivery_lines = {l.id: l for l in delivery.lines}
@@ -785,6 +884,7 @@ async def record_customer_delivery_return(
             order_line_id=order_line.id,
             quantity=line.quantity,
             notes=line.notes.strip(),
+            condition=line.condition,
         )
         return_lines_to_add.append(ret_line)
         db.add(ret_line)
@@ -880,29 +980,7 @@ async def record_customer_delivery_return(
             )
             if existing_return:
                 _validate_return_idempotency_fingerprint(existing_return, delivery.id, data)
-                return CustomerDeliveryReturnRead(
-                    id=existing_return.id,
-                    return_number=existing_return.return_number,
-                    delivery_id=existing_return.delivery_id,
-                    order_id=existing_return.order_id,
-                    customer_id=existing_return.customer_id,
-                    returned_at=existing_return.returned_at,
-                    reason=existing_return.reason,
-                    received_by=existing_return.received_by,
-                    disposition=existing_return.disposition,
-                    lines=[
-                        CustomerDeliveryReturnLineRead(
-                            id=line.id,
-                            delivery_line_id=line.delivery_line_id,
-                            order_line_id=line.order_line_id,
-                            product_name=line.order_line.product.name_ar,
-                            variant_info=_variant_label(line.order_line.variant),
-                            quantity=float(line.quantity),
-                            notes=line.notes,
-                        )
-                        for line in existing_return.lines
-                    ],
-                )
+                return CustomerDeliveryReturnRead(**_return_payload(existing_return))
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="تعارض في حفظ مستند المرتجع أو تكرار مفتاح عدم التكرار.",
@@ -918,6 +996,7 @@ async def record_customer_delivery_return(
         reason=return_doc.reason,
         received_by=return_doc.received_by,
         disposition=return_doc.disposition,
+        created_by=return_doc.created_by or "",
         lines=[
             CustomerDeliveryReturnLineRead(
                 id=rl.id,
@@ -927,6 +1006,7 @@ async def record_customer_delivery_return(
                 variant_info=_variant_label(delivery_lines[rl.delivery_line_id].order_line.variant),
                 quantity=float(rl.quantity),
                 notes=rl.notes,
+                condition=rl.condition,
             )
             for rl in return_lines_to_add
         ],
@@ -1001,9 +1081,10 @@ async def inspect_customer_return(
     db: Database,
 ):
     """
-    نتيجة فحص المرتجع:
-    - restocked: نقل الكمية من حاوية "تحت الفحص" إلى الرصيد القابل للبيع لنفس نوع الطلب.
-    - scrapped : إخراج الكمية من المخزون كهالك مع تحميل تكلفتها على مصروفات الإنتاج (5200).
+    نتيجة فحص المرتجع لكل سطر:
+    - الصالح للبيع: من حاوية "تحت الفحص" إلى الرصيد القابل للبيع لنفس نوع الطلب.
+    - التالف: يخرج من المخزون كهالك وتُحمّل تكلفته على 5200، ولا يختلط بالرصيد القابل للبيع.
+    لا أثر مالي على حساب العميل هنا؛ تخفيض ذمته تم عند تسجيل المرتجع، والاسترداد النقدي سند صرف منفصل.
     """
     return_doc = await db.scalar(
         select(CustomerDeliveryReturn)
@@ -1022,6 +1103,29 @@ async def inspect_customer_return(
     fg_wh = await db.scalar(select(Warehouse).where(Warehouse.code == "finished_goods"))
     if not order or not fg_wh:
         raise HTTPException(status_code=503, detail="بيانات الطلب أو مخزن التام غير مكتملة.")
+
+    # تحديد الكمية الصالحة والتالفة لكل سطر (أو قرار واحد للمستند كله)
+    lines_by_id = {line.id: line for line in return_doc.lines}
+    split: dict[str, tuple[Decimal, Decimal]] = {}
+    if data.lines is not None:
+        ids = [entry.return_line_id for entry in data.lines]
+        if len(set(ids)) != len(ids) or set(ids) != set(lines_by_id):
+            raise HTTPException(status_code=422, detail="حدد نتيجة الفحص لكل سطر في المرتجع مرة واحدة.")
+        for entry in data.lines:
+            line = lines_by_id[entry.return_line_id]
+            if entry.restocked_quantity + entry.scrapped_quantity != Decimal(str(line.quantity)):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"مجموع الصالح ({entry.restocked_quantity:g}) والتالف ({entry.scrapped_quantity:g}) "
+                        f"يجب أن يساوي كمية السطر المرتجعة ({Decimal(str(line.quantity)):g})."
+                    ),
+                )
+            split[line.id] = (entry.restocked_quantity, entry.scrapped_quantity)
+    else:
+        for line in return_doc.lines:
+            qty = Decimal(str(line.quantity))
+            split[line.id] = (qty, Decimal("0")) if data.disposition == "restocked" else (Decimal("0"), qty)
 
     pending_bucket = f"{RETURN_PENDING_PREFIX}{customer_id}"
     sellable_bucket = delivery_bucket_for_order(order.order_type, customer_id)
@@ -1044,7 +1148,10 @@ async def inspect_customer_return(
                 StockLedgerEntry.item_id == catalog_item.id,
             )
         ) or 0))
+        restock_qty, scrap_qty = split[line.id]
         line_cost = (Decimal(str(qty)) * unit_cost).quantize(Decimal("0.01"))
+        restock_cost = (restock_qty * unit_cost).quantize(Decimal("0.01"))
+        # الخروج من «تحت الفحص» بالكمية كلها، ثم الصالح فقط إلى الرصيد القابل للبيع
         db.add(StockLedgerEntry(
             id=str(uuid.uuid4()), item_id=catalog_item.id, unit_id=catalog_item.unit_id,
             warehouse_id=fg_wh.id, location_type="warehouse", quantity=-qty,
@@ -1053,17 +1160,19 @@ async def inspect_customer_return(
             entry_type="return_inspection_release", created_by=current_user.id,
             bucket_reference=pending_bucket,
         ))
-        if data.disposition == "restocked":
+        if restock_qty > 0:
             db.add(StockLedgerEntry(
                 id=str(uuid.uuid4()), item_id=catalog_item.id, unit_id=catalog_item.unit_id,
-                warehouse_id=fg_wh.id, location_type="warehouse", quantity=qty,
-                unit_cost=unit_cost, total_cost=line_cost,
+                warehouse_id=fg_wh.id, location_type="warehouse", quantity=float(restock_qty),
+                unit_cost=unit_cost, total_cost=restock_cost,
                 reference_doc_type="customer_return_inspection", reference_doc_id=return_doc.id,
                 entry_type="return_restock", created_by=current_user.id,
                 bucket_reference=sellable_bucket,
             ))
-        else:
-            scrap_cost += line_cost
+        # التالف يخرج من المخزون كهالك ولا يختلط بالرصيد القابل للبيع
+        scrap_cost += line_cost - restock_cost
+        line.restocked_quantity = restock_qty
+        line.scrapped_quantity = scrap_qty
 
     if scrap_cost > Decimal("0.00"):
         await post_journal_entry(
@@ -1079,9 +1188,17 @@ async def inspect_customer_return(
             entry_date=now,
         )
 
-    return_doc.disposition = data.disposition
-    if data.notes.strip():
-        return_doc.reason = f"{return_doc.reason} | الفحص: {data.notes.strip()}".strip(" |")
+    total_restock = sum((r for r, _ in split.values()), Decimal("0"))
+    total_scrap = sum((d for _, d in split.values()), Decimal("0"))
+    if total_scrap == 0:
+        return_doc.disposition = "restocked"
+    elif total_restock == 0:
+        return_doc.disposition = "scrapped"
+    else:
+        return_doc.disposition = "partially_restocked"
+    return_doc.inspected_by = current_user.id
+    return_doc.inspected_at = now
+    return_doc.inspection_notes = data.notes.strip()
     await db.commit()
     return CustomerDeliveryReturnRead(**_return_payload(return_doc))
 

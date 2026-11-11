@@ -78,6 +78,8 @@ export interface CustomerOrder {
   returned_value?: number;
   receivable_amount?: number;
   pending_payments_amount?: number;
+  /** مرتجعات الطلب (كميات وحالات) */
+  returns?: CustomerReturn[];
   lines: CustomerOrderLine[];
   deliveries: CustomerDelivery[];
   payments: CustomerPayment[];
@@ -199,3 +201,118 @@ export async function createCustomerProductionOrder(customerId: string, orderId:
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input),
   });
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// مرتجعات العملاء: تسجيل على سند تسليم ← تحت الفحص ← فحص مقسم (صالح للبيع / تالف)
+// ═════════════════════════════════════════════════════════════════════════════
+
+export type ReturnCondition = 'good' | 'damaged' | 'unknown';
+export type ReturnDisposition = 'pending_inspection' | 'restocked' | 'scrapped' | 'partially_restocked';
+
+export const RETURN_CONDITION_LABELS: Record<ReturnCondition, string> = {
+  good: 'سليم ظاهرياً',
+  damaged: 'تالف ظاهرياً',
+  unknown: 'غير محدد · يحتاج فحص',
+};
+
+export const RETURN_DISPOSITION_LABELS: Record<ReturnDisposition, string> = {
+  pending_inspection: 'تحت الفحص',
+  restocked: 'أُعيد للبيع بالكامل',
+  scrapped: 'أُعدم بالكامل كتالف',
+  partially_restocked: 'جزء للبيع وجزء تالف',
+};
+
+export interface CustomerReturnLine {
+  id: string;
+  delivery_line_id: string;
+  order_line_id: string;
+  product_name: string;
+  variant_info: string;
+  quantity: number;
+  notes: string;
+  condition: ReturnCondition;
+  restocked_quantity: number;
+  scrapped_quantity: number;
+}
+
+export interface CustomerReturn {
+  id: string;
+  return_number: string;
+  delivery_id: string;
+  order_id: string;
+  customer_id: string;
+  returned_at: string;
+  reason: string;
+  received_by: string;
+  disposition: ReturnDisposition;
+  created_by: string;
+  inspected_by?: string | null;
+  inspected_at?: string | null;
+  inspection_notes: string;
+  lines: CustomerReturnLine[];
+  delivery_number?: string;
+  order_number?: string;
+  customer_name?: string;
+  customer_code?: string;
+}
+
+export interface ReturnableDelivery {
+  delivery_id: string;
+  delivery_number: string;
+  delivered_at: string;
+  order_id: string;
+  order_number: string;
+  customer_id: string;
+  customer_name: string;
+  customer_code: string;
+  lines: Array<{
+    delivery_line_id: string;
+    product_name: string;
+    variant_info: string;
+    delivered_quantity: number;
+    returned_quantity: number;
+    returnable_quantity: number;
+  }>;
+}
+
+export function fetchCustomerReturns(params: { status?: 'pending' | 'inspected' | 'all'; orderId?: string } = {}): Promise<CustomerReturn[]> {
+  const query = new URLSearchParams();
+  if (params.status) query.set('status', params.status);
+  if (params.orderId) query.set('order_id', params.orderId);
+  const qs = query.toString();
+  return apiClient.request<CustomerReturn[]>(`/api/v1/customers/returns${qs ? `?${qs}` : ''}`);
+}
+
+export function fetchReturnableDeliveries(search = ''): Promise<ReturnableDelivery[]> {
+  const qs = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
+  return apiClient.request<ReturnableDelivery[]>(`/api/v1/customers/returnable-deliveries${qs}`);
+}
+
+export function recordCustomerReturn(
+  customerId: string,
+  orderId: string,
+  deliveryId: string,
+  input: {
+    reason: string;
+    received_by: string;
+    idempotency_key?: string;
+    lines: Array<{ delivery_line_id: string; quantity: number; condition: ReturnCondition; notes: string }>;
+  },
+): Promise<CustomerReturn> {
+  return apiClient.request<CustomerReturn>(
+    `/api/v1/customers/${encodeURIComponent(customerId)}/orders/${encodeURIComponent(orderId)}/deliveries/${encodeURIComponent(deliveryId)}/return`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
+  );
+}
+
+export function inspectCustomerReturn(
+  customerId: string,
+  returnId: string,
+  input: { notes: string; lines: Array<{ return_line_id: string; restocked_quantity: number; scrapped_quantity: number }> },
+): Promise<CustomerReturn> {
+  return apiClient.request<CustomerReturn>(
+    `/api/v1/customers/${encodeURIComponent(customerId)}/returns/${encodeURIComponent(returnId)}/inspection`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
+  );
+}
+

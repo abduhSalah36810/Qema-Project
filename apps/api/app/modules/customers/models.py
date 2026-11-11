@@ -92,7 +92,11 @@ class CustomerDeliveryReturn(Base):
     returned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     received_by: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    # pending_inspection | restocked | scrapped | partially_restocked
     disposition: Mapped[str] = mapped_column(String(32), default="pending_inspection", nullable=False)
+    inspected_by: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    inspected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
+    inspection_notes: Mapped[str] = mapped_column(Text, default="", nullable=False, server_default="")
     idempotency_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
@@ -111,6 +115,11 @@ class CustomerDeliveryReturnLine(Base):
     order_line_id: Mapped[str] = mapped_column(String(36), ForeignKey("customer_order_lines.id"), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # الحالة الظاهرة عند الاستلام من العميل (للتوثيق)؛ قرار المخزون يُتخذ عند الفحص
+    condition: Mapped[str] = mapped_column(String(32), default="unknown", nullable=False, server_default="unknown")
+    # نتيجة الفحص: صالح للبيع يعود للرصيد، وتالف يُعدم كهالك. المجموع = الكمية بعد الفحص
+    restocked_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=Decimal("0"), nullable=False, server_default="0")
+    scrapped_quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=Decimal("0"), nullable=False, server_default="0")
 
     return_doc: Mapped[CustomerDeliveryReturn] = relationship(back_populates="lines")
     delivery_line: Mapped[CustomerDeliveryLine] = relationship()

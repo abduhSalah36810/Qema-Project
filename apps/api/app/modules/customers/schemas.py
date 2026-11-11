@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class CustomerCreate(BaseModel):
@@ -180,10 +180,14 @@ class CustomerProductionOrderRead(BaseModel):
     variant_info: str
 
 
+ReturnCondition = Literal["good", "damaged", "unknown"]
+
+
 class CustomerDeliveryReturnLineCreate(BaseModel):
     delivery_line_id: str
     quantity: Decimal = Field(gt=0, max_digits=12, decimal_places=3)
     notes: str = Field(default="", max_length=1000)
+    condition: ReturnCondition = "unknown"
 
 
 class CustomerDeliveryReturnCreate(BaseModel):
@@ -201,6 +205,9 @@ class CustomerDeliveryReturnLineRead(BaseModel):
     variant_info: str
     quantity: float
     notes: str
+    condition: str = "unknown"
+    restocked_quantity: float = 0.0
+    scrapped_quantity: float = 0.0
 
 
 class CustomerDeliveryReturnRead(BaseModel):
@@ -213,6 +220,10 @@ class CustomerDeliveryReturnRead(BaseModel):
     reason: str
     received_by: str
     disposition: str
+    created_by: str = ""
+    inspected_by: str | None = None
+    inspected_at: datetime | None = None
+    inspection_notes: str = ""
     lines: list[CustomerDeliveryReturnLineRead]
 
 
@@ -235,10 +246,56 @@ class PendingDeliveryItemRead(BaseModel):
     status: str
 
 
+class CustomerReturnInspectionLine(BaseModel):
+    return_line_id: str
+    restocked_quantity: Decimal = Field(ge=0, max_digits=12, decimal_places=3)
+    scrapped_quantity: Decimal = Field(ge=0, max_digits=12, decimal_places=3)
+
+
 class CustomerReturnInspectionCreate(BaseModel):
-    """نتيجة فحص المرتجع: إعادة للمخزون القابل للبيع أو إعدام كهالك."""
-    disposition: Literal["restocked", "scrapped"]
+    """
+    نتيجة فحص المرتجع، إما:
+    - lines: لكل سطر الكمية الصالحة للبيع والكمية التالفة (مجموعهما = كمية السطر)، أو
+    - disposition: قرار واحد للمستند كله (restocked / scrapped) للتوافق مع الاستخدام السابق.
+    """
+    disposition: Literal["restocked", "scrapped"] | None = None
+    lines: list[CustomerReturnInspectionLine] | None = Field(default=None, min_length=1, max_length=100)
     notes: str = Field(default="", max_length=1000)
+
+    @model_validator(mode="after")
+    def _one_mode(self):
+        if (self.disposition is None) == (self.lines is None):
+            raise ValueError("حدد نتيجة الفحص لكل سطر (lines) أو قراراً واحداً للمستند (disposition).")
+        return self
+
+
+class ReturnableDeliveryLineRead(BaseModel):
+    delivery_line_id: str
+    product_name: str
+    variant_info: str
+    delivered_quantity: float
+    returned_quantity: float
+    returnable_quantity: float
+
+
+class ReturnableDeliveryRead(BaseModel):
+    """سند تسليم يمكن تسجيل مرتجع عليه (يتبقى فيه كمية لم تُرتجع)."""
+    delivery_id: str
+    delivery_number: str
+    delivered_at: datetime
+    order_id: str
+    order_number: str
+    customer_id: str
+    customer_name: str
+    customer_code: str
+    lines: list[ReturnableDeliveryLineRead]
+
+
+class CustomerReturnListItemRead(CustomerDeliveryReturnRead):
+    delivery_number: str = ""
+    order_number: str = ""
+    customer_name: str = ""
+    customer_code: str = ""
 
 
 CustomerOrderRead.model_rebuild()
