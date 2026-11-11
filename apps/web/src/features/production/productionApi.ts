@@ -196,6 +196,8 @@ export interface ProductionOrder {
   notes: string;
   /** من صرف تحويل الخامات المعلق؛ الخادم يرفض أن يؤكد استلامه بنفسه */
   pending_transfer_dispatched_by?: string | null;
+  /** من صرف صرفاً إضافياً بالطريق؛ لا يؤكد استلامه بنفسه */
+  extra_issue_pending_dispatched_by?: string | null;
   /** مرتجعات الورشة بانتظار استلام المخزن / بانتظار تسوية العجز أو المرفوض */
   returns_awaiting_receipt?: number;
   returns_awaiting_resolution?: number;
@@ -757,6 +759,30 @@ export interface ReturnResolutionPayload {
     quantity: number;
     reason: string;
   }>;
+}
+
+/** صرف خامات إضافي لأمر قائم (خامات ← تحت التشغيل). */
+export interface ExtraIssuePayload {
+  reason: string;
+  lines: Array<{ item_id: string; quantity: number; notes?: string }>;
+}
+
+export async function fetchOrderExtraIssues(orderId: string): Promise<WarehouseTransfer[]> {
+  return apiClient.request<WarehouseTransfer[]>(`/api/v1/production/orders/${orderId}/extra-issues`);
+}
+
+export async function createExtraIssueApi(orderId: string, payload: ExtraIssuePayload, idempotencyKey?: string): Promise<WarehouseTransfer> {
+  return apiClient.request<WarehouseTransfer>(`/api/v1/production/orders/${orderId}/extra-issues`, {
+    method: 'POST', headers: jsonHeaders(idempotencyKey), body: JSON.stringify(payload),
+  });
+}
+
+export async function receiveExtraIssueApi(
+  orderId: string, transferId: string, payload: ReceiptConfirmPayload, idempotencyKey?: string,
+): Promise<WarehouseTransfer> {
+  return apiClient.request<WarehouseTransfer>(`/api/v1/production/orders/${orderId}/extra-issues/${transferId}/receive`, {
+    method: 'POST', headers: jsonHeaders(idempotencyKey), body: JSON.stringify(payload),
+  });
 }
 
 export async function fetchOrderReturns(orderId: string): Promise<ReturnTransfer[]> {

@@ -260,7 +260,7 @@ export const CatalogManagementView: React.FC = () => {
           aria-current={activeTab === 'units' ? 'page' : undefined}
         >
           <span className="catalog-tab__icon" aria-hidden>📏</span>
-          <span>دليل الوحدات المرجعي</span>
+          <span>وحدات القياس</span>
           <span className="catalog-tab__badge">{units.length}</span>
         </button>
       </nav>
@@ -307,12 +307,7 @@ export const CatalogManagementView: React.FC = () => {
         )}
 
         {activeTab === 'units' && (
-          <UnitsReferenceView
-            units={units}
-            loading={refLoading}
-            error={refError}
-            onRefresh={() => void loadReferenceData()}
-          />
+          <UnitsReferenceView onChanged={() => void loadReferenceData()} />
         )}
       </main>
 

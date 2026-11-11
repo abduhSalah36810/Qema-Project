@@ -67,6 +67,7 @@ interface ProductionOrderRaw {
   assigned_to?: string;
   created_at: string;
   pending_transfer_dispatched_by?: string | null;
+  extra_issue_pending_dispatched_by?: string | null;
   returns_awaiting_receipt?: number;
   returns_awaiting_resolution?: number;
   returns_pending_declared_by?: string[];
@@ -228,6 +229,39 @@ function ordersToTasks(orders: ProductionOrderRaw[], perms: Set<string>, userId?
   const tasks: TaskItem[] = [];
   for (const ord of orders) {
     tasks.push(...returnTasks(ord, perms, userId));
+    if (ord.extra_issue_pending_dispatched_by) {
+      // صرف خامات إضافي بالطريق: الصارف ينتظر، ومسؤول الإنتاج (غير الصارف) يؤكد الاستلام
+      const extraBase = { referenceDoc: ord.order_number, createdAt: ord.created_at, assignedTo: ord.assigned_to, focus: { orderId: ord.id } };
+      if (userId && ord.extra_issue_pending_dispatched_by === userId) {
+        tasks.push({
+          ...extraBase,
+          id: `po-extra-waiting-${ord.id}`,
+          category: 'production',
+          title: 'صرف إضافي صرفتَه · بانتظار تأكيد استلام الورشة',
+          description: `صرفتَ خامات إضافية لأمر التشغيل (${productLabel(ord)}). يؤكد استلامها مسؤول الإنتاج.`,
+          priority: 'normal',
+          currentStatus: 'بانتظار الطرف الآخر',
+          actionNavId: 'batches',
+          actionLabel: 'عرض الأمر',
+          badgeText: 'صرف إضافي',
+          waitingReason: 'لا يجوز لمن صرف الخامات أن يؤكد استلامها بنفسه.',
+          awaitingOther: true,
+        });
+      } else if (perms.has('production:wip:receive')) {
+        tasks.push({
+          ...extraBase,
+          id: `po-extra-${ord.id}`,
+          category: 'production',
+          title: 'تأكيد استلام صرف خامات إضافي',
+          description: `صُرفت خامات إضافية لأمر التشغيل (${productLabel(ord)}). عُدّها في الورشة وأكد المستلم من تبويب الخامات؛ استلام المنتج التام متوقف حتى التأكيد.`,
+          priority: 'high',
+          currentStatus: 'صرف إضافي · بانتظار الاستلام',
+          actionNavId: 'batches',
+          actionLabel: 'تأكيد الاستلام',
+          badgeText: 'صرف إضافي',
+        });
+      }
+    }
     const base = {
       referenceDoc: ord.order_number,
       createdAt: ord.created_at,

@@ -80,6 +80,12 @@ const mockUnits: catalogApi.Unit[] = [
   { id: 'unit-kg', code: 'kg', name_ar: 'كيلو جرام' },
 ];
 
+const mockUnitsWithUsage: catalogApi.UnitWithUsage[] = [
+  { ...mockUnits[0], catalog_items: 12, stock_movements: 40, documents: 3, in_use: true },
+  { ...mockUnits[1], catalog_items: 4, stock_movements: 0, documents: 0, in_use: true },
+  { ...mockUnits[2], catalog_items: 0, stock_movements: 0, documents: 0, in_use: false },
+];
+
 const mockApplicationLines: catalogApi.ApplicationLine[] = [
   {
     id: 'app-general',
@@ -181,6 +187,7 @@ describe('Catalog Management Feature — Frontend Tests', () => {
     vi.spyOn(catalogApi, 'fetchCategories').mockResolvedValue(mockCategories);
     vi.spyOn(catalogApi, 'fetchCategoriesTree').mockResolvedValue(mockCategoriesTree);
     vi.spyOn(catalogApi, 'fetchUnits').mockResolvedValue(mockUnits);
+    vi.spyOn(catalogApi, 'fetchUnitsWithUsage').mockResolvedValue(mockUnitsWithUsage);
     vi.spyOn(catalogApi, 'fetchApplicationLines').mockResolvedValue(mockApplicationLines);
     vi.spyOn(catalogApi, 'fetchCatalogItems').mockResolvedValue(mockCatalogItems);
     vi.spyOn(catalogApi, 'getCatalogItem').mockResolvedValue(mockItemDetail);
@@ -203,7 +210,7 @@ describe('Catalog Management Feature — Frontend Tests', () => {
     expect(screen.getByRole('button', { name: /دليل الأصناف/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /شجرة التصنيفات/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /خطوط الاستخدام/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /دليل الوحدات المرجعي/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /وحدات القياس/ })).toBeInTheDocument();
 
     // Wait for items to load in table
     await waitFor(() => {
@@ -242,11 +249,11 @@ describe('Catalog Management Feature — Frontend Tests', () => {
     });
 
     // Switch to Units Reference
-    const unitsTab = screen.getByRole('button', { name: /دليل الوحدات المرجعي/ });
+    const unitsTab = screen.getByRole('button', { name: /وحدات القياس/ });
     fireEvent.click(unitsTab);
 
     await waitFor(() => {
-      expect(screen.getByText('دليل وحدات القياس المعتمدة')).toBeInTheDocument();
+      expect(screen.getByRole('table', { name: 'جدول وحدات القياس' })).toBeInTheDocument();
       expect(screen.getByText('قطعة')).toBeInTheDocument();
       expect(screen.getByText('متر')).toBeInTheDocument();
       expect(screen.getByText('كيلو جرام')).toBeInTheDocument();
@@ -409,5 +416,57 @@ describe('Catalog Management Feature — Frontend Tests', () => {
     });
 
     expect(screen.queryByRole('button', { name: '📝 طلب تعديل الصنف' })).not.toBeInTheDocument();
+  });
+
+  it('9. general manager adds a unit, sees usage, and cannot delete or re-code a unit in use', async () => {
+    grantedPermissions.clear();
+    grantedPermissions.add('catalog:units:manage');
+    const create = vi.spyOn(catalogApi, 'createUnit').mockResolvedValue({
+      id: 'unit-yard', code: 'yard', name_ar: 'ياردة', catalog_items: 0, stock_movements: 0, documents: 0, in_use: false,
+    });
+    const update = vi.spyOn(catalogApi, 'updateUnit').mockResolvedValue(mockUnitsWithUsage[0]);
+
+    render(<CatalogManagementView />);
+    fireEvent.click(screen.getByRole('button', { name: /وحدات القياس/ }));
+    const table = await screen.findByRole('table', { name: 'جدول وحدات القياس' });
+
+    // الوحدة المستخدمة: تعديل الاسم فقط بلا حذف، وغير المستخدمة: تعديل وحذف
+    expect(table.textContent).toContain('١٢ صنف');
+    expect(screen.getAllByRole('button', { name: 'تعديل الاسم' })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: 'حذف' })).toHaveLength(1);
+
+    // تحقق قبل الإرسال: كود غير صالح
+    fireEvent.click(screen.getByRole('button', { name: /إضافة وحدة/ }));
+    fireEvent.change(screen.getByPlaceholderText('مثال: ياردة'), { target: { value: 'ياردة' } });
+    fireEvent.change(screen.getByPlaceholderText('مثال: yard'), { target: { value: 'ya rd' } });
+    fireEvent.click(screen.getByRole('button', { name: /إضافة الوحدة/ }));
+    expect(await screen.findByText(/الكود يبدأ بحرف إنجليزي/)).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+
+    // كود مكرر
+    fireEvent.change(screen.getByPlaceholderText('مثال: yard'), { target: { value: 'Meter' } });
+    fireEvent.click(screen.getByRole('button', { name: /إضافة الوحدة/ }));
+    expect(await screen.findByText(/مستخدم لوحدة «متر»/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('مثال: yard'), { target: { value: ' Yard ' } });
+    fireEvent.click(screen.getByRole('button', { name: /إضافة الوحدة/ }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith({ code: 'yard', name_ar: 'ياردة' }));
+
+    // الوحدة المستخدمة: الكود مقفل ويُرسل الاسم فقط
+    fireEvent.click(screen.getAllByRole('button', { name: 'تعديل الاسم' })[0]);
+    const codeInput = screen.getByPlaceholderText('مثال: yard') as HTMLInputElement;
+    expect(codeInput.disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText('مثال: ياردة'), { target: { value: 'قطعه' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ التعديل' }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith('unit-piece', { name_ar: 'قطعه' }));
+  });
+
+  it('10. users without catalog:units:manage see units read-only', async () => {
+    grantedPermissions.clear();
+    render(<CatalogManagementView />);
+    fireEvent.click(screen.getByRole('button', { name: /وحدات القياس/ }));
+    await screen.findByRole('table', { name: 'جدول وحدات القياس' });
+    expect(screen.queryByRole('button', { name: /إضافة وحدة/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'تعديل الاسم' })).not.toBeInTheDocument();
   });
 });

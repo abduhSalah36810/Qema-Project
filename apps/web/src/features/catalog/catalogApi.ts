@@ -314,6 +314,38 @@ export async function fetchUnits(): Promise<Unit[]> {
   return apiClient.request<Unit[]>('/api/v1/catalog/units');
 }
 
+/** الوحدة مع مدى استخدامها: المستخدمة لا تُحذف ولا يتغير كودها، ويُعدَّل اسمها فقط. */
+export interface UnitWithUsage extends Unit {
+  catalog_items: number;
+  stock_movements: number;
+  documents: number;
+  in_use: boolean;
+}
+
+export async function fetchUnitsWithUsage(): Promise<UnitWithUsage[]> {
+  return apiClient.request<UnitWithUsage[]>('/api/v1/catalog/units/usage');
+}
+
+export async function createUnit(payload: { code: string; name_ar: string }): Promise<UnitWithUsage> {
+  return apiClient.request<UnitWithUsage>('/api/v1/catalog/units', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateUnit(unitId: string, payload: { code?: string; name_ar?: string }): Promise<UnitWithUsage> {
+  return apiClient.request<UnitWithUsage>(`/api/v1/catalog/units/${encodeURIComponent(unitId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteUnit(unitId: string): Promise<void> {
+  await apiClient.request(`/api/v1/catalog/units/${encodeURIComponent(unitId)}`, { method: 'DELETE' });
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // حوكمة دورة الاعتماد وإدارة المراجعات (Catalog Governance & Revisions API)
 // ═════════════════════════════════════════════════════════════════════════════

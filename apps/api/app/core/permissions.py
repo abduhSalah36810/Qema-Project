@@ -51,6 +51,7 @@ PERMISSION_REGISTRY: dict[str, PermissionDefinition] = {
     "catalog:item:manage_revisions": PermissionDefinition("catalog:item:manage_revisions", "catalog", "approve", "اعتماد أو رفض طلبات تعديل الأصناف"),
     "catalog:item:deactivate": PermissionDefinition("catalog:item:deactivate", "catalog", "cancel", "تعطيل صنف معتمد"),
     "catalog:item:reactivate": PermissionDefinition("catalog:item:reactivate", "catalog", "execute", "إعادة تفعيل صنف معطل"),
+    "catalog:units:manage": PermissionDefinition("catalog:units:manage", "catalog", "execute", "إضافة وحدات القياس وتعديل أسمائها وحذف غير المستخدم منها"),
 
     # ── المخازن والجرد (Inventory & Stocktake) ──
     "inventory:view": PermissionDefinition("inventory:view", "inventory", "view", "عرض أرصدة المخازن والدفاتر"),

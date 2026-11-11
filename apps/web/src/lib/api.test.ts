@@ -78,4 +78,19 @@ describe('API Client Token Handling & Origin Scoping', () => {
     expect(isApiTarget('https://supabase.co/auth/v1')).toBe(false);
     expect(isApiTarget('http://malicious.org')).toBe(false);
   });
+
+  it('4. treats 204 No Content (successful delete) as success without parsing JSON', async () => {
+    const json = vi.fn(async () => {
+      throw new SyntaxError('Unexpected end of JSON input');
+    });
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 204,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json,
+    });
+
+    await expect(apiRequest('/api/v1/catalog/units/u1', { method: 'DELETE' })).resolves.toBeUndefined();
+    expect(json).not.toHaveBeenCalled();
+  });
 });

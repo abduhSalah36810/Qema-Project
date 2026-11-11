@@ -85,6 +85,7 @@ from app.modules.production.schemas import (
     ProductionDefectUpdate,
     StagePerformanceItem,
     StageRollbackRequest,
+    ExtraIssueCreate,
     ReceiptConfirmRequest,
     StageUpdate,
     TemplateCreate,
@@ -118,6 +119,12 @@ from app.modules.production.returns import (
     resolve_return,
     return_state,
     unresolved_return_counts,
+)
+from app.modules.production.extra_issue import (
+    create_extra_issue,
+    extra_issue_transfers,
+    pending_extra_issue_orders,
+    receive_extra_issue,
 )
 from app.modules.production.bom import active_bom_version, compute_requirements, save_variant_bom, variant_label
 from app.modules.production.schemas import (
@@ -753,6 +760,7 @@ async def list_orders(
     res = await db.execute(stmt)
     orders = res.scalars().all()
     dispatchers = await _pending_dispatchers(db, [o.id for o in orders])
+    extra_pending = await pending_extra_issue_orders(db, [o.id for o in orders])
     return_counts = await unresolved_return_counts(db, [o.id for o in orders])
 
     output = []
@@ -834,6 +842,7 @@ async def list_orders(
                 created_at=o.created_at,
                 notes=o.notes or "",
                 pending_transfer_dispatched_by=dispatchers.get(o.id),
+                extra_issue_pending_dispatched_by=extra_pending.get(o.id),
                 **_return_fields(return_counts.get(o.id)),
                 items=items,
                 materials=mats,
@@ -953,6 +962,7 @@ async def get_order_details(
         created_at=o.created_at,
         notes=o.notes or "",
         pending_transfer_dispatched_by=(await _pending_dispatchers(db, [o.id])).get(o.id),
+        extra_issue_pending_dispatched_by=(await pending_extra_issue_orders(db, [o.id])).get(o.id),
         **_return_fields((await unresolved_return_counts(db, [o.id])).get(o.id)),
         items=items,
         materials=mats,
@@ -1048,6 +1058,73 @@ async def receive_materials(
         resource_id=order_id,
         user_id=current_user.id,
         payload={"order_id": order_id, "data": data.model_dump()},
+        execute_fn=_execute,
+    )
+
+
+# ─── 5-ب. صرف خامات إضافي لأمر قائم (خامات ← تحت التشغيل) ───────────────────
+
+@router.get("/orders/{order_id}/extra-issues", response_model=List[WarehouseTransferRead])
+async def list_extra_issues(
+    order_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("production:orders:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """سجل الصرف الإضافي للأمر (كل تحويلات الصرف بعد الصرف الأصلي) بالأحدث أولاً."""
+    del current_user
+    if not await db.get(ProductionOrder, order_id):
+        raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
+    transfers = await extra_issue_transfers(db, order_id)
+    return [await get_transfer_details(t.id, db=db) for t in reversed(transfers)]
+
+
+@router.post("/orders/{order_id}/extra-issues", response_model=WarehouseTransferRead, status_code=status.HTTP_201_CREATED)
+async def create_order_extra_issue(
+    order_id: str,
+    data: ExtraIssueCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    current_user: AuthenticatedUser = Depends(require_permission("warehouse:dispatch")),
+    db: AsyncSession = Depends(get_db),
+):
+    """أمين المخزن يصرف خامات إضافية لأمر في التشغيل ويرحّلها مباشرة (خصم من الخامات + بالطريق)."""
+    async def _execute():
+        transfer = await create_extra_issue(db, order_id=order_id, data=data, dispatcher_id=current_user.id)
+        return await get_transfer_details(transfer.id, db=db)
+
+    return await execute_idempotent_operation(
+        db=db,
+        idempotency_key=idempotency_key,
+        operation_type="production.extra_issue",
+        resource_id=order_id,
+        user_id=current_user.id,
+        payload={"order_id": order_id, "data": data.model_dump()},
+        execute_fn=_execute,
+    )
+
+
+@router.post("/orders/{order_id}/extra-issues/{transfer_id}/receive", response_model=WarehouseTransferRead)
+async def receive_order_extra_issue(
+    order_id: str,
+    transfer_id: str,
+    data: ReceiptConfirmRequest,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    current_user: AuthenticatedUser = Depends(require_permission("production:wip:receive")),
+    db: AsyncSession = Depends(get_db),
+):
+    """مسؤول الإنتاج (غير الصارف) يؤكد استلام الصرف الإضافي بالورشة وتُضاف تكلفته للأمر."""
+    async def _execute():
+        transfer = await receive_extra_issue(
+            db, order_id=order_id, transfer_id=transfer_id, data=data, receiver_id=current_user.id,
+        )
+        return await get_transfer_details(transfer.id, db=db)
+
+    return await execute_idempotent_operation(
+        db=db,
+        idempotency_key=idempotency_key,
+        operation_type="production.extra_issue_receive",
+        resource_id=transfer_id,
+        user_id=current_user.id,
+        payload={"order_id": order_id, "transfer_id": transfer_id, "data": data.model_dump()},
         execute_fn=_execute,
     )
 
@@ -1241,6 +1318,11 @@ async def receive_finished_goods(
             raise HTTPException(status_code=409, detail="لا يمكن استلام منتج تام قبل صرف الخامات وتأكيد استلامها بالورشة.")
         if not order.order_items:
             raise HTTPException(status_code=422, detail="أمر التشغيل لا يحتوي على بنود منتجات.")
+        if await pending_extra_issue_orders(db, [order.id]):
+            raise HTTPException(
+                status_code=409,
+                detail="يوجد صرف خامات إضافي بالطريق لهذا الأمر. يؤكد مسؤول الإنتاج استلامه بالورشة أولاً حتى تدخل تكلفته في تكلفة القطعة.",
+            )
 
         fg_wh = (await db.execute(select(Warehouse).where(Warehouse.code == "finished_goods"))).scalar_one_or_none()
         if not fg_wh:

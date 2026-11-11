@@ -6,7 +6,7 @@
 2. إدارة دليل الأصناف والمواد (Catalog Items CRUD, Filtering, Pagination, Attributes, Reorder Level).
 3. حماية هويات أصناف المنتجات التامة (FG-VAR-* Finished Goods Protection).
 4. إدارة خطوط الاستخدام ووسوم الأصناف (Application Lines & Informational Usages).
-5. استعراض وحدات القياس المتاحة (Units Read-Only).
+5. إدارة وحدات القياس: إضافة، تعديل الاسم، وحذف غير المستخدم فقط (لا تحويل بين الوحدات).
 ─────────────────────────────────────────────────────────────────────────────
 """
 import hashlib
@@ -34,11 +34,15 @@ from app.modules.production.models import (
     CatalogItemRevision,
     CatalogItemUsage,
     ItemCategory,
+    ProductionMaterialReconciliationLine,
     ProductionOrderItem,
+    ProductionOrderItemMaterial,
     ProductionOrderMaterial,
     ProductionTemplateLine,
     StockLedgerEntry,
+    StocktakeLine,
     Unit,
+    WarehouseTransferLine,
 )
 from app.modules.production.schemas import (
     ApplicationLineRead,
@@ -56,7 +60,10 @@ from app.modules.production.schemas import (
     ItemCategoryRead,
     ItemCategoryTreeRead,
     ItemCategoryUpdate,
+    UnitCreate,
     UnitRead,
+    UnitUpdate,
+    UnitUsageRead,
 )
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -74,6 +81,7 @@ ItemDeactivator = Annotated[AuthenticatedUser, Depends(require_permission("catal
 ItemReactivator = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:reactivate"))]
 RevisionRequester = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:request_revision"))]
 CatalogRevisionManager = Annotated[AuthenticatedUser, Depends(require_permission("catalog:item:manage_revisions"))]
+UnitManager = Annotated[AuthenticatedUser, Depends(require_permission("catalog:units:manage"))]
 
 
 def utc_now() -> datetime:
@@ -1671,7 +1679,7 @@ async def remove_item_usage(item_id: str, application_id: str, current_user: Ite
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4. وحدات القياس (Units — Read Only)
+# 4. وحدات القياس (Units)
 # ═════════════════════════════════════════════════════════════════════════════
 
 @router.get("/units", response_model=List[UnitRead])
@@ -1680,3 +1688,136 @@ async def list_units(current_user: CatalogViewer, db: Database):
     del current_user
     stmt = select(Unit).order_by(Unit.code)
     return (await db.scalars(stmt)).all()
+
+
+# كل الجداول التي تشير إلى الوحدة. الوحدة المستخدمة في أي منها لا تُحذف ولا يتغير كودها،
+# حتى يبقى معنى الكميات في المستندات التاريخية كما سُجّل.
+_UNIT_DOCUMENT_TABLES = (
+    SupplierInvoiceLine,
+    ProductionTemplateLine,
+    ProductionOrderItemMaterial,
+    ProductionOrderMaterial,
+    WarehouseTransferLine,
+    StocktakeLine,
+    ProductionMaterialReconciliationLine,
+)
+
+_UNIT_IN_USE_DETAIL = "هذه الوحدة مستخدمة في أصناف أو حركات أو مستندات مسجلة، لذلك لا يمكن حذفها ولا تغيير كودها. يمكن تعديل اسمها فقط."
+
+
+async def _unit_usage_counts(db: AsyncSession, unit_id: str | None = None) -> dict[str, dict[str, int]]:
+    """عدد مرات استخدام كل وحدة: أصناف الدليل، حركات المخزون، وسطور المستندات."""
+    usage: dict[str, dict[str, int]] = {}
+
+    async def collect(model, bucket: str) -> None:
+        stmt = select(model.unit_id, func.count()).group_by(model.unit_id)
+        if unit_id is not None:
+            stmt = stmt.where(model.unit_id == unit_id)
+        for uid, count in (await db.execute(stmt)).all():
+            slot = usage.setdefault(uid, {"catalog_items": 0, "stock_movements": 0, "documents": 0})
+            slot[bucket] += int(count)
+
+    await collect(CatalogItem, "catalog_items")
+    await collect(StockLedgerEntry, "stock_movements")
+    for model in _UNIT_DOCUMENT_TABLES:
+        await collect(model, "documents")
+    return usage
+
+
+def _unit_usage_read(unit: Unit, counts: dict[str, int] | None) -> UnitUsageRead:
+    counts = counts or {"catalog_items": 0, "stock_movements": 0, "documents": 0}
+    return UnitUsageRead(
+        id=unit.id,
+        code=unit.code,
+        name_ar=unit.name_ar,
+        **counts,
+        in_use=any(counts.values()),
+    )
+
+
+async def _ensure_unit_unique(db: AsyncSession, *, code: str | None, name_ar: str | None, exclude_id: str | None = None) -> None:
+    if code is not None:
+        stmt = select(Unit.id).where(func.lower(Unit.code) == code.lower())
+        if exclude_id:
+            stmt = stmt.where(Unit.id != exclude_id)
+        if (await db.scalar(stmt)) is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"يوجد وحدة أخرى بالكود «{code}».")
+    if name_ar is not None:
+        stmt = select(Unit.id).where(func.lower(Unit.name_ar) == name_ar.lower())
+        if exclude_id:
+            stmt = stmt.where(Unit.id != exclude_id)
+        if (await db.scalar(stmt)) is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"يوجد وحدة أخرى بالاسم «{name_ar}».")
+
+
+@router.get("/units/usage", response_model=List[UnitUsageRead])
+async def list_units_with_usage(current_user: CatalogViewer, db: Database):
+    """الوحدات مع مدى استخدامها، لشاشة إدارة الوحدات."""
+    del current_user
+    units = (await db.scalars(select(Unit).order_by(Unit.code))).all()
+    usage = await _unit_usage_counts(db)
+    return [_unit_usage_read(unit, usage.get(unit.id)) for unit in units]
+
+
+@router.post("/units", response_model=UnitUsageRead, status_code=status.HTTP_201_CREATED)
+async def create_unit(data: UnitCreate, current_user: UnitManager, db: Database):
+    """إضافة وحدة قياس جديدة بكود فريد. لا تنشئ أي تحويل مع الوحدات الأخرى."""
+    del current_user
+    await _ensure_unit_unique(db, code=data.code, name_ar=data.name_ar)
+    unit = Unit(code=data.code, name_ar=data.name_ar)
+    db.add(unit)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"يوجد وحدة أخرى بالكود «{data.code}».")
+    await db.refresh(unit)
+    return _unit_usage_read(unit, None)
+
+
+@router.patch("/units/{unit_id}", response_model=UnitUsageRead)
+async def update_unit(unit_id: str, data: UnitUpdate, current_user: UnitManager, db: Database):
+    """تعديل اسم الوحدة دائماً، وكودها فقط إذا لم تُستخدم في أي صنف أو حركة أو مستند."""
+    del current_user
+    unit = await db.get(Unit, unit_id, with_for_update=True)
+    if not unit:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="وحدة القياس غير موجودة.")
+
+    new_code = data.code if data.code is not None and data.code != unit.code else None
+    new_name = data.name_ar if data.name_ar is not None and data.name_ar != unit.name_ar else None
+    counts = (await _unit_usage_counts(db, unit_id)).get(unit_id)
+    if new_code is not None and counts and any(counts.values()):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_UNIT_IN_USE_DETAIL)
+
+    await _ensure_unit_unique(db, code=new_code, name_ar=new_name, exclude_id=unit_id)
+    if new_code is not None:
+        unit.code = new_code
+    if new_name is not None:
+        unit.name_ar = new_name
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="تعذر حفظ الوحدة لتعارض الكود مع وحدة أخرى.")
+    await db.refresh(unit)
+    return _unit_usage_read(unit, counts)
+
+
+@router.delete("/units/{unit_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_unit(unit_id: str, current_user: UnitManager, db: Database):
+    """حذف وحدة لم تُستخدم إطلاقاً (أُضيفت بالخطأ). الوحدة المستخدمة محمية."""
+    del current_user
+    unit = await db.get(Unit, unit_id, with_for_update=True)
+    if not unit:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="وحدة القياس غير موجودة.")
+    counts = (await _unit_usage_counts(db, unit_id)).get(unit_id)
+    if counts and any(counts.values()):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_UNIT_IN_USE_DETAIL)
+    await db.delete(unit)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # استُخدمت الوحدة في عملية متزامنة بعد الفحص: القيد الأجنبي في القاعدة يمنع الحذف.
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=_UNIT_IN_USE_DETAIL)
+    return None

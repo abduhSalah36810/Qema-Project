@@ -177,6 +177,11 @@ export async function apiRequest<T = unknown>(
       });
     }
 
+    // 204 (مثل الحذف الناجح) أو 205 بلا محتوى: نجاح بلا جسم، لا يُحلَّل كـ JSON.
+    if (response.status === 204 || response.status === 205) {
+      return undefined as T;
+    }
+
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
       throw new ApiError('استجابة الخادم ليست بصيغة JSON صالحة.');

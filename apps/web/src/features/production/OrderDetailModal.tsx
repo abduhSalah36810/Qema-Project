@@ -3,6 +3,7 @@ import { useAuth } from '@/features/auth/AuthContext';
 import { ApiError } from '@/lib/api';
 import { userLabel } from '@/lib/userLabel';
 import { WorkshopReturnsPanel } from './WorkshopReturnsPanel';
+import { ExtraIssuePanel } from './ExtraIssuePanel';
 import { OrderProgress } from './OrderProgress';
 import { nextStep, ORDER_STATUS_LABEL } from './orderWorkflow';
 import type { OrderDetailTab } from '@/lib/navigation';
@@ -1140,6 +1141,20 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                   })}
                 </tbody>
               </table>
+              {order.status !== 'draft' && order.status !== 'materials_dispatched' && (
+                <ExtraIssuePanel
+                  key={`${order.id}:extra`}
+                  orderId={order.id}
+                  orderStatus={order.status}
+                  currentUserId={user?.id}
+                  canDispatch={canDispatch}
+                  canReceive={hasPermission('production:wip:receive')}
+                  finishedGoodsStarted={orderItems.some((it) => (it.received_quantity ?? 0) + (it.rejected_quantity ?? 0) > 0)}
+                  onChanged={async (message) => {
+                    await refreshAfterSuccess(message);
+                  }}
+                />
+              )}
             </div>
           )}
 

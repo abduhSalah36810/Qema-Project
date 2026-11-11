@@ -21,7 +21,7 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -355,12 +355,14 @@ async def test_receive_finished_goods_sets_receipt_completed():
     )
 
     user = AuthenticatedUser(id="usr-wh", email="wh@qemma.com", claims={"sub": "usr-wh", "role": "warehouse_manager"})
-    response = await receive_finished_goods(
-        order_id=order.id,
-        data=receipt_data,
-        current_user=user,
-        db=session,
-    )
+    # لا صرف خامات إضافي بالطريق لهذا الأمر (فحص منفصل مغطى في test_extra_issue)
+    with patch("app.api.v1.endpoints.production.pending_extra_issue_orders", AsyncMock(return_value={})):
+        response = await receive_finished_goods(
+            order_id=order.id,
+            data=receipt_data,
+            current_user=user,
+            db=session,
+        )
 
     assert response.receipt_status == "complete"
     assert response.accepted_quantity == 100.0

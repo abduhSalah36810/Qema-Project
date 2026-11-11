@@ -9,6 +9,7 @@
 5. التتبع التتابعي للمراحل الخمس الرسمية.
 ─────────────────────────────────────────────────────────────────────────────
 """
+import re
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, List, Literal, Optional
@@ -21,6 +22,50 @@ class UnitRead(BaseModel):
     id: str
     code: str
     name_ar: str
+
+
+class UnitUsageRead(UnitRead):
+    """الوحدة مع مدى استخدامها: الوحدة المستخدمة لا تُحذف ولا يتغير كودها."""
+    catalog_items: int = 0
+    stock_movements: int = 0
+    documents: int = 0
+    in_use: bool = False
+
+
+class UnitCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=32, description="كود فريد بحروف لاتينية صغيرة وأرقام و _")
+    name_ar: str = Field(..., min_length=1, max_length=64, description="اسم الوحدة بالعربية")
+
+    @field_validator("code")
+    @classmethod
+    def _normalize_code(cls, value: str) -> str:
+        code = value.strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", code):
+            raise ValueError("كود الوحدة يبدأ بحرف لاتيني ويحتوي حروفاً لاتينية صغيرة وأرقاماً و _ فقط.")
+        return code
+
+    @field_validator("name_ar")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        name = " ".join(value.split())
+        if not name:
+            raise ValueError("اسم الوحدة مطلوب.")
+        return name
+
+
+class UnitUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=1, max_length=32)
+    name_ar: Optional[str] = Field(None, min_length=1, max_length=64)
+
+    @field_validator("code")
+    @classmethod
+    def _normalize_code(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else UnitCreate._normalize_code(value)
+
+    @field_validator("name_ar")
+    @classmethod
+    def _strip_name(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else UnitCreate._strip_name(value)
 
 
 class ItemCategoryRead(BaseModel):
@@ -629,6 +674,8 @@ class OrderRead(BaseModel):
     notes: str
     # من صرف خامات التحويل المعلق (بالطريق) إن وجد؛ لا يؤكد هذا المستخدم استلامه بنفسه
     pending_transfer_dispatched_by: Optional[str] = None
+    # صرف خامات إضافي بالطريق بانتظار تأكيد مسؤول الإنتاج: من صرفه (لا يؤكد استلامه بنفسه)
+    extra_issue_pending_dispatched_by: Optional[str] = None
     # مرتجعات الورشة: بانتظار استلام المخزن / بانتظار تسوية العجز أو المرفوض
     returns_awaiting_receipt: int = 0
     returns_awaiting_resolution: int = 0
@@ -686,6 +733,26 @@ class ReceiptLineConfirm(BaseModel):
 class ReceiptConfirmRequest(BaseModel):
     received_lines: List[ReceiptLineConfirm]
     notes: str = ""
+
+
+class ExtraIssueLine(BaseModel):
+    item_id: str = Field(..., min_length=1)
+    quantity: float = Field(..., gt=0, description="الكمية بوحدة الصنف نفسها (لا تحويل بين الوحدات)")
+    notes: str = Field("", max_length=500)
+
+
+class ExtraIssueCreate(BaseModel):
+    """صرف خامات إضافي لأمر تشغيل قائم: السبب إلزامي وسطر واحد على الأقل."""
+    reason: str = Field(..., min_length=3, max_length=500)
+    lines: List[ExtraIssueLine] = Field(..., min_length=1, max_length=50)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if len(value) < 3:
+            raise ValueError("اكتب سبب الصرف الإضافي (3 أحرف على الأقل).")
+        return value
 
 
 class WarehouseTransferLineRead(BaseModel):
