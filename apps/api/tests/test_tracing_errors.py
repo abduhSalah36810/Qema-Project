@@ -144,14 +144,14 @@ async def test_validator_messages_cannot_leak_sensitive_values():
             json={
                 "user_id": secret_token,
                 "password": secret_pass[:3],  # كلمة مرور قصيرة
-                "phone": secret_phone[:3],
+                "phone": secret_phone,
                 "auth_token": secret_token,
             },
         )
 
     assert response_leak_check.status_code == 422
     assert secret_pass[:3] not in response_leak_check.text
-    assert secret_phone[:3] not in response_leak_check.text
+    assert secret_phone not in response_leak_check.text
     assert secret_token not in response_leak_check.text
 
 

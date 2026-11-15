@@ -107,30 +107,27 @@ async def _enrich_cash_document_read(db: AsyncSession, doc: CashDocument) -> Cas
         if cust:
             read.customer_name = cust.name
 
-    try:
-        if doc.source_system == "supplier_payment":
-            payment = await db.scalar(
-                select(SupplierPayment).where(
-                    or_(
-                        SupplierPayment.cash_document_id == doc.id,
-                        SupplierPayment.id == doc.source_reference,
-                    )
+    if doc.source_system == "supplier_payment":
+        payment = await db.scalar(
+            select(SupplierPayment).where(
+                or_(
+                    SupplierPayment.cash_document_id == doc.id,
+                    SupplierPayment.id == doc.source_reference,
                 )
             )
-            if payment:
-                invoice = await db.scalar(
-                    select(SupplierInvoice)
-                    .options(selectinload(SupplierInvoice.lines))
-                    .where(SupplierInvoice.id == payment.invoice_id)
-                )
-                if invoice:
-                    fin = await supplier_invoice_financials(db, invoice, list(invoice.lines))
-                    read.invoice_total = fin.invoice_total
-                    read.received_value = fin.received_value
-                    paid_compare = fin.paid_approved if doc.status == "approved" else (fin.paid_approved + doc.amount)
-                    read.is_prepayment = bool(paid_compare > fin.received_value)
-    except (StopIteration, StopAsyncIteration):
-        pass
+        )
+        if payment:
+            invoice = await db.scalar(
+                select(SupplierInvoice)
+                .options(selectinload(SupplierInvoice.lines))
+                .where(SupplierInvoice.id == payment.invoice_id)
+            )
+            if invoice:
+                fin = await supplier_invoice_financials(db, invoice, list(invoice.lines))
+                read.invoice_total = fin.invoice_total
+                read.received_value = fin.received_value
+                paid_compare = fin.paid_approved if doc.status == "approved" else (fin.paid_approved + doc.amount)
+                read.is_prepayment = bool(paid_compare > fin.received_value)
 
     return read
 

@@ -400,7 +400,7 @@ async def test_end_to_end_workflow_a_supplier_procurement_shortage_capped():
     assert "4400.00" in exc.value.detail
 
     # 2. سداد دفعة جزئية صحيحة بمبلغ 2000 ج.م -> تنجح
-    session.scalar.side_effect = [inv]
+    session.scalar.side_effect = [inv, Decimal("0"), None]
     doc = await create_supplier_payment(
         invoice_id=inv.id,
         data=SupplierPaymentCreate(amount=Decimal("2000.00"), description="سداد دفعة أولى معتمدة"),
@@ -411,7 +411,7 @@ async def test_end_to_end_workflow_a_supplier_procurement_shortage_capped():
     assert doc.amount == Decimal("2000.00")
 
     # 3. محاولة سداد 2500 ج.م إضافية (2000 + 2500 = 4500 > 4400) -> ترفض برمز 409
-    session.scalar.side_effect = [inv]
+    session.scalar.side_effect = [inv, Decimal("0")]
     session.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[("pending", Decimal("2000.00"))])))
     with pytest.raises(HTTPException) as exc2:
         await create_supplier_payment(
@@ -423,7 +423,7 @@ async def test_end_to_end_workflow_a_supplier_procurement_shortage_capped():
     assert exc2.value.status_code == 409
 
     # 4. سداد المتبقي الدقيق 2400 ج.م (2000 + 2400 = 4400) -> ينجح
-    session.scalar.side_effect = [inv]
+    session.scalar.side_effect = [inv, Decimal("0"), None]
     doc2 = await create_supplier_payment(
         invoice_id=inv.id,
         data=SupplierPaymentCreate(amount=Decimal("2400.00"), description="سداد باقي المستحق الفعلي"),
