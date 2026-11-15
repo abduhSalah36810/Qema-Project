@@ -80,6 +80,9 @@ class CashDocumentRead(BaseModel):
     supplier_name: str | None = None
     customer_name: str | None = None
     unallocated_amount: Decimal | None = None
+    invoice_total: Decimal | None = None
+    received_value: Decimal | None = None
+    is_prepayment: bool | None = None
 
 
 class PaymentAllocationCreate(BaseModel):

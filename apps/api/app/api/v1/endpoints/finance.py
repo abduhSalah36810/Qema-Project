@@ -90,6 +90,51 @@ async def create_petty_cash_account(
     )
 
 
+async def _enrich_cash_document_read(db: AsyncSession, doc: CashDocument) -> CashDocumentRead:
+    read = CashDocumentRead.model_validate(doc)
+    if "supplier" in doc.__dict__ and doc.supplier:
+        read.supplier_name = doc.supplier.name
+    elif doc.supplier_id:
+        sup = await db.get(Supplier, doc.supplier_id)
+        if sup:
+            read.supplier_name = sup.name
+
+    if "customer" in doc.__dict__ and doc.customer:
+        read.customer_name = doc.customer.name
+    elif doc.customer_id:
+        from app.modules.customers.models import Customer
+        cust = await db.get(Customer, doc.customer_id)
+        if cust:
+            read.customer_name = cust.name
+
+    try:
+        if doc.source_system == "supplier_payment":
+            payment = await db.scalar(
+                select(SupplierPayment).where(
+                    or_(
+                        SupplierPayment.cash_document_id == doc.id,
+                        SupplierPayment.id == doc.source_reference,
+                    )
+                )
+            )
+            if payment:
+                invoice = await db.scalar(
+                    select(SupplierInvoice)
+                    .options(selectinload(SupplierInvoice.lines))
+                    .where(SupplierInvoice.id == payment.invoice_id)
+                )
+                if invoice:
+                    fin = await supplier_invoice_financials(db, invoice, list(invoice.lines))
+                    read.invoice_total = fin.invoice_total
+                    read.received_value = fin.received_value
+                    paid_compare = fin.paid_approved if doc.status == "approved" else (fin.paid_approved + doc.amount)
+                    read.is_prepayment = bool(paid_compare > fin.received_value)
+    except (StopIteration, StopAsyncIteration):
+        pass
+
+    return read
+
+
 @router.get("/cash-documents", response_model=List[CashDocumentRead])
 async def list_cash_documents(
     status: Optional[str] = Query(default=None),
@@ -125,12 +170,7 @@ async def list_cash_documents(
     docs = (await db.scalars(stmt)).all()
     results = []
     for d in docs:
-        read = CashDocumentRead.model_validate(d)
-        if d.supplier:
-            read.supplier_name = d.supplier.name
-        if d.customer:
-            read.customer_name = d.customer.name
-        results.append(read)
+        results.append(await _enrich_cash_document_read(db, d))
     return results
 
 
@@ -154,12 +194,7 @@ async def post_cash_document(
             db, document, current_user.id, await get_user_roles(current_user, db=db), commit=False,
         )
         await db.refresh(document, attribute_names=["supplier", "customer"])
-        read = CashDocumentRead.model_validate(document)
-        if document.supplier:
-            read.supplier_name = document.supplier.name
-        if document.customer:
-            read.customer_name = document.customer.name
-        return read
+        return await _enrich_cash_document_read(db, document)
 
     return await execute_idempotent_operation(
         db=db,
@@ -181,7 +216,8 @@ async def decide_cash_document_route(
     db: AsyncSession = Depends(get_db),
 ):
     """نقطة الاعتماد المالي الوحيدة في النظام (شاشة الخزينة)."""
-    return await decide_cash_document(db, document_id, data, current_user.id)
+    document = await decide_cash_document(db, document_id, data, current_user.id)
+    return await _enrich_cash_document_read(db, document)
 
 
 # ─── الموردون وفواتير المشتريات ────────────────────────────────────────────
@@ -679,7 +715,8 @@ async def create_supplier_payment(
     )
     db.add(document)
     db.add(payment)
-    return await finalize_cash_document(db, document, current_user.id, await get_user_roles(current_user, db=db))
+    document = await finalize_cash_document(db, document, current_user.id, await get_user_roles(current_user, db=db))
+    return await _enrich_cash_document_read(db, document)
 
 
 @router.post(
@@ -1381,6 +1418,16 @@ async def create_opening_balances(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="تم قفل الأرصدة الافتتاحية ولا يمكن ترحيل قيد افتتاحي جديد. راجع الإدارة لطلب إعادة فتح القفل.",
+        )
+
+    # التحقق من عدم وجود قيد افتتاحي عام مسبق في النظام (يُسمح بقيد افتتاحي عام واحد فقط للنظام)
+    existing_ob = await db.scalar(
+        select(JournalEntry.id).where(JournalEntry.source_doc_type == "opening_balance")
+    )
+    if existing_ob:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="تم تسجيل القيد الافتتاحي العام للنظام مسبقاً ولا يمكن تكراره أو ترحيل قيد افتتاحي عام ثانٍ.",
         )
 
     lines: list[dict[str, Any]] = []
