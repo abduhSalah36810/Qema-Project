@@ -117,6 +117,7 @@ export interface CatalogItem {
   submitted_by?: string | null;
   approved_at?: string | null;
   approved_by?: string | null;
+  created_at?: string | null;
   has_pending_revision: boolean;
 }
 

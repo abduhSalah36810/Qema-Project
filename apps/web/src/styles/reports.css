@@ -13,7 +13,7 @@
 .rh-groups button:hover { background: #f1f5f9; color: var(--rh-ink); }
 .rh-groups button[aria-pressed='true'] { background: var(--rh-ink); color: #fff; }
 .rh-subnav { display: flex; gap: 4px; flex-wrap: wrap; }
-.rh-subnav button { border: 1px solid var(--rh-line); background: #fff; color: var(--rh-ink-2); font: inherit; font-size: 0.86rem; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; min-height: 34px; }
+.rh-subnav button { border: 1px solid var(--rh-line); background: #fff; color: var(--rh-ink-2); font: inherit; font-size: 0.86rem; font-weight: 600; padding: 6px 12px; border-radius: 8px; cursor: pointer; min-height: 34px; white-space: nowrap; }
 .rh-subnav button[aria-pressed='true'] { border-color: var(--rh-accent); background: #f0fdfa; color: var(--rh-accent); }
 .rh-subnav .rh-new { margin-inline-start: 4px; font-size: 0.68rem; background: #fef3c7; color: #92400e; border-radius: 999px; padding: 0 6px; }
 
@@ -61,28 +61,30 @@
 @keyframes rh-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
 
 /* الجدول */
-.rh-table { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+div.rh-table { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+table.rh-table, .rh-table table { display: table; width: 100%; border-collapse: collapse; font-size: 0.86rem; text-align: right; direction: rtl; }
 .rh-table__tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .rh-table__tools input { flex: 1 1 220px; max-width: 360px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 7px 10px; font: inherit; }
 .rh-table__count { color: var(--rh-muted); font-size: 0.8rem; margin-inline-end: auto; }
 .rh-table__wrap { overflow: auto; max-height: 560px; border: 1px solid var(--rh-line); border-radius: 10px; }
-.rh-table table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.86rem; }
-.rh-table thead th { position: sticky; top: 0; z-index: 1; background: #f4f7fa; text-align: start; border-bottom: 1px solid var(--rh-line); padding: 0; white-space: nowrap; }
+.rh-table thead th, table.rh-table thead th { position: sticky; top: 0; z-index: 1; background: #f4f7fa; text-align: start; border-bottom: 1px solid var(--rh-line); padding: 10px 12px; white-space: nowrap; font-weight: 700; color: #475569; }
+.rh-table thead th:has(button) { padding: 0; }
 .rh-table thead th button { all: unset; display: flex; gap: 6px; align-items: center; width: 100%; box-sizing: border-box; padding: 10px 12px; color: #516176; font-size: 0.78rem; font-weight: 700; cursor: pointer; }
 .rh-table thead th button:focus-visible { outline: 2px solid var(--rh-accent); outline-offset: -2px; }
 .rh-table th.is-num button { justify-content: flex-end; }
 .rh-sort { color: #cbd5e1; font-size: 0.7rem; }
 .rh-table th[aria-sort='ascending'] .rh-sort, .rh-table th[aria-sort='descending'] .rh-sort { color: var(--rh-accent); }
-.rh-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; white-space: nowrap; vertical-align: top; }
-.rh-table td.is-num { text-align: end; font-variant-numeric: tabular-nums; }
-.rh-table td.is-wrap { white-space: normal; min-width: 200px; max-width: 360px; line-height: 1.6; overflow-wrap: anywhere; }
-.rh-table td code { color: #0f817b; font-family: inherit; font-weight: 700; }
-.rh-table tbody tr:hover td { background: #f8fafc; }
+.rh-table td, table.rh-table td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; white-space: nowrap; vertical-align: top; }
+.rh-table td.is-num, table.rh-table td.is-num { text-align: end; font-variant-numeric: tabular-nums; }
+.rh-table td.is-wrap, table.rh-table td.is-wrap { white-space: normal; min-width: 200px; max-width: 360px; line-height: 1.6; overflow-wrap: anywhere; }
+.rh-table td code, table.rh-table td code { color: #0f817b; font-family: inherit; font-weight: 700; }
+.rh-table tbody tr:hover td, table.rh-table tbody tr:hover td { background: #f8fafc; }
 .rh-table tr.is-clickable { cursor: pointer; }
 .rh-table tr.is-clickable:focus-visible td { background: #f0fdfa; outline: none; }
-.rh-table tfoot td { position: sticky; bottom: 0; background: #f8fafc; font-weight: 800; color: var(--rh-ink); border-top: 2px solid var(--rh-line); }
+.rh-table tfoot td, table.rh-table tfoot td { position: sticky; bottom: 0; background: #f8fafc; font-weight: 800; color: var(--rh-ink); border-top: 2px solid var(--rh-line); padding: 10px 12px; }
 .rh-table__empty { text-align: center !important; color: var(--rh-muted); padding: 24px !important; }
 .rh-table__pager { display: flex; gap: 10px; align-items: center; justify-content: center; font-size: 0.85rem; color: var(--rh-ink-2); }
+.rh-row--page-hidden { display: none; }
 .rh-pill { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 0.75rem; font-weight: 700; }
 .rh-pill--good { background: #dcfce7; color: #166534; }
 .rh-pill--bad { background: #fee2e2; color: #991b1b; }
@@ -124,16 +126,381 @@
   .rh-segment { width: 100%; }
 }
 
-/* الطباعة / حفظ PDF: التقرير فقط بلا قوائم أو أزرار */
-@media print {
-  aside, .sidebar, .demo-strip, .no-print, .rh-groups, .rh-subnav, .dashboard-header, header.topbar { display: none !important; }
-  .rh-print-title { display: block !important; }
-  .rh-panel, .rh-kpi { box-shadow: none; break-inside: avoid; }
-  .rh-table__wrap { max-height: none; overflow: visible; }
-  .rh-table thead th, .rh-table tfoot td { position: static; }
-  .rh-chart__table { display: none; }
-}
 .rh-print-title { display: none; }
+.rh-row--page-hidden { display: none; }
 .rh-hbars__rest { color: var(--rh-ink-2); font-size: 0.82rem; border-top: 1px dashed var(--rh-line); padding-top: 8px; }
 .rh-hbars__rest strong { color: var(--rh-ink); font-variant-numeric: tabular-nums; }
-.rh-subnav button { white-space: nowrap; }
+
+/* ═══ الطباعة وحفظ PDF: تهيئة احترافية لتقارير وجداول مصنع القمة ═══ */
+@page {
+  size: A4 portrait;
+  margin: 12mm 10mm 15mm 10mm;
+}
+
+@media print {
+  /* إخفاء القوائم، الأشرطة الجانبية، أشرطة التنقل، وأزرار التحكم والأدوات التفاعلية */
+  aside,
+  .sidebar,
+  .sidebar-backdrop,
+  .demo-strip,
+  .no-print,
+  .rh-head__actions,
+  .rh-groups,
+  .rh-subnav,
+  .rh-toolbar,
+  .rh-table__tools,
+  .rh-table__pager,
+  .rh-sort,
+  .dashboard-header,
+  header.topbar,
+  .top-header,
+  .topbar,
+  .modal-backdrop,
+  button,
+  .btn {
+    display: none !important;
+  }
+
+  /* ضبط إعدادات الصفحة والألوان لضمان وضوح الطباعة والأرقام */
+  html,
+  body,
+  .app-shell,
+  main,
+  .warehouse-page,
+  .rh {
+    background: #fff !important;
+    color: #0f172a !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .rh,
+  .rh * {
+    visibility: visible !important;
+  }
+
+  /* فك حاويات Flex و Grid لتوزيع الصفحات التلقائي دون قص أو تشوه */
+  .rh,
+  .warehouse-page,
+  div.rh-table {
+    display: block !important;
+    gap: 0 !important;
+  }
+
+  /* تحويل الشبكات ثنائية الأعمدة إلى كتل بعرض كامل لضمان مساحة كافية للجداول المالية */
+  .rh-grid2 {
+    display: block !important;
+    gap: 0 !important;
+  }
+
+  .rh-grid2 > * {
+    width: 100% !important;
+    margin-bottom: 14px !important;
+  }
+
+  /* بطاقات الأقسام (Panels) */
+  .rh-panel {
+    display: block !important;
+    background: #fff !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    padding: 10px 12px !important;
+    margin-bottom: 14px !important;
+    box-shadow: none !important;
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+
+  .rh-panel__head {
+    display: block !important;
+    margin-bottom: 8px !important;
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  .rh-panel__head h3 {
+    font-size: 11pt !important;
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    margin: 0 0 2px 0 !important;
+  }
+
+  .rh-panel__head p {
+    font-size: 8pt !important;
+    color: #64748b !important;
+    margin: 0 !important;
+  }
+
+  /* بطاقات مؤشرات الأداء (KPIs) */
+  .rh-kpis {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    margin-bottom: 12px !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .rh-kpi {
+    flex: 1 1 110px !important;
+    padding: 6px 10px !important;
+    background: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .rh-kpi__label {
+    font-size: 7.5pt !important;
+    color: #475569 !important;
+  }
+
+  .rh-kpi__value {
+    font-size: 1.1rem !important;
+    font-weight: 800 !important;
+    color: #0f172a !important;
+  }
+
+  .rh-kpi__hint,
+  .rh-kpi__delta {
+    font-size: 7pt !important;
+  }
+
+  /* عنوان التقرير المطبوع والفترة الزمنية */
+  .rh-print-title {
+    display: block !important;
+    font-size: 14pt !important;
+    font-weight: 800 !important;
+    color: #0f172a !important;
+    text-align: center !important;
+    margin: 0 0 4px 0 !important;
+    padding-bottom: 6px !important;
+    border-bottom: 2px solid #0f172a !important;
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  .rh-period-note {
+    display: block !important;
+    font-size: 8.5pt !important;
+    color: #475569 !important;
+    text-align: center !important;
+    margin-bottom: 10px !important;
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  /* غلاف الجدول وتفادي قص الجداول */
+  .rh-table__wrap {
+    max-height: none !important;
+    overflow: visible !important;
+    border: none !important;
+    border-radius: 0 !important;
+    width: 100% !important;
+  }
+
+  /* بنية الجدول الأساسية للطباعة */
+  table.rh-table,
+  .rh-table table {
+    display: table !important;
+    width: 100% !important;
+    table-layout: auto !important;
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    font-size: 8.5pt !important;
+    direction: rtl !important;
+    text-align: right !important;
+    margin: 0 !important;
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  /* تكرار رأس الجدول تلقائياً في الصفحات التالية (Repeat headers) */
+  table.rh-table thead,
+  .rh-table table thead {
+    display: table-header-group !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  table.rh-table thead tr,
+  .rh-table table thead tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  table.rh-table thead th,
+  .rh-table table thead th {
+    position: static !important;
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    font-weight: 700 !important;
+    font-size: 8.5pt !important;
+    border-top: 1px solid #94a3b8 !important;
+    border-bottom: 2px solid #334155 !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 6px 8px !important;
+    vertical-align: middle !important;
+    white-space: nowrap !important;
+    text-align: right !important;
+  }
+
+  table.rh-table thead th button,
+  .rh-table table thead th button {
+    all: unset !important;
+    display: inline-block !important;
+    width: 100% !important;
+    padding: 0 !important;
+    color: inherit !important;
+    font: inherit !important;
+    cursor: default !important;
+  }
+
+  /* منع انقسام السطور عبر الصفحات (Prevent row split) */
+  table.rh-table tbody,
+  .rh-table table tbody {
+    display: table-row-group !important;
+  }
+
+  table.rh-table tbody tr,
+  .rh-table table tbody tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  table.rh-table tbody tr:nth-child(even) td,
+  .rh-table table tbody tr:nth-child(even) td {
+    background-color: #f8fafc !important;
+  }
+
+  table.rh-table tbody td,
+  .rh-table table tbody td {
+    padding: 5px 8px !important;
+    font-size: 8.5pt !important;
+    line-height: 1.35 !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    color: #1e293b !important;
+    vertical-align: middle !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    text-align: right !important;
+  }
+
+  /* تذييل الجدول وإجماليات الحسابات */
+  table.rh-table tfoot,
+  .rh-table table tfoot {
+    display: table-footer-group !important;
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  table.rh-table tfoot tr,
+  .rh-table table tfoot tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  table.rh-table tfoot td,
+  .rh-table table tfoot td {
+    position: static !important;
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    font-weight: 800 !important;
+    font-size: 9pt !important;
+    border-top: 2px solid #334155 !important;
+    border-bottom: 2px solid #334155 !important;
+    border-left: none !important;
+    border-right: none !important;
+    padding: 6px 8px !important;
+    vertical-align: middle !important;
+  }
+
+  /* محاذاة الأرقام والمبالغ المالية جهة اليسار دون انكسار الأسطر */
+  table.rh-table td.is-num,
+  .rh-table table td.is-num,
+  table.rh-table th.is-num,
+  .rh-table table th.is-num,
+  table.rh-table [style*="text-align: left"],
+  .rh-table table [style*="text-align: left"] {
+    text-align: left !important;
+    direction: ltr !important;
+    unicode-bidi: embed !important;
+    white-space: nowrap !important;
+    font-variant-numeric: tabular-nums !important;
+  }
+
+  /* التفاف أسماء الأصناف والحسابات العربية الطويلة بسلاسة */
+  table.rh-table td.is-wrap,
+  .rh-table table td.is-wrap {
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+    text-align: right !important;
+    direction: rtl !important;
+    max-width: 260px !important;
+  }
+
+  /* أعمدة الأكواد والمراجع المصغرة */
+  table.rh-table code,
+  .rh-table table code {
+    font-family: inherit !important;
+    font-weight: 700 !important;
+    color: #0f766e !important;
+    white-space: nowrap !important;
+  }
+
+  /* بطاقات الحالة (Pills) أثناء الطباعة */
+  .rh-pill {
+    display: inline-block !important;
+    border: 1px solid #cbd5e1 !important;
+    padding: 1px 6px !important;
+    font-size: 7.5pt !important;
+    border-radius: 4px !important;
+    white-space: nowrap !important;
+  }
+
+  /* إظهار كامل الصفوف للصفحات المتعددة في DataTable عند الطباعة */
+  .rh-row--page-hidden {
+    display: table-row !important;
+  }
+
+  /* ضبط الجداول العريضة (أكثر من 6 أعمدة) */
+  .rh-table--wide table,
+  table.rh-table--wide {
+    font-size: 8pt !important;
+  }
+
+  .rh-table--wide th,
+  .rh-table--wide td,
+  table.rh-table--wide th,
+  table.rh-table--wide td {
+    padding: 4px 6px !important;
+    font-size: 8pt !important;
+  }
+
+  .rh-table--wide .rh-pill {
+    padding: 1px 4px !important;
+    font-size: 7pt !important;
+  }
+
+  /* إخفاء الرسوم والشرائط غير القابلة للطباعة */
+  .rh-chart,
+  .rh-chart__table {
+    display: none !important;
+  }
+}

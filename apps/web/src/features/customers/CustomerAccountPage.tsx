@@ -1,6 +1,7 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/features/auth/AuthContext';
+import { financeApi, UnallocatedPayment } from '@/features/finance/financeApi';
 import {
   createCustomerOrder,
   createCustomerProductionOrder,
@@ -67,11 +68,13 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
   const canCreateProductionOrder = hasPermission('production:orders:create');
 
   const [account, setAccount] = useState<CustomerAccount | null>(null);
+  const [unallocatedPayments, setUnallocatedPayments] = useState<UnallocatedPayment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [orderModalOpen, setOrderModalOpen] = useState(false);
   const [deliveryOrder, setDeliveryOrder] = useState<CustomerOrder | null>(null);
   const [paymentOrder, setPaymentOrder] = useState<CustomerOrder | null>(null);
+  const [allocatingOrder, setAllocatingOrder] = useState<CustomerOrder | null>(null);
   const [productionOrder, setProductionOrder] = useState<{ order: CustomerOrder; line: CustomerOrderLine } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -79,8 +82,12 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchCustomerAccount(customer.id);
+      const [result, unallocated] = await Promise.all([
+        fetchCustomerAccount(customer.id),
+        financeApi.getCustomerUnallocatedPayments(customer.id).catch(() => []),
+      ]);
       setAccount(result);
+      setUnallocatedPayments(unallocated);
       onCustomerUpdated(result.customer);
     } catch (loadError) {
       setError(apiError(loadError));
@@ -90,6 +97,11 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
   }, [customer.id, onCustomerUpdated]);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  const totalUnallocated = useMemo(
+    () => unallocatedPayments.reduce((s, p) => s + Number(p.unallocated_amount || 0), 0),
+    [unallocatedPayments]
+  );
 
   const totals = useMemo(() => (account?.orders ?? []).reduce((result, order) => ({
     orders: result.orders + 1,
@@ -149,6 +161,26 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
         <article><span>مستحق على العميل الآن</span><strong>{formatMoney(totals.receivable)}</strong><small>المتبقي على الطلبات كاملة: {formatMoney(totals.balance)}</small></article>
       </div>
 
+      {totalUnallocated > 0 && (
+        <div
+          style={{
+            padding: '0.85rem 1.25rem',
+            backgroundColor: '#f0fdf4',
+            border: '1px solid #86efac',
+            borderRadius: '8px',
+            color: '#166534',
+            marginBottom: '1.25rem',
+          }}
+        >
+          <strong style={{ fontSize: '0.95rem' }}>
+            💡 يوجد رصيد تحصيلات نقدية معلقة غير مخصصة: {formatMoney(totalUnallocated)}
+          </strong>
+          <span style={{ fontSize: '0.85rem', display: 'block', color: '#15803d', marginTop: '0.2rem' }}>
+            موزعة على {unallocatedPayments.length} سند قبض معتمد في الخزينة. يمكنك تخصيصها للطلبات المفتوحة أدناه دون تكرار أي إيداع نقدي.
+          </span>
+        </div>
+      )}
+
       <div className="customer-account__columns">
         <section className="customers-card customer-account__details">
           <div className="customer-section-heading"><div><span>الملف</span><h3>بيانات العميل وطريقة التعامل</h3></div></div>
@@ -181,6 +213,16 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
                 <footer className="customer-order-card__actions">
                   {order.status !== 'delivered' && order.status !== 'cancelled' && canManageDeliveries && <button className="btn btn--secondary" type="button" onClick={() => setDeliveryOrder(order)}>＋ تسجيل دفعة تسليم</button>}
                   {order.status !== 'cancelled' && canRecordPayments && <button className="btn btn--secondary" type="button" onClick={() => setPaymentOrder(order)}>＋ تسجيل تحصيل مالي</button>}
+                  {order.status !== 'cancelled' && canRecordPayments && order.balance_amount > 0 && totalUnallocated > 0 && (
+                    <button
+                      className="btn btn--secondary"
+                      type="button"
+                      style={{ borderColor: '#2563eb', color: '#1d4ed8', fontWeight: 600 }}
+                      onClick={() => setAllocatingOrder(order)}
+                    >
+                      🔗 تخصيص من دفعة معلقة
+                    </button>
+                  )}
                 </footer>
               </article>
             ))}</div>
@@ -191,6 +233,16 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
       {orderModalOpen && <CustomerOrderModal customerId={customer.id} onClose={() => setOrderModalOpen(false)} onSaved={() => { setOrderModalOpen(false); void reload(); }} />}
       {deliveryOrder && <DeliveryModal customerId={customer.id} order={deliveryOrder} onClose={() => setDeliveryOrder(null)} onSaved={() => { setDeliveryOrder(null); void reload(); }} onError={setErrorFrom} />}
       {paymentOrder && <PaymentModal customerId={customer.id} order={paymentOrder} onClose={() => setPaymentOrder(null)} onSaved={() => { setPaymentOrder(null); void reload(); }} onError={setErrorFrom} />}
+      {allocatingOrder && (
+        <AllocateCustomerPaymentModal
+          customerId={customer.id}
+          order={allocatingOrder}
+          unallocated={unallocatedPayments}
+          onClose={() => setAllocatingOrder(null)}
+          onSaved={() => { setAllocatingOrder(null); void reload(); }}
+          onError={setErrorFrom}
+        />
+      )}
       {productionOrder && <ProductionOrderModal customerId={customer.id} order={productionOrder.order} line={productionOrder.line} onClose={() => setProductionOrder(null)} onSaved={() => { setProductionOrder(null); void reload(); }} onError={setErrorFrom} />}
       {saving && <span className="sr-only" role="status">جاري حفظ التغيير…</span>}
     </section>
@@ -308,4 +360,168 @@ function ProductionOrderModal({ customerId, order, line, onClose, onSaved, onErr
     <p>{line.variant_info} · الكمية المطلوبة {line.quantity}</p>{loading ? <p>جاري تحميل قوالب الموديل…</p> : choices.length ? <label>قالب التشغيل<select required value={templateVersionId} onChange={(event) => setTemplateVersionId(event.target.value)}><option value="">اختر إصدار قالب نشطًا</option>{choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}</select></label> : <p className="customers-alert">لا يوجد قالب تشغيل نشط لهذا الموديل. أنشئ قالبًا أولًا من قسم دفعات الإنتاج.</p>}
     <p className="customer-provisional-banner">سيُنشأ أمر تشغيل مرتبط ببند العميل وبالكمية المتبقية. لا يتم صرف الخامات عند إنشاء الأمر.</p><footer><button type="button" className="btn btn--secondary" onClick={onClose}>إلغاء</button><button className="btn btn--primary" type="submit" disabled={saving || loading || !templateVersionId}>{saving ? 'جاري إنشاء الأمر…' : 'إنشاء أمر التشغيل'}</button></footer>
   </form></ModalFrame>;
+}
+
+function AllocateCustomerPaymentModal({
+  customerId,
+  order,
+  unallocated,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  customerId: string;
+  order: CustomerOrder;
+  unallocated: UnallocatedPayment[];
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (error: unknown) => void;
+}) {
+  const [selectedDocId, setSelectedDocId] = useState(unallocated[0]?.cash_document_id || '');
+  const [amount, setAmount] = useState(() => {
+    const doc = unallocated[0];
+    if (!doc) return '';
+    const max = Math.min(Number(doc.unallocated_amount), order.balance_amount);
+    return max > 0 ? max.toFixed(2) : '';
+  });
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSelectDoc = (docId: string) => {
+    setSelectedDocId(docId);
+    const doc = unallocated.find((d) => d.cash_document_id === docId);
+    if (doc) {
+      const max = Math.min(Number(doc.unallocated_amount), order.balance_amount);
+      setAmount(max > 0 ? max.toFixed(2) : '');
+    }
+  };
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedDocId) {
+      setError('يرجى اختيار الدفعة المعلقة.');
+      return;
+    }
+    const numAmount = Number(amount);
+    if (!Number.isFinite(numAmount) || numAmount <= 0) {
+      setError('يرجى إدخال مبلغ صحيح أكبر من الصفر.');
+      return;
+    }
+    const doc = unallocated.find((d) => d.cash_document_id === selectedDocId);
+    if (doc && numAmount > Number(doc.unallocated_amount) + 0.001) {
+      setError(`المبلغ المطلوب تخصيصه أكبر من المتاح في السند (${formatMoney(Number(doc.unallocated_amount))}).`);
+      return;
+    }
+    if (numAmount > order.balance_amount + 0.001) {
+      setError(`المبلغ المطلوب تخصيصه أكبر من المتبقي على الطلب (${formatMoney(order.balance_amount)}).`);
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      await financeApi.allocateCustomerPayment(customerId, order.id, {
+        cash_document_id: selectedDocId,
+        amount: numAmount.toFixed(2),
+        notes: notes.trim(),
+      });
+      onSaved();
+    } catch (err) {
+      const msg = apiError(err);
+      setError(msg);
+      onError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalFrame title={`تخصيص دفعة معلقة · ${order.order_number}`} onClose={onClose}>
+      <form className="customer-flow-form" onSubmit={(e) => void submit(e)}>
+        {error && <div className="customers-alert" role="alert">{error}</div>}
+
+        <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '0.85rem', marginBottom: '1rem', fontSize: '0.88rem', color: '#166534' }}>
+          <span>المتبقي على الطلب: </span>
+          <strong style={{ fontSize: '1.05rem' }}>{formatMoney(order.balance_amount)}</strong>
+          <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.78rem', color: '#15803d' }}>
+            التخصيص يخفض مديونية الطلب فوراً من الرصيد المقبوض مسبقاً دون إنشاء سند قبض جديد.
+          </p>
+        </div>
+
+        <label style={{ fontWeight: 600, marginBottom: '0.5rem', display: 'block' }}>
+          اختر سند القبض المعلق:
+        </label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '160px', overflowY: 'auto', marginBottom: '1rem' }}>
+          {unallocated.map((d) => (
+            <label
+              key={d.cash_document_id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '0.5rem 0.75rem',
+                border: selectedDocId === d.cash_document_id ? '2px solid #2563eb' : '1px solid #cbd5e1',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                backgroundColor: selectedDocId === d.cash_document_id ? '#eff6ff' : '#ffffff',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="radio"
+                  name="cust_unalloc_doc"
+                  value={d.cash_document_id}
+                  checked={selectedDocId === d.cash_document_id}
+                  onChange={() => handleSelectDoc(d.cash_document_id)}
+                />
+                <div>
+                  <strong><code>{d.document_number}</code></strong>
+                  <span style={{ fontSize: '0.78rem', color: '#64748b', display: 'block' }}>
+                    {formatDate(d.occurred_at)} · الإجمالي: {formatMoney(Number(d.total_amount))}
+                  </span>
+                </div>
+              </div>
+              <div style={{ textAlign: 'left' }}>
+                <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'block' }}>المتبقي</span>
+                <strong style={{ color: '#16a34a' }}>{formatMoney(Number(d.unallocated_amount))}</strong>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        <div className="customer-form-grid">
+          <label>
+            المبلغ المخصص (ج.م) *
+            <input
+              required
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </label>
+          <label>
+            ملاحظات التخصيص
+            <input
+              type="text"
+              placeholder="اختياري (مثال: تسوية دفعة مقدمة)"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <footer>
+          <button type="button" className="btn btn--secondary" onClick={onClose} disabled={saving}>
+            إلغاء
+          </button>
+          <button className="btn btn--primary" type="submit" disabled={saving || !selectedDocId}>
+            {saving ? 'جاري التخصيص…' : 'تأكيد التخصيص للطلب'}
+          </button>
+        </footer>
+      </form>
+    </ModalFrame>
+  );
 }

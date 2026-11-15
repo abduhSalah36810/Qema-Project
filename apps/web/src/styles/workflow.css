@@ -540,8 +540,9 @@ th {
 
 /* الطباعة / حفظ PDF: تُطبع منطقة الكشف أو القسيمة فقط */
 @media print {
-  body * { visibility: hidden !important; }
-  .payroll-print, .payroll-print * { visibility: visible !important; }
+  body:has(.payroll-print) * { visibility: hidden !important; }
+  body:has(.payroll-print) .payroll-print,
+  body:has(.payroll-print) .payroll-print * { visibility: visible !important; }
   .payroll-print {
     display: block !important;
     position: absolute;

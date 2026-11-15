@@ -143,6 +143,25 @@ export const CatalogItemsTable: React.FC<Props> = ({
             ))}
           </select>
 
+          {/* ترتيب الأصناف */}
+          <select
+            value={`${filterParams.sort_by || 'created_at'}:${filterParams.sort_dir || 'desc'}`}
+            onChange={(e) => {
+              const [sb, sd] = e.target.value.split(':');
+              onFilterChange({ sort_by: sb as any, sort_dir: sd as any, offset: 0 });
+            }}
+            className="catalog-filter-select"
+            aria-label="ترتيب الأصناف"
+            title="ترتيب قائمة الأصناف"
+          >
+            <option value="created_at:desc">الأحدث إضافة ونشاطاً</option>
+            <option value="created_at:asc">الأقدم أولاً</option>
+            <option value="code:asc">كود الصنف (تصاعدي)</option>
+            <option value="code:desc">كود الصنف (تنازلي)</option>
+            <option value="name_ar:asc">اسم الصنف (أبجدي)</option>
+            <option value="reorder_level:desc">حد الطلب (الأعلى أولاً)</option>
+          </select>
+
           {/* زر إظهار خيارات التدقيق والاعتماد المتقدمة */}
           <button
             type="button"
@@ -286,6 +305,11 @@ export const CatalogItemsTable: React.FC<Props> = ({
                     <td>
                       <div className="catalog-table__name-cell">
                         <strong className="catalog-table__name">{item.name_ar}</strong>
+                        {item.created_at && (
+                          <small style={{ color: '#64748b', fontSize: '0.75rem' }}>
+                            أضيف في: {new Date(item.created_at).toLocaleDateString('ar-EG')}
+                          </small>
+                        )}
                         {isFinishedGood && (
                           <span className="catalog-tag-fg" title="منتج تام مصنّع">
                             منتج تام

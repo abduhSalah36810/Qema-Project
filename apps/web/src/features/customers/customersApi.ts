@@ -316,3 +316,69 @@ export function inspectCustomerReturn(
   );
 }
 
+export interface SoldItemRow {
+  delivery_line_id: string;
+  delivery_id: string;
+  delivery_number: string;
+  delivered_at: string;
+  order_id: string;
+  order_number: string;
+  order_type: string;
+  order_status: string;
+  customer_id: string;
+  customer_code: string;
+  customer_name: string;
+  product_id: string;
+  product_code: string;
+  product_name: string;
+  variant_id: string;
+  variant_info: string;
+  ordered_quantity: number;
+  delivered_quantity: number;
+  returned_quantity: number;
+  net_sold_quantity: number;
+  unit_price: number;
+  net_unit_price: number;
+  delivered_value: number;
+  returned_value: number;
+  net_sold_value: number;
+}
+
+export interface SoldItemsResponse {
+  summary: {
+    lines_count: number;
+    distinct_products_count: number;
+    total_delivered_quantity: number;
+    total_returned_quantity: number;
+    total_net_sold_quantity: number;
+    total_delivered_value: number;
+    total_returned_value: number;
+    total_net_sold_value: number;
+  };
+  items: SoldItemRow[];
+}
+
+export interface SoldItemsFilter {
+  customer_id?: string;
+  product_id?: string;
+  order_type?: string;
+  date_from?: string;
+  date_to?: string;
+  search?: string;
+  limit?: number;
+}
+
+export function fetchSoldItems(filters: SoldItemsFilter = {}): Promise<SoldItemsResponse> {
+  const params = new URLSearchParams();
+  if (filters.customer_id) params.set('customer_id', filters.customer_id);
+  if (filters.product_id) params.set('product_id', filters.product_id);
+  if (filters.order_type) params.set('order_type', filters.order_type);
+  if (filters.date_from) params.set('date_from', filters.date_from);
+  if (filters.date_to) params.set('date_to', filters.date_to);
+  if (filters.search) params.set('search', filters.search);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  const qs = params.toString();
+  return apiClient.request<SoldItemsResponse>(`/api/v1/customers/sold-items${qs ? `?${qs}` : ''}`);
+}
+
+

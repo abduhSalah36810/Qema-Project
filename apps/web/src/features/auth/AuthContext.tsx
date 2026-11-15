@@ -31,6 +31,20 @@ export type PermissionsStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export const LOCAL_DEV_STORAGE_KEY = 'qemma_local_dev_token';
 
+function getStorage(): Storage | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage;
+    }
+    if (typeof localStorage !== 'undefined') {
+      return localStorage;
+    }
+  } catch {
+    /* no-op */
+  }
+  return null;
+}
+
 interface AuthorizationState {
   roles: string[];
   permissions: string[];
@@ -202,7 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // 1. محاولة استعادة جلسة التطوير المحلي إن وُجدت في التخزين المحلي
     let storedDevToken: string | null = null;
     try {
-      storedDevToken = localStorage.getItem(LOCAL_DEV_STORAGE_KEY);
+      storedDevToken = getStorage()?.getItem(LOCAL_DEV_STORAGE_KEY) ?? null;
     } catch {
       storedDevToken = null;
     }
@@ -225,7 +239,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .catch(() => {
           if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
           try {
-            localStorage.removeItem(LOCAL_DEV_STORAGE_KEY);
+            getStorage()?.removeItem(LOCAL_DEV_STORAGE_KEY);
           } catch {
             /* no-op */
           }
@@ -371,7 +385,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // إخلاء التوكن وحالة الجلسة السابقة بالكامل لمنع الاحتفاظ بأي صلاحيات قديمة
     clearLocalIdentity();
     try {
-      localStorage.removeItem(LOCAL_DEV_STORAGE_KEY);
+      getStorage()?.removeItem(LOCAL_DEV_STORAGE_KEY);
     } catch {
       /* no-op */
     }
@@ -382,7 +396,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
       accessToken = resp.access_token;
       try {
-        localStorage.setItem(LOCAL_DEV_STORAGE_KEY, accessToken);
+        getStorage()?.setItem(LOCAL_DEV_STORAGE_KEY, accessToken);
       } catch {
         /* no-op */
       }
@@ -395,7 +409,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err: unknown) {
       if (!isMountedRef.current || syncId !== syncSequenceRef.current) return;
       try {
-        localStorage.removeItem(LOCAL_DEV_STORAGE_KEY);
+        getStorage()?.removeItem(LOCAL_DEV_STORAGE_KEY);
       } catch {
         /* no-op */
       }
@@ -417,7 +431,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // 1. مسار الخروج لجلسة المطور المحلي
     if (authMode === 'local_dev') {
       try {
-        localStorage.removeItem(LOCAL_DEV_STORAGE_KEY);
+        getStorage()?.removeItem(LOCAL_DEV_STORAGE_KEY);
       } catch {
         /* no-op */
       }

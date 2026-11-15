@@ -53,6 +53,8 @@ export const CatalogManagementView: React.FC = () => {
     classification_status: 'all',
     unit_id: 'all',
     application_line_id: 'all',
+    sort_by: 'created_at',
+    sort_dir: 'desc',
   });
 
   // Drawer & Modal State
@@ -150,6 +152,8 @@ export const CatalogManagementView: React.FC = () => {
       classification_status: 'all',
       unit_id: 'all',
       application_line_id: 'all',
+      sort_by: 'created_at',
+      sort_dir: 'desc',
     });
   };
 

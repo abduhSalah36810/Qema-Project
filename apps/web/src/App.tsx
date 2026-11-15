@@ -12,8 +12,14 @@ const OperationsBoard = lazy(() =>
   import('@/features/operations-board/OperationsBoard').then((m) => ({ default: m.OperationsBoard })));
 const ProductionOrdersView = lazy(() =>
   import('@/features/production/ProductionOrdersView').then((m) => ({ default: m.ProductionOrdersView })));
+const DiscrepancyClaimsView = lazy(() =>
+  import('@/features/production/DiscrepancyClaimsView').then((m) => ({ default: m.DiscrepancyClaimsView })));
+const DemandPoolView = lazy(() =>
+  import('@/features/production/DemandPoolView').then((m) => ({ default: m.DemandPoolView })));
 const CustomersView = lazy(() =>
   import('@/features/customers/CustomersView').then((m) => ({ default: m.CustomersView })));
+const SoldItemsView = lazy(() =>
+  import('@/features/customers/SoldItemsView').then((m) => ({ default: m.SoldItemsView })));
 const CustomerDeliveriesView = lazy(() =>
   import('@/features/customers/CustomerDeliveriesView').then((m) => ({ default: m.CustomerDeliveriesView })));
 const CustomerReturnsView = lazy(() =>
@@ -38,12 +44,24 @@ const CustodyView = lazy(() =>
   import('@/features/finance/CustodyView').then((m) => ({ default: m.CustodyView })));
 const SuppliersView = lazy(() =>
   import('@/features/finance/SuppliersView').then((m) => ({ default: m.SuppliersView })));
+const PurchasedItemsView = lazy(() =>
+  import('@/features/finance/PurchasedItemsView').then((m) => ({ default: m.PurchasedItemsView })));
+const PurchaseOrdersView = lazy(() =>
+  import('@/features/purchasing/PurchaseOrdersView').then((m) => ({ default: m.PurchaseOrdersView })));
 const PaymentsCollectionsView = lazy(() =>
   import('@/features/finance/PaymentsCollectionsView').then((m) => ({ default: m.PaymentsCollectionsView })));
 const PayrollFinanceView = lazy(() =>
   import('@/features/finance/PayrollFinanceView').then((m) => ({ default: m.PayrollFinanceView })));
 const FinancialReportsView = lazy(() =>
   import('@/features/finance/FinancialReportsView').then((m) => ({ default: m.FinancialReportsView })));
+const IncomeStatementView = lazy(() =>
+  import('@/features/finance/reports/IncomeStatementView').then((m) => ({ default: m.IncomeStatementView })));
+const BalanceSheetView = lazy(() =>
+  import('@/features/finance/reports/BalanceSheetView').then((m) => ({ default: m.BalanceSheetView })));
+const AccountStatementsView = lazy(() =>
+  import('@/features/finance/reports/AccountStatementsView').then((m) => ({ default: m.AccountStatementsView })));
+const ManagementReportsView = lazy(() =>
+  import('@/features/finance/reports/ManagementReportsView').then((m) => ({ default: m.ManagementReportsView })));
 const MasterDataView = lazy(() =>
   import('@/features/master-data/MasterDataView').then((m) => ({ default: m.MasterDataView })));
 
@@ -103,7 +121,9 @@ const GENERAL_NAV: NavEntry[] = [
     name: 'المشتريات',
     icon: '🧾',
     children: [
+      { id: 'purchase-orders', name: 'أوامر الشراء (PO)', requiredPermission: 'purchase_orders:view' },
       { id: 'finance-suppliers', name: 'فواتير الشراء والاستلام', requiredPermission: 'suppliers:view' },
+      { id: 'finance-purchased-items', name: 'الأصناف المشتراة', requiredPermission: 'suppliers:view' },
     ],
   },
   {
@@ -114,11 +134,12 @@ const GENERAL_NAV: NavEntry[] = [
     children: [
       { id: 'warehouse-raw', name: 'مخزن الخامات', requiredPermission: 'inventory:view' },
       { id: 'warehouse-finished', name: 'مخزن المنتج التام', requiredPermission: 'inventory:view' },
-      { id: 'warehouse-reports', name: 'أرصدة المخازن', requiredPermission: 'inventory:view' },
       { id: 'warehouse-stocktake', name: 'الجرد', requiredPermission: 'inventory:stocktake:view' },
     ],
   },
   { type: 'item', id: 'batches', name: 'أوامر التشغيل', icon: '🧵', requiredPermission: 'production:orders:view' },
+  { type: 'item', id: 'demand-pool', name: 'سلة طلبات العملاء (التجميع)', icon: '🧺', requiredPermission: 'production:orders:view' },
+  { type: 'item', id: 'production-claims', name: 'مطالبات فروقات الاستلام', icon: '⚖️', requiredPermission: 'production:orders:view' },
   {
     type: 'group',
     id: 'deliveries',
@@ -126,6 +147,7 @@ const GENERAL_NAV: NavEntry[] = [
     icon: '🛍️',
     children: [
       { id: 'finance-customers', name: 'العملاء وطلبات البيع', requiredPermission: 'customers:view' },
+      { id: 'finance-sold-items', name: 'الأصناف المباعة', requiredPermission: 'customers:view' },
       { id: 'orders', name: 'تسليم طلبات العملاء', requiredPermission: 'customers:deliveries:manage' },
       { id: 'customer-returns', name: 'مرتجعات العملاء', requiredPermission: 'customers:deliveries:manage' },
     ],
@@ -140,7 +162,19 @@ const GENERAL_NAV: NavEntry[] = [
       { id: 'finance-operations', name: 'سندات القبض والصرف', requiredPermission: 'finance:cash:view' },
       { id: 'finance-custody', name: 'العهد والمصروفات', requiredPermission: 'finance:cash:view' },
       { id: 'finance-payroll', name: 'الرواتب', requiredPermission: 'finance:payroll:view' },
-      { id: 'finance-reports', name: 'التقارير', requiredPermission: 'finance:reports:view' },
+    ],
+  },
+  {
+    type: 'group',
+    id: 'reports',
+    name: 'التقارير',
+    icon: '📊',
+    requiredPermission: 'finance:reports:view',
+    children: [
+      { id: 'report-income-statement', name: 'قائمة الدخل', requiredPermission: 'finance:reports:view' },
+      { id: 'report-balance-sheet', name: 'الميزانية العمومية', requiredPermission: 'finance:reports:view' },
+      { id: 'report-account-statements', name: 'كشوف الحسابات', requiredPermission: 'finance:reports:view' },
+      { id: 'report-management', name: 'تقارير الإدارة', requiredPermission: 'finance:reports:view' },
     ],
   },
   {
@@ -157,8 +191,10 @@ const GENERAL_NAV: NavEntry[] = [
 
 const WAREHOUSE_NAV: NavEntry[] = [
   { ...HOME_ITEM },
+  { type: 'item', id: 'purchase-orders', name: 'أوامر الشراء والتوريد', icon: '📋', requiredPermission: 'purchase_orders:view' },
   { type: 'item', id: 'finance-suppliers', name: 'فواتير الشراء والاستلام', icon: '🧾', requiredPermission: 'suppliers:view' },
   { type: 'item', id: 'batches', name: 'صرف الخامات واستلام التام', icon: '🧵', requiredPermission: 'production:orders:view' },
+  { type: 'item', id: 'production-claims', name: 'مطالبات فروقات الاستلام', icon: '⚖️', requiredPermission: 'production:orders:view' },
   { type: 'item', id: 'orders', name: 'تسليم طلبات العملاء', icon: '🚚', requiredPermission: 'customers:deliveries:manage' },
   { type: 'item', id: 'customer-returns', name: 'مرتجعات العملاء', icon: '↩️', requiredPermission: 'customers:deliveries:manage' },
   {
@@ -169,7 +205,6 @@ const WAREHOUSE_NAV: NavEntry[] = [
     children: [
       { id: 'warehouse-raw', name: 'مخزن الخامات', requiredPermission: 'inventory:view' },
       { id: 'warehouse-finished', name: 'مخزن المنتج التام', requiredPermission: 'inventory:view' },
-      { id: 'warehouse-reports', name: 'أرصدة المخازن', requiredPermission: 'inventory:view' },
       { id: 'warehouse-stocktake', name: 'الجرد', requiredPermission: 'inventory:stocktake:view' },
     ],
   },
@@ -189,6 +224,9 @@ const WAREHOUSE_NAV: NavEntry[] = [
 const PRODUCTION_NAV: NavEntry[] = [
   { ...HOME_ITEM },
   { type: 'item', id: 'batches', name: 'أوامر التشغيل', icon: '🧵', requiredPermission: 'production:orders:view' },
+  { type: 'item', id: 'purchase-orders', name: 'أوامر الشراء وعجز الخامات', icon: '📋', requiredPermission: 'purchase_orders:view' },
+  { type: 'item', id: 'demand-pool', name: 'سلة طلبات العملاء (التجميع)', icon: '🧺', requiredPermission: 'production:orders:view' },
+  { type: 'item', id: 'production-claims', name: 'مطالبات فروقات الاستلام', icon: '⚖️', requiredPermission: 'production:orders:view' },
   { type: 'item', id: 'warehouse-raw', name: 'أرصدة الخامات', icon: '📦', requiredPermission: 'inventory:view' },
   { type: 'item', id: 'master-data', name: 'الموديلات والمقاسات', icon: '👕' },
   { type: 'item', id: 'warehouse-catalog', name: 'دليل الخامات والأصناف', icon: '📚', requiredPermission: 'catalog:view' },
@@ -197,22 +235,63 @@ const PRODUCTION_NAV: NavEntry[] = [
 
 const FINANCE_NAV: NavEntry[] = [
   { type: 'item', id: 'inbox', name: 'الرئيسية · مهامي واعتماداتي', icon: '🏠' },
-  { type: 'item', id: 'finance-treasury', name: 'الخزينة والاعتمادات', icon: '🏦', requiredPermission: 'finance:cash:view' },
-  { type: 'item', id: 'finance-customers', name: 'العملاء والطلبات والتحصيل', icon: '👥', requiredPermission: 'customers:view' },
-  { type: 'item', id: 'customer-returns', name: 'مرتجعات العملاء', icon: '↩️', requiredPermission: 'customers:view' },
-  { type: 'item', id: 'finance-suppliers', name: 'مستحقات الموردين', icon: '🧾', requiredPermission: 'suppliers:view' },
+  {
+    type: 'group',
+    id: 'procurement',
+    name: 'المشتريات',
+    icon: '🧾',
+    children: [
+      { id: 'purchase-orders', name: 'أوامر الشراء (PO)', requiredPermission: 'purchase_orders:view' },
+      { id: 'finance-suppliers', name: 'فواتير الشراء والموردين', requiredPermission: 'suppliers:view' },
+      { id: 'finance-purchased-items', name: 'الأصناف المشتراة', requiredPermission: 'suppliers:view' },
+    ],
+  },
+  {
+    type: 'group',
+    id: 'deliveries',
+    name: 'المبيعات',
+    icon: '🛍️',
+    children: [
+      { id: 'finance-customers', name: 'العملاء والطلبات والتحصيل', requiredPermission: 'customers:view' },
+      { id: 'finance-sold-items', name: 'الأصناف المباعة', requiredPermission: 'customers:view' },
+      { id: 'customer-returns', name: 'مرتجعات العملاء', requiredPermission: 'customers:view' },
+    ],
+  },
   {
     type: 'group',
     id: 'finance',
-    name: 'المصروفات والإيرادات',
-    icon: '💳',
+    name: 'الخزينة والنقدية',
+    icon: '💰',
     children: [
+      { id: 'finance-treasury', name: 'الخزينة والاعتمادات', requiredPermission: 'finance:cash:view' },
       { id: 'finance-operations', name: 'سندات القبض والصرف', requiredPermission: 'finance:cash:view' },
       { id: 'finance-custody', name: 'العهد والمصروفات', requiredPermission: 'finance:cash:view' },
     ],
   },
   { type: 'item', id: 'finance-payroll', name: 'الرواتب', icon: '🧮', requiredPermission: 'finance:payroll:view' },
-  { type: 'item', id: 'finance-reports', name: 'التقارير', icon: '📊', requiredPermission: 'finance:reports:view' },
+  {
+    type: 'group',
+    id: 'reports',
+    name: 'التقارير',
+    icon: '📊',
+    requiredPermission: 'finance:reports:view',
+    children: [
+      { id: 'report-income-statement', name: 'قائمة الدخل', requiredPermission: 'finance:reports:view' },
+      { id: 'report-balance-sheet', name: 'الميزانية العمومية', requiredPermission: 'finance:reports:view' },
+      { id: 'report-account-statements', name: 'كشوف الحسابات', requiredPermission: 'finance:reports:view' },
+      { id: 'report-management', name: 'تقارير الإدارة', requiredPermission: 'finance:reports:view' },
+    ],
+  },
+  {
+    type: 'group',
+    id: 'approvals',
+    name: 'اعتماد الأصناف والجرد',
+    icon: '✅',
+    children: [
+      { id: 'warehouse-catalog', name: 'دليل الخامات والأصناف', requiredPermission: 'catalog:view' },
+      { id: 'warehouse-stocktake', name: 'الجرد', requiredPermission: 'inventory:stocktake:view' },
+    ],
+  },
   { type: 'item', id: 'master-data', name: 'البيانات الأساسية', icon: '🗂️' },
 ];
 
@@ -227,6 +306,10 @@ function navForRoles(roles: string[]): NavEntry[] {
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
   dashboard: ['reports:view'],
   batches: ['production:orders:view'],
+  // مطالبات فروقات الاستلام: نفس أي-من صلاحيات نقطة النهاية GET /production/discrepancy-claims
+  'production-claims': ['production:orders:view', 'warehouse:transfers:view', 'warehouse:claims:resolve'],
+  // سلة طلبات العملاء: نفس أي-من صلاحيات نقطة النهاية GET /production/demand-pool
+  'demand-pool': ['production:orders:view', 'customers:orders:view'],
   orders: ['customers:deliveries:manage'],
   'customer-returns': ['customers:deliveries:manage', 'customers:view'],
   'warehouse-raw': ['inventory:view'],
@@ -245,13 +328,20 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   'finance-expenses': ['finance:cash:view'],
   'finance-custody': ['finance:cash:view'],
   'finance-customers': ['customers:view'],
+  'finance-sold-items': ['customers:view'],
   customers: ['customers:view'],
   'finance-suppliers': ['suppliers:view'],
+  'purchase-orders': ['purchase_orders:view'],
+  'finance-purchased-items': ['suppliers:view'],
   'finance-payments': ['finance:payments:manage'],
   'finance-payroll': ['finance:payroll:view'],
   payroll: ['finance:payroll:view'],
   'finance-reports': ['finance:reports:view', 'reports:view'],
   reports: ['finance:reports:view', 'reports:view'],
+  'report-income-statement': ['finance:reports:view', 'reports:view'],
+  'report-balance-sheet': ['finance:reports:view', 'reports:view'],
+  'report-account-statements': ['finance:reports:view', 'reports:view'],
+  'report-management': ['finance:reports:view', 'reports:view'],
   'master-data': ['suppliers:view', 'customers:view', 'production:orders:view', 'finance:payroll:view'],
 };
 
@@ -261,6 +351,10 @@ function getHeaderInfo(nav: string): { kicker: string; title: string } {
       return { kicker: 'مهامك اليوم حسب دورك', title: 'الرئيسية' };
     case 'batches':
       return { kicker: 'من صرف الخامات حتى استلام المنتج التام والإغلاق', title: 'أوامر التشغيل' };
+    case 'production-claims':
+      return { kicker: 'الإنتاج والمخازن · حسم فروقات استلام خامات الورشة وفصل المسؤوليات', title: 'مطالبات فروقات الاستلام' };
+    case 'demand-pool':
+      return { kicker: 'التخطيط · تجميع طلبات العملاء المتوافقة في أوامر تشغيل موحدة', title: 'سلة طلبات العملاء غير المخططة' };
     case 'orders':
       return { kicker: 'سلّم الكميات المتاحة من مخزن المنتج التام', title: 'تسليم طلبات العملاء' };
     case 'warehouse-guide':
@@ -293,13 +387,27 @@ function getHeaderInfo(nav: string): { kicker: string; title: string } {
     case 'finance-customers':
     case 'customers':
       return { kicker: 'بيانات العملاء وطلبات البيع والتحصيل', title: 'العملاء وطلبات البيع' };
+    case 'finance-sold-items':
+      return { kicker: 'المبيعات · سجل الموديلات والمقاسات المسلمة فعلياً', title: 'الأصناف المباعة' };
     case 'finance-suppliers':
       return { kicker: 'المشتريات · من الفاتورة إلى الاستلام والسداد', title: 'فواتير الشراء واستلام الخامات' };
+    case 'purchase-orders':
+      return { kicker: 'المشتريات · دورة أوامر الشراء والاستلام المخزني وعجز الإنتاج', title: 'أوامر الشراء (PO) وتوريدات الخامات' };
+    case 'finance-purchased-items':
+      return { kicker: 'المشتريات · تتبع الأصناف وتاريخ أسعار الشراء', title: 'الأصناف المشتراة' };
     case 'finance-payments':
       return { kicker: 'المالية · متابعة حركة السيولة والسدادات', title: 'المدفوعات والتحصيلات' };
     case 'finance-payroll':
     case 'payroll':
       return { kicker: 'المالية · استحقاقات الأجور وصرف المرتبات', title: 'الرواتب والأجور المالية' };
+    case 'report-income-statement':
+      return { kicker: 'التقارير المالية · الأرباح والخسائر', title: 'قائمة الدخل' };
+    case 'report-balance-sheet':
+      return { kicker: 'التقارير المالية · المركز المالي والأصول والخصوم', title: 'الميزانية العمومية' };
+    case 'report-account-statements':
+      return { kicker: 'التقارير المالية · مطابقة الحسابات والأرصدة', title: 'كشوف الحسابات' };
+    case 'report-management':
+      return { kicker: 'التقارير والرقابة · مؤشرات وتحليلات الإدارة', title: 'تقارير الإدارة' };
     case 'finance-reports':
     case 'reports':
       return { kicker: 'المالية · التحليل المالي ومؤشرات الأداء', title: 'التقارير المالية ومؤشرات السيولة' };
@@ -444,6 +552,7 @@ function AppContent() {
     procurement: true,
     deliveries: true,
     finance: true,
+    reports: true,
     'master-data-group': true,
   });
   const [serverState, setServerState] = useState<ServerConnectionState>({
@@ -535,6 +644,9 @@ function AppContent() {
       ...prev,
       [groupId]: !prev[groupId],
     }));
+    if (groupId === 'reports') {
+      setActiveNav('reports');
+    }
   };
 
   const headerInfo = getHeaderInfo(activeNav);
@@ -608,7 +720,15 @@ function AppContent() {
               if (visibleChildren.length === 0) return null;
 
               const hasActiveChild = visibleChildren.some(
-                (child) => activeNav === child.id || (entry.id === 'finance' && activeNav === 'customers' && child.id === 'finance-customers')
+                (child) =>
+                  activeNav === child.id ||
+                  (child.id === 'warehouse-raw' && activeNav === 'inventory') ||
+                  (child.id === 'warehouse-reports' && activeNav === 'inventory-reports') ||
+                  (child.id === 'finance-treasury' && activeNav === 'finance') ||
+                  (child.id === 'finance-customers' && activeNav === 'customers') ||
+                  (child.id === 'finance-payroll' && activeNav === 'payroll') ||
+                  (child.id === 'finance-reports' && activeNav === 'reports') ||
+                  (entry.id === 'reports' && (activeNav === 'reports' || activeNav === 'finance-reports' || activeNav.startsWith('report-')))
               );
 
               return (
@@ -638,7 +758,11 @@ function AppContent() {
                           (sub.id === 'finance-treasury' && activeNav === 'finance') ||
                           (sub.id === 'finance-customers' && activeNav === 'customers') ||
                           (sub.id === 'finance-payroll' && activeNav === 'payroll') ||
-                          (sub.id === 'finance-reports' && activeNav === 'reports');
+                          (sub.id === 'finance-reports' && activeNav === 'reports') ||
+                          (sub.id === 'report-income-statement' && activeNav === 'report-income-statement') ||
+                          (sub.id === 'report-balance-sheet' && activeNav === 'report-balance-sheet') ||
+                          (sub.id === 'report-account-statements' && activeNav === 'report-account-statements') ||
+                          (sub.id === 'report-management' && activeNav === 'report-management');
 
                         return (
                           <li key={sub.id}>
@@ -872,6 +996,10 @@ function AppContent() {
             <MasterDataView onNavigate={(id) => setActiveNav(id)} />
           ) : activeNav === 'batches' ? (
             <ProductionOrdersView focus={navFocus} onFocusHandled={() => setNavFocus(undefined)} />
+          ) : activeNav === 'production-claims' ? (
+            <DiscrepancyClaimsView onOpenOrder={(orderId) => setActiveNav('batches', { orderId })} />
+          ) : activeNav === 'demand-pool' ? (
+            <DemandPoolView onOpenOrder={(orderId) => setActiveNav('batches', { orderId })} />
           ) : activeNav === 'orders' ? (
             <CustomerDeliveriesView />
           ) : activeNav === 'customer-returns' ? (
@@ -898,12 +1026,26 @@ function AppContent() {
             <CustodyView />
           ) : activeNav === 'finance-customers' || activeNav === 'customers' ? (
             <CustomersView />
+          ) : activeNav === 'finance-sold-items' ? (
+            <SoldItemsView />
           ) : activeNav === 'finance-suppliers' ? (
             <SuppliersView />
+          ) : activeNav === 'purchase-orders' ? (
+            <PurchaseOrdersView />
+          ) : activeNav === 'finance-purchased-items' ? (
+            <PurchasedItemsView />
           ) : activeNav === 'finance-payments' ? (
             <PaymentsCollectionsView />
           ) : activeNav === 'finance-payroll' || activeNav === 'payroll' ? (
             <PayrollFinanceView />
+          ) : activeNav === 'report-income-statement' ? (
+            <IncomeStatementView />
+          ) : activeNav === 'report-balance-sheet' ? (
+            <BalanceSheetView />
+          ) : activeNav === 'report-account-statements' ? (
+            <AccountStatementsView />
+          ) : activeNav === 'report-management' ? (
+            <ManagementReportsView />
           ) : activeNav === 'finance-reports' || activeNav === 'reports' ? (
             <FinancialReportsView initialTab="summary" />
           ) : activeNav === 'dashboard' ? (

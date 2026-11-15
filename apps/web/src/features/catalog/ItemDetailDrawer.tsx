@@ -1128,7 +1128,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                           <span key={u.id} className="drawer-tag">
                             <span>{u.name_ar}</span>
                             <code className="drawer-tag__code">{u.code}</code>
-                            <button
+                            {canUpdate && <button
                               type="button"
                               className="drawer-tag__remove"
                               onClick={() => void handleRemoveUsage(u.id)}
@@ -1136,13 +1136,13 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                               title="إزالة وسم الاستخدام"
                             >
                               ✕
-                            </button>
+                            </button>}
                           </span>
                         ))}
                       </div>
                     )}
 
-                    {availableLines.length > 0 && (
+                    {canUpdate && availableLines.length > 0 && (
                       <div className="drawer-usages__add-row">
                         <select
                           value={selectedAppToAdd}
@@ -1207,7 +1207,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                     إغلاق
                   </button>
 
-                  {!isFinishedGood && isDraft && (
+                  {!isFinishedGood && isDraft && canUpdate && (
                     <button
                       type="button"
                       onClick={() => void handleDeleteItem()}

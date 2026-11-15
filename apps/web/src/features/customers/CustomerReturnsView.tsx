@@ -274,70 +274,153 @@ export function CustomerReturnsView() {
 
       <div className="tab-bar" role="tablist" style={{ display: 'flex', gap: '0.5rem', margin: '1rem 0' }}>
         <button type="button" role="tab" aria-selected={tab === 'pending'} className={`tab-btn ${tab === 'pending' ? 'tab-btn--active' : ''}`} onClick={() => setTab('pending')}>
-          بانتظار الفحص
+          ⏳ بانتظار الفحص
         </button>
         <button type="button" role="tab" aria-selected={tab === 'inspected'} className={`tab-btn ${tab === 'inspected' ? 'tab-btn--active' : ''}`} onClick={() => setTab('inspected')}>
-          السجل (تم الفحص)
+          📋 السجل (تم الفحص)
         </button>
       </div>
 
       {loading ? (
-        <p className="form-hint">جاري تحميل المرتجعات…</p>
+        <div className="warehouse-card" style={{ padding: 32, textAlign: 'center', color: '#64748b' }}>
+          <p className="form-hint" style={{ fontSize: '1rem' }}>جاري تحميل المرتجعات…</p>
+        </div>
       ) : returns.length === 0 ? (
-        <p className="form-hint">{tab === 'pending' ? 'لا توجد مرتجعات بانتظار الفحص.' : 'لا يوجد سجل مرتجعات مفحوصة بعد.'}</p>
+        <div className="warehouse-card" style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+          <p className="form-hint" style={{ fontSize: '1.05rem', margin: 0 }}>
+            {tab === 'pending' ? '✓ لا توجد مرتجعات بانتظار الفحص حالياً.' : 'لا يوجد سجل مرتجعات مفحوصة بعد.'}
+          </p>
+        </div>
       ) : (
-        <div style={{ display: 'grid', gap: '0.75rem' }}>
+        <div style={{ display: 'grid', gap: '1rem' }}>
           {returns.map((ret) => (
-            <article key={ret.id} className="customer-return-card" style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '0.85rem' }}>
-              <header style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <div>
-                  <strong>{ret.return_number}</strong>{' '}
-                  <span className={`status-badge status-badge--${DISPOSITION_BADGE[ret.disposition] ?? 'muted'}`}>
+            <article key={ret.id} className="customer-return-card">
+              <header className="customer-return-card__header">
+                <div className="customer-return-card__header-main">
+                  <strong className="customer-return-card__number">{ret.return_number}</strong>
+                  <span
+                    className={`status-badge status-badge--${DISPOSITION_BADGE[ret.disposition] ?? 'muted'}`}
+                    style={{ padding: '3px 12px', fontSize: '0.8rem', fontWeight: 700 }}
+                  >
                     {RETURN_DISPOSITION_LABELS[ret.disposition] ?? ret.disposition}
                   </span>
-                  <div className="form-hint">
-                    {ret.customer_name} ({ret.customer_code}) · طلب {ret.order_number} · تسليم {ret.delivery_number}
-                  </div>
-                  <div className="form-hint">
-                    سجّله {userLabel(ret.created_by, user?.id)} · {fmtDate(ret.returned_at)}
-                    {ret.received_by && <> · سلّمه {ret.received_by}</>}
-                    {ret.inspected_by && <> · فحصه {userLabel(ret.inspected_by, user?.id)} · {fmtDate(ret.inspected_at)}</>}
-                  </div>
-                  <div className="form-hint">السبب: {ret.reason}</div>
-                  {ret.inspection_notes && <div className="form-hint">ملاحظات الفحص: {ret.inspection_notes}</div>}
+                  <span style={{ fontSize: '0.82rem', color: '#64748b' }}>
+                    📅 {fmtDate(ret.returned_at)}
+                  </span>
                 </div>
                 {canManage && ret.disposition === 'pending_inspection' && (
-                  <button type="button" className="btn btn--teal btn--sm" onClick={() => openInspect(ret)} disabled={busy}>
+                  <button
+                    type="button"
+                    className="btn btn--teal btn--sm"
+                    onClick={() => openInspect(ret)}
+                    disabled={busy}
+                    style={{ fontWeight: 700 }}
+                  >
                     فحص المرتجع
                   </button>
                 )}
               </header>
-              <div className="table-wrapper">
-                <table className="data-table" aria-label={`بنود ${ret.return_number}`}>
-                  <thead>
-                    <tr>
-                      <th>الموديل والمقاس</th>
-                      <th>الكمية</th>
-                      <th>الحالة عند الاستلام</th>
-                      <th>صالح للبيع</th>
-                      <th>تالف</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ret.lines.map((l) => (
-                      <tr key={l.id}>
-                        <td>
-                          {l.product_name} <small className="form-hint">{l.variant_info}</small>
-                          {l.notes && <div className="form-hint">{l.notes}</div>}
-                        </td>
-                        <td className="qty-col">{fmt(l.quantity)}</td>
-                        <td>{RETURN_CONDITION_LABELS[l.condition] ?? l.condition}</td>
-                        <td className="qty-col">{ret.disposition === 'pending_inspection' ? '—' : fmt(l.restocked_quantity)}</td>
-                        <td className="qty-col">{ret.disposition === 'pending_inspection' ? '—' : fmt(l.scrapped_quantity)}</td>
+
+              {/* شبكة البيانات المنظمة: العميل، المستند المصدر، أطراف العملية */}
+              <div className="customer-return-card__meta-grid">
+                <div className="customer-return-card__meta-box">
+                  <span className="customer-return-card__meta-label">العميل</span>
+                  <span className="customer-return-card__meta-value">
+                    {ret.customer_name}{' '}
+                    <span style={{ fontSize: '0.78rem', color: '#0f766e', fontWeight: 600 }}>({ret.customer_code})</span>
+                  </span>
+                </div>
+
+                <div className="customer-return-card__meta-box">
+                  <span className="customer-return-card__meta-label">سند التسليم والطلب المصدر</span>
+                  <span className="customer-return-card__meta-value">
+                    إذن تسليم {ret.delivery_number} · <span style={{ color: '#64748b' }}>طلب {ret.order_number}</span>
+                  </span>
+                </div>
+
+                <div className="customer-return-card__meta-box">
+                  <span className="customer-return-card__meta-label">تسجيل المرتجع والاستلام</span>
+                  <span className="customer-return-card__meta-value" style={{ fontSize: '0.82rem' }}>
+                    سجّله {userLabel(ret.created_by, user?.id)}
+                    {ret.received_by ? ` · سلّمه ${ret.received_by}` : ''}
+                  </span>
+                </div>
+
+                {ret.inspected_by && (
+                  <div className="customer-return-card__meta-box" style={{ background: '#f0fdf4', borderColor: '#bbf7d0' }}>
+                    <span className="customer-return-card__meta-label" style={{ color: '#166534' }}>القائم بالفحص والاعتماد</span>
+                    <span className="customer-return-card__meta-value" style={{ color: '#14532d', fontSize: '0.82rem' }}>
+                      فحصه {userLabel(ret.inspected_by, user?.id)} · {fmtDate(ret.inspected_at)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* سبب الإرجاع */}
+              {ret.reason && (
+                <div className="customer-return-card__reason-box">
+                  <span style={{ fontWeight: 700 }}>⚠️ سبب الإرجاع:</span>
+                  <span>{ret.reason}</span>
+                </div>
+              )}
+
+              {/* ملاحظات الفحص (إن وجدت) */}
+              {ret.inspection_notes && (
+                <div className="customer-return-card__inspection-box">
+                  <span style={{ fontWeight: 700 }}>📝 ملاحظات الفحص:</span>
+                  <span>{ret.inspection_notes}</span>
+                </div>
+              )}
+
+              {/* جدول البنود المرتجعة */}
+              <div className="items-table-card" style={{ boxShadow: 'none' }}>
+                <div className="items-table-scroll">
+                  <table className="items-table" aria-label={`بنود ${ret.return_number}`}>
+                    <thead>
+                      <tr>
+                        <th>الموديل والمقاس</th>
+                        <th className="is-num">الكمية المرتجعة</th>
+                        <th>الحالة عند الاستلام</th>
+                        <th className="is-num">صالح للبيع (يعود للمخزون)</th>
+                        <th className="is-num">تالف (هالك معدم)</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {ret.lines.map((l) => (
+                        <tr key={l.id}>
+                          <td className="is-wrap">
+                            <div style={{ fontWeight: 700, color: '#0f172a' }}>{l.product_name}</div>
+                            {l.variant_info && <div style={{ fontSize: '0.78rem', color: '#0f766e', fontWeight: 600 }}>{l.variant_info}</div>}
+                            {l.notes && <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 2 }}>{l.notes}</div>}
+                          </td>
+                          <td className="is-num" style={{ fontWeight: 800, fontSize: '0.95rem' }}>{fmt(l.quantity)}</td>
+                          <td>
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '2px 8px',
+                                borderRadius: 6,
+                                fontSize: '0.76rem',
+                                fontWeight: 600,
+                                background: l.condition === 'good' ? '#f0fdf4' : l.condition === 'damaged' ? '#fef2f2' : '#f8fafc',
+                                color: l.condition === 'good' ? '#166534' : l.condition === 'damaged' ? '#991b1b' : '#334155',
+                                border: `1px solid ${l.condition === 'damaged' ? '#fecaca' : l.condition === 'good' ? '#bbf7d0' : '#e2e8f0'}`,
+                              }}
+                            >
+                              {RETURN_CONDITION_LABELS[l.condition] ?? l.condition}
+                            </span>
+                          </td>
+                          <td className="is-num" style={{ color: '#047857', fontWeight: 700 }}>
+                            {ret.disposition === 'pending_inspection' ? '—' : fmt(l.restocked_quantity)}
+                          </td>
+                          <td className="is-num" style={{ color: '#b91c1c', fontWeight: 700 }}>
+                            {ret.disposition === 'pending_inspection' ? '—' : fmt(l.scrapped_quantity)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </article>
           ))}
@@ -537,7 +620,7 @@ export function CustomerReturnsView() {
                                   [l.id]: { restocked: r, scrapped: Number.isFinite(rest) && rest <= l.quantity ? String(Math.max(0, +(l.quantity - rest).toFixed(3))) : p[l.id].scrapped },
                                 }));
                               }}
-                              style={{ width: '6.5rem' }}
+                              style={{ width: '7rem', height: '36px', padding: '0 8px', border: '1px solid #0d9488', borderRadius: '6px', fontWeight: 700, color: '#047857' }}
                             />
                           </td>
                           <td>
@@ -548,9 +631,9 @@ export function CustomerReturnsView() {
                               aria-label={`التالف من ${l.product_name} ${l.variant_info}`}
                               value={v?.scrapped ?? ''}
                               onChange={(e) => setInspect((p) => ({ ...p, [l.id]: { ...p[l.id], scrapped: e.target.value } }))}
-                              style={{ width: '6.5rem' }}
+                              style={{ width: '7rem', height: '36px', padding: '0 8px', border: '1px solid #f87171', borderRadius: '6px', fontWeight: 700, color: '#b91c1c' }}
                             />
-                            {err && <div style={{ color: '#b91c1c', fontSize: '0.8rem' }}>{err}</div>}
+                            {err && <div style={{ color: '#b91c1c', fontSize: '0.8rem', marginTop: 4 }}>{err}</div>}
                           </td>
                         </tr>
                       );
@@ -558,13 +641,13 @@ export function CustomerReturnsView() {
                   </tbody>
                 </table>
               </div>
-              <label className="drawer-field" style={{ marginTop: '0.5rem' }}>
-                <span className="drawer-field__label">ملاحظات الفحص</span>
-                <input className="drawer-input" value={inspectNotes} onChange={(e) => setInspectNotes(e.target.value)} placeholder="مثال: قطعتان سليمتان بعد الكي" maxLength={1000} />
+              <label className="drawer-field" style={{ marginTop: '0.75rem' }}>
+                <span className="drawer-field__label" style={{ fontWeight: 600 }}>ملاحظات الفحص والاعتماد</span>
+                <input className="drawer-input" value={inspectNotes} onChange={(e) => setInspectNotes(e.target.value)} placeholder="مثال: تم فحص المرتجع وإعدام القطع غير الصالحة" maxLength={1000} />
               </label>
               <footer className="modal-box__footer">
-                <button type="button" className="btn-teal" onClick={() => void submitInspect()} disabled={busy}>{busy ? 'جاري الاعتماد…' : 'اعتماد الفحص'}</button>
-                <button type="button" className="btn-secondary" onClick={() => setInspecting(null)} disabled={busy}>إلغاء</button>
+                <button type="button" className="btn btn--teal" onClick={() => void submitInspect()} disabled={busy}>{busy ? 'جاري الاعتماد…' : 'اعتماد الفحص'}</button>
+                <button type="button" className="btn btn--secondary" onClick={() => setInspecting(null)} disabled={busy}>إلغاء</button>
               </footer>
             </div>
           </div>

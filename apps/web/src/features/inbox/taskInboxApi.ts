@@ -124,6 +124,79 @@ interface PendingRevisionRaw {
   created_at: string;
 }
 
+/** مطالبة عجز استلام خامات الورشة (GET /production/discrepancy-claims) */
+interface DiscrepancyClaimRaw {
+  id: string;
+  claim_number: string;
+  order_id: string;
+  order_number: string;
+  item_name_ar: string;
+  item_code: string;
+  unit_name_ar: string;
+  discrepancy_quantity: number;
+  total_cost: number | string;
+  status: string;
+  claimed_by: string;
+  claimed_at: string;
+  claim_notes: string;
+}
+
+/**
+ * مهام مطالبات عجز الاستلام المعلقة (Phase 4.5 / T2):
+ * - أصحاب warehouse:claims:resolve (أمين المخزن/المدير العام) غير مقدّم المطالبة: مهمة حسم فعلية.
+ * - مقدّم المطالبة (مثبِت العجز): متابعة فقط — لا يجوز له الحسم (Maker-Checker، والخادم يرفض أيضاً).
+ * - مدير الإنتاج (بلا صلاحية الحسم): متابعة فقط لحالة التحقيق.
+ * مهمة واحدة لكل مطالبة لكل مستخدم؛ وتُشتق حية من الخادم فتختفي تلقائياً بعد الحسم.
+ */
+function claimsToTasks(claims: DiscrepancyClaimRaw[], perms: Set<string>, userId?: string): TaskItem[] {
+  const tasks: TaskItem[] = [];
+  for (const claim of claims) {
+    if (claim.status !== 'pending_investigation') continue;
+    const base = {
+      referenceDoc: claim.claim_number,
+      createdAt: claim.claimed_at,
+      docType: 'مطالبة عجز استلام',
+      amount: toNumber(claim.total_cost),
+    };
+    const qty = toNumber(claim.discrepancy_quantity).toLocaleString('ar-EG', { maximumFractionDigits: 3 });
+    if (perms.has('warehouse:claims:resolve') && userId && claim.claimed_by !== userId) {
+      tasks.push({
+        ...base,
+        id: `claim-resolve-${claim.id}`,
+        category: 'warehouse',
+        title: 'حسم مطالبة عجز استلام خامات الورشة',
+        description: `عجز ${qty} ${claim.unit_name_ar} من (${claim.item_name_ar}) في استلام خامات أمر التشغيل ${claim.order_number}. راجع المطالبة واحسمها بقرار مكتوب؛ إغلاق الأمر متوقف على حسمها.`,
+        priority: 'high',
+        currentStatus: 'معلقة · بانتظار حسم المخزن',
+        actionNavId: 'production-claims',
+        actionLabel: 'فتح المطالبات',
+        badgeText: 'مطالبة عجز',
+      });
+    } else {
+      const isMine = Boolean(userId && claim.claimed_by === userId);
+      tasks.push({
+        ...base,
+        id: `${isMine ? 'claim-waiting' : 'claim-follow'}-${claim.id}`,
+        category: isMine ? 'production' : 'production',
+        title: isMine
+          ? 'مطالبة أثبتَّها · بانتظار حسم المخزن'
+          : 'مطالبة عجز معلقة على أمر التشغيل',
+        description: isMine
+          ? `أثبتَّ عجزاً ${qty} ${claim.unit_name_ar} (${claim.item_name_ar}) في استلام أمر التشغيل ${claim.order_number}. يحسمه أمين المخزن أو المدير العام؛ لا يجوز لك الحسم بنفسك.`
+          : `مطالبة عجز ${qty} ${claim.unit_name_ar} (${claim.item_name_ar}) على أمر التشغيل ${claim.order_number} معلقة بانتظار حسم أمين المخزن؛ تمنع إغلاق الأمر حتى الحسم.`,
+        priority: 'normal',
+        currentStatus: 'معلقة · بانتظار حسم المخزن',
+        actionNavId: 'production-claims',
+        actionLabel: 'متابعة الحالة',
+        badgeText: isMine ? 'مطالبتك' : 'مطالبة عجز',
+        waitingReason: 'الحسم من صلاحية أمين المخزن أو المدير العام ولغير من أثبت العجز.',
+        awaitingOther: true,
+      });
+    }
+  }
+  return tasks;
+}
+
 const CASH_DOC_TYPE_LABELS: Record<string, string> = {
   income: 'سند قبض نقدي',
   expense: 'سند صرف نقدي',
@@ -656,6 +729,8 @@ function myCatalogToTasks(pending: CatalogItemRaw[], rejected: CatalogItemRaw[],
 }
 
 const NEXT_ROLE_BY_PREFIX: Array<[string, string, OrderDetailTab?]> = [
+  ['claim-waiting-', 'أمين المخزن أو المدير العام'],
+  ['claim-follow-', 'أمين المخزن أو المدير العام'],
   ['po-return-resolution-waiting-', 'مسؤول الإنتاج أو المدير العام', 'wip'],
   ['po-return-resolve-', 'مسؤول الإنتاج أو المدير العام', 'wip'],
   ['po-return-receive-', 'أمين المخزن', 'wip'],
@@ -718,6 +793,21 @@ export async function fetchInboxTasks(permissions: string[], userId?: string): P
           perms.has('production:orders:close')),
       load: async () =>
         ordersToTasks(await apiClient.request<ProductionOrderRaw[]>('/api/v1/production/orders'), perms, userId),
+    },
+    {
+      label: 'مطالبات عجز استلام الخامات',
+      enabled:
+        perms.has('production:orders:view') ||
+        perms.has('warehouse:claims:resolve') ||
+        perms.has('warehouse:transfers:view'),
+      load: async () =>
+        claimsToTasks(
+          await apiClient.request<DiscrepancyClaimRaw[]>(
+            '/api/v1/production/discrepancy-claims?status=pending_investigation&limit=200'
+          ),
+          perms,
+          userId,
+        ),
     },
     {
       label: 'فواتير الموردين',

@@ -9,18 +9,15 @@ import {
   addProductVariantsApi,
   createProductApi,
   fetchProducts,
-  fetchWarehouses,
   updateProductApi,
   updateProductVariantApi,
   type Product,
   type ProductVariant,
-  type Warehouse,
 } from '@/features/production/productionApi';
-import { fetchUnits, type Unit } from '@/features/catalog/catalogApi';
 import { BomEditor } from '@/features/production/BomEditor';
 import { useDialog } from '@/components/feedback/DialogProvider';
 
-type TabId = 'suppliers' | 'customers' | 'products' | 'employees' | 'reference';
+type TabId = 'suppliers' | 'customers' | 'products' | 'employees';
 
 const SEASON_AR: Record<string, string> = { summer: 'صيفي', autumn: 'خريفي', winter: 'شتوي' };
 
@@ -632,43 +629,6 @@ function EmployeesTab({ canManage }: { canManage: boolean }) {
   );
 }
 
-// ─── الوحدات والمخازن (مرجعية) ──────────────────────────────────────────────
-
-function ReferenceTab({ onOpenCatalog, canSeeCatalog }: { onOpenCatalog: () => void; canSeeCatalog: boolean }) {
-  const [units, setUnits] = useState<Unit[]>([]);
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    fetchUnits().then(setUnits).catch((err) => setError(errorText(err)));
-    fetchWarehouses().then(setWarehouses).catch(() => setWarehouses([]));
-  }, []);
-  return (
-    <section className="md-panel" aria-label="الوحدات والمخازن">
-      <div className="md-panel__head">
-        <div>
-          <h3>المخازن ووحدات القياس والخامات</h3>
-          <p>المخازن الثلاثة ثابتة. وحدات القياس والتصنيفات وأصناف الخامات والمستلزمات تُدار من «دليل الخامات والأصناف»: إضافة صنف، اعتماده، تعديله أو إيقافه. الصنف المعتمد النشط فقط يمكن استخدامه في مستلزمات التصنيع.</p>
-        </div>
-        {canSeeCatalog && <button type="button" className="btn btn--secondary" onClick={onOpenCatalog}>فتح دليل الخامات ←</button>}
-      </div>
-      {error && <Notice kind="error" text={error} onClose={() => setError('')} />}
-      <div className="md-two-col">
-        <div>
-          <h4>المخازن</h4>
-          <ul className="md-list">
-            {warehouses.length === 0 && <li className="md-hint">يظهر للأدوار التي تتابع الإنتاج والمخازن.</li>}
-            {warehouses.map((w) => <li key={w.id}>{w.name_ar}</li>)}
-          </ul>
-        </div>
-        <div>
-          <h4>وحدات القياس</h4>
-          <div className="md-sizes">{units.map((u) => <span key={u.id} className="md-chip">{u.name_ar}</span>)}</div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 // ─── الشاشة الرئيسية ────────────────────────────────────────────────────────
 
 export function MasterDataView({ onNavigate }: { onNavigate: (navId: string) => void }) {
@@ -679,11 +639,10 @@ export function MasterDataView({ onNavigate }: { onNavigate: (navId: string) => 
       { id: 'customers', label: 'العملاء', visible: hasPermission('customers:view') },
       { id: 'products', label: 'الموديلات والمقاسات', visible: hasPermission('production:orders:view') },
       { id: 'employees', label: 'الموظفون', visible: hasPermission('finance:payroll:view') },
-      { id: 'reference', label: 'المخازن والوحدات والخامات', visible: true },
     ];
     return all.filter((t) => t.visible);
   }, [hasPermission]);
-  const [active, setActive] = useState<TabId>(tabs[0]?.id ?? 'reference');
+  const [active, setActive] = useState<TabId>(tabs[0]?.id ?? 'suppliers');
 
   return (
     <section className="md-page" dir="rtl" aria-labelledby="md-title">
@@ -709,7 +668,6 @@ export function MasterDataView({ onNavigate }: { onNavigate: (navId: string) => 
         />
       )}
       {active === 'employees' && <EmployeesTab canManage={hasPermission('finance:payroll:manage')} />}
-      {active === 'reference' && <ReferenceTab canSeeCatalog={hasPermission('catalog:view')} onOpenCatalog={() => onNavigate('warehouse-catalog')} />}
     </section>
   );
 }
