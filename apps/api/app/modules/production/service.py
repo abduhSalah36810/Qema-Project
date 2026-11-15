@@ -595,6 +595,19 @@ async def dispatch_order_materials(
         ))
 
     order.status = "materials_dispatched"
+
+    # قفل تلقائي عند أول صرف خامات لأمر تشغيل إن لم يكن مقفلًا
+    from app.modules.finance.ledger_service import is_opening_balances_locked, set_accounting_lock
+    if not await is_opening_balances_locked(session):
+        await set_accounting_lock(
+            session,
+            lock_type="opening_balances",
+            is_locked=True,
+            action="locked",
+            performed_by=dispatcher_id,
+            reason="إغلاق تلقائي عند أول صرف خامات لأمر تشغيل",
+        )
+
     if commit:
         await session.commit()
         await session.refresh(transfer)

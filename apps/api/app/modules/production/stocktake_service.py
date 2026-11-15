@@ -618,7 +618,13 @@ async def post_stocktake_adjustments(
     for line in sorted_lines:
         var = round(line.variance, 4)
         if stocktake.is_opening:
-            is_cust_bucket = bool(line.bucket_reference and line.bucket_reference.startswith("customer:"))
+            is_cust_bucket = bool(
+                line.bucket_reference
+                and (
+                    line.bucket_reference.startswith("customer:")
+                    or line.bucket_reference.startswith("customer_deposit:")
+                )
+            )
             if is_cust_bucket:
                 unit_cost = Decimal("0.0000")
                 line_cost = Decimal("0.00")
