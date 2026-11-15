@@ -1,10 +1,10 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
-from typing import List, Optional
+from typing import Annotated, List, Optional
 import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,23 +14,33 @@ from app.core.permissions import get_user_roles, require_permission
 from app.db.session import get_db
 from app.modules.finance.models import (
     Account, CashAccount, CashDocument, CashLedgerEntry, CustodySettlement, JournalEntry, JournalEntryLine,
-    Supplier, SupplierInvoice, SupplierInvoiceLine, SupplierPayment, SupplierReceipt,
+    PaymentAllocation, PurchaseOrder, PurchaseOrderLine, Supplier, SupplierInvoice, SupplierInvoiceLine, SupplierPayment, SupplierReceipt,
 )
 from app.modules.finance.schemas import (
     CashAccountRead, CashDocumentCreate, CashDocumentDecision, CashDocumentRead,
     CustodySettlementCreate, CustodySettlementRead,
+    OpeningBalancesCreate, OpeningBalancesRead,
+    OpeningSupplierInvoiceCreate,
+    PaymentAllocationCreate, PaymentAllocationRead, UnallocatedPaymentRead,
+    PurchasedItemHistoryRow, PurchasedItemsResponse, PurchasedItemsSummary,
+    PurchaseOrderCreate, PurchaseOrderRead, PurchaseOrderUpdate, PurchaseOrderReceiptConfirm,
     SupplierCreate, SupplierRead, SupplierUpdate, SupplierInvoiceCreate, SupplierInvoiceRead,
     SupplierInvoiceLineRead, SupplierPaymentCreate, SupplierPaymentLineRead, SupplierReceiptConfirm,
     SupplierFullBalanceRequest, SupplierFullBalanceRequestAck,
 )
-from app.modules.production.models import CatalogItem, StockLedgerEntry, Unit, Warehouse
+from app.modules.production.models import CatalogItem, ItemCategory, StockLedgerEntry, Unit, Warehouse
 from app.modules.production.service import lock_stock_balance
 from app.modules.finance.service import (
-    cash_account_balance, create_cash_document, decide_cash_document, finalize_cash_document, get_main_treasury,
-    posts_on_creation,
+    allocate_supplier_payment, cash_account_balance, create_cash_document, decide_cash_document,
+    finalize_cash_document, get_main_treasury, get_unallocated_supplier_payments, posts_on_creation,
 )
-from app.modules.finance.ledger_service import post_journal_entry, CANONICAL_TREASURY_ID
-from app.modules.finance.balances import supplier_invoice_financials
+from app.modules.finance.purchase_orders import (
+    list_purchase_orders, get_purchase_order_by_id, create_purchase_order,
+    update_draft_purchase_order, approve_purchase_order, cancel_purchase_order,
+    receive_purchase_order_goods,
+)
+from app.modules.finance.ledger_service import post_journal_entry, CANONICAL_TREASURY_ID, is_opening_balances_locked
+from app.modules.finance.balances import supplier_invoice_financials, supplier_line_net_unit_cost, supplier_line_total
 
 _CANONICAL_TREASURY_ID = CANONICAL_TREASURY_ID
 QTY_TOLERANCE = 1e-9
@@ -85,7 +95,11 @@ async def list_cash_documents(
     current_user: AuthenticatedUser = Depends(require_permission("finance:cash:view")),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(CashDocument).order_by(CashDocument.created_at.desc())
+    stmt = (
+        select(CashDocument)
+        .options(selectinload(CashDocument.supplier), selectinload(CashDocument.customer))
+        .order_by(CashDocument.created_at.desc())
+    )
     if status:
         stmt = stmt.where(CashDocument.status == status)
     if approvable_by_me:
@@ -106,7 +120,16 @@ async def list_cash_documents(
             CashDocument.created_by != current_user.id,
             ~((CashDocument.source_system == "payroll") & prepared_by_me),
         )
-    return (await db.scalars(stmt)).all()
+    docs = (await db.scalars(stmt)).all()
+    results = []
+    for d in docs:
+        read = CashDocumentRead.model_validate(d)
+        if d.supplier:
+            read.supplier_name = d.supplier.name
+        if d.customer:
+            read.customer_name = d.customer.name
+        results.append(read)
+    return results
 
 
 @router.post("/cash-documents", response_model=CashDocumentRead, status_code=status.HTTP_201_CREATED)
@@ -128,7 +151,13 @@ async def post_cash_document(
         document = await finalize_cash_document(
             db, document, current_user.id, await get_user_roles(current_user, db=db), commit=False,
         )
-        return CashDocumentRead.model_validate(document)
+        await db.refresh(document, attribute_names=["supplier", "customer"])
+        read = CashDocumentRead.model_validate(document)
+        if document.supplier:
+            read.supplier_name = document.supplier.name
+        if document.customer:
+            read.customer_name = document.customer.name
+        return read
 
     return await execute_idempotent_operation(
         db=db,
@@ -196,11 +225,15 @@ async def serialize_supplier_invoice(
             unit_price=line.unit_price if show else zero,
             discount_amount=(line.discount_amount or zero) if show else zero,
             line_total=line_total if show else zero,
+            purchase_order_line_id=getattr(line, "purchase_order_line_id", None),
             notes=line.notes,
         ))
 
     payment_records = (await db.scalars(
         select(SupplierPayment).where(SupplierPayment.invoice_id == invoice.id).order_by(SupplierPayment.created_at.desc())
+    )).all()
+    alloc_records = (await db.scalars(
+        select(PaymentAllocation).where(PaymentAllocation.supplier_invoice_id == invoice.id).order_by(PaymentAllocation.allocated_at.desc())
     )).all()
     payment_rows = [
         SupplierPaymentLineRead(
@@ -208,11 +241,26 @@ async def serialize_supplier_invoice(
             status=p.status, created_by=p.created_by, created_at=p.created_at,
         )
         for p in payment_records
+    ] + [
+        SupplierPaymentLineRead(
+            id=a.id, cash_document_id=a.cash_document_id, amount=a.allocated_amount if show else zero,
+            status="approved", created_by=a.allocated_by, created_at=a.allocated_at,
+        )
+        for a in alloc_records
     ]
+
+    po_number = None
+    if getattr(invoice, "purchase_order_id", None):
+        po = await db.get(PurchaseOrder, invoice.purchase_order_id)
+        if po:
+            po_number = po.order_number
 
     return SupplierInvoiceRead(
         id=invoice.id, internal_number=invoice.internal_number, supplier_id=invoice.supplier_id,
-        supplier_name=supplier.name if supplier else "", invoice_number=invoice.invoice_number,
+        supplier_name=supplier.name if supplier else "",
+        purchase_order_id=getattr(invoice, "purchase_order_id", None),
+        purchase_order_number=po_number,
+        invoice_number=invoice.invoice_number,
         invoice_date=invoice.invoice_date,
         invoice_total=fin.invoice_total if show else zero,
         paid_total=fin.paid_approved if show else zero,
@@ -289,6 +337,19 @@ async def list_supplier_invoices(
     return [await serialize_supplier_invoice(db, invoice, user_roles=user_roles) for invoice in invoices]
 
 
+@router.get("/supplier-invoices/{invoice_id}", response_model=SupplierInvoiceRead)
+async def get_supplier_invoice(
+    invoice_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("suppliers:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    invoice = await db.get(SupplierInvoice, invoice_id)
+    if not invoice:
+        raise HTTPException(404, "فاتورة المورد غير موجودة.")
+    user_roles = await get_user_roles(current_user, db=db)
+    return await serialize_supplier_invoice(db, invoice, user_roles=user_roles)
+
+
 @router.post("/supplier-invoices", response_model=SupplierInvoiceRead, status_code=status.HTTP_201_CREATED)
 async def create_supplier_invoice(
     data: SupplierInvoiceCreate,
@@ -329,7 +390,8 @@ async def create_supplier_invoice(
 
     invoice = SupplierInvoice(
         id=str(uuid.uuid4()), internal_number=f"PIN-{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex[:8].upper()}",
-        supplier_id=supplier.id, invoice_number=data.invoice_number.strip(), invoice_date=data.invoice_date,
+        supplier_id=supplier.id, purchase_order_id=data.purchase_order_id,
+        invoice_number=data.invoice_number.strip(), invoice_date=data.invoice_date,
         invoice_total=lines_total, notes=data.notes.strip(), created_by=current_user.id,
     )
     db.add(invoice)
@@ -337,9 +399,113 @@ async def create_supplier_invoice(
     for line in data.lines:
         db.add(SupplierInvoiceLine(
             id=str(uuid.uuid4()), invoice_id=invoice.id, item_id=line.item_id, unit_id=line.unit_id,
+            purchase_order_line_id=line.purchase_order_line_id,
             invoiced_quantity=line.invoiced_quantity, unit_price=line.unit_price,
             discount_amount=line.discount_amount, notes=line.notes.strip(),
         ))
+    await db.commit()
+    await db.refresh(invoice)
+    return await serialize_supplier_invoice(db, invoice, user_roles=await get_user_roles(current_user, db=db))
+
+
+@router.post("/supplier-invoices/opening", response_model=SupplierInvoiceRead, status_code=status.HTTP_201_CREATED)
+async def create_opening_supplier_invoice(
+    data: OpeningSupplierInvoiceCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تسجيل فاتورة مورد افتتاحية (رصيد دائن قديم أو دفعة مقدمة) بمبلغ إجمالي دون بنود أو أثر مخزني."""
+    if await is_opening_balances_locked(db):
+        raise HTTPException(status_code=409, detail="تم قفل الأرصدة الافتتاحية ولا يمكن إنشاء مستندات افتتاحية جديدة.")
+
+    supplier = await db.get(Supplier, data.supplier_id)
+    if not supplier or not supplier.is_active:
+        raise HTTPException(404, "المورد غير موجود أو موقوف.")
+
+    if await db.scalar(select(SupplierInvoice.id).where(
+        SupplierInvoice.supplier_id == data.supplier_id,
+        SupplierInvoice.invoice_number == data.invoice_number.strip(),
+    )):
+        raise HTTPException(409, "رقم فاتورة المورد مسجل من قبل.")
+
+    invoice = SupplierInvoice(
+        id=str(uuid.uuid4()),
+        internal_number=f"PIN-OB-{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex[:6].upper()}",
+        supplier_id=supplier.id,
+        invoice_number=data.invoice_number.strip(),
+        invoice_date=data.invoice_date,
+        invoice_total=data.amount,
+        status="awaiting_receipt",
+        is_opening=True,
+        is_advance=data.is_advance,
+        notes=data.notes.strip(),
+        created_by=current_user.id,
+    )
+    db.add(invoice)
+    await db.commit()
+    await db.refresh(invoice)
+    return await serialize_supplier_invoice(db, invoice, user_roles=await get_user_roles(current_user, db=db))
+
+
+@router.post("/supplier-invoices/{invoice_id}/approve-opening", response_model=SupplierInvoiceRead)
+async def approve_opening_supplier_invoice(
+    invoice_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """اعتماد فاتورة المورد الافتتاحية وترحيل قيدها المحاسبي لحساب 3900 (Maker-Checker)."""
+    invoice = await db.scalar(
+        select(SupplierInvoice)
+        .options(selectinload(SupplierInvoice.lines))
+        .where(SupplierInvoice.id == invoice_id)
+        .with_for_update()
+    )
+    if not invoice or not invoice.is_opening:
+        raise HTTPException(404, "فاتورة المورد الافتتاحية غير موجودة.")
+    if invoice.approved_by is not None:
+        raise HTTPException(409, "تم اعتماد الفاتورة الافتتاحية مسبقاً.")
+
+    if invoice.created_by == current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="لا يمكن لمنشئ المستند الافتتاحي اعتماده بنفسه (Maker-Checker). يلزم اعتماد مستخدم آخر.",
+        )
+
+    now = datetime.now(timezone.utc)
+    invoice.approved_by = current_user.id
+    invoice.approved_at = now
+    invoice.status = "received"
+    invoice.received_by = current_user.id
+    invoice.received_at = now
+
+    amt = Decimal(str(invoice.invoice_total))
+    if not invoice.is_advance:
+        await post_journal_entry(
+            db,
+            source_doc_type="opening_supplier_invoice",
+            source_doc_id=invoice.id,
+            description=f"إثبات رصيد دائن افتتاحي للمورد عن فاتورة {invoice.invoice_number}",
+            lines=[
+                {"account_code": "3900", "debit": amt, "credit": 0, "description": f"رصيد افتتاحي مورد عن فاتورة {invoice.invoice_number}"},
+                {"account_code": "2100", "debit": 0, "credit": amt, "description": f"استحقاق مورد عن فاتورة قديمة {invoice.invoice_number}"},
+            ],
+            user_id=current_user.id,
+            entry_date=invoice.invoice_date,
+        )
+    else:
+        await post_journal_entry(
+            db,
+            source_doc_type="opening_supplier_invoice",
+            source_doc_id=invoice.id,
+            description=f"إثبات دفعة مقدمة افتتاحية للمورد عن فاتورة {invoice.invoice_number}",
+            lines=[
+                {"account_code": "2100", "debit": amt, "credit": 0, "description": f"دفعة مقدمة للمورد عن فاتورة {invoice.invoice_number}"},
+                {"account_code": "3900", "debit": 0, "credit": amt, "description": f"رصيد افتتاحي دفعة مقدمة {invoice.invoice_number}"},
+            ],
+            user_id=current_user.id,
+            entry_date=invoice.invoice_date,
+        )
+
     await db.commit()
     await db.refresh(invoice)
     return await serialize_supplier_invoice(db, invoice, user_roles=await get_user_roles(current_user, db=db))
@@ -411,6 +577,19 @@ async def confirm_supplier_receipt(
         line.received_quantity = round(already + qty, 6)
         if entry.notes.strip():
             line.notes = (line.notes + " | استلام: " + entry.notes.strip()).strip(" |")
+
+        # إذا كان السطر مرتبطاً بأمر شراء، نحدّث سطر أمر الشراء المقابل
+        if getattr(line, "purchase_order_line_id", None):
+            po_l = await db.get(PurchaseOrderLine, line.purchase_order_line_id)
+            if po_l:
+                po_l.received_quantity = round((po_l.received_quantity or 0.0) + qty, 6)
+                po_m = await db.get(PurchaseOrder, po_l.purchase_order_id)
+                if po_m:
+                    all_po_lines = (await db.scalars(select(PurchaseOrderLine).where(PurchaseOrderLine.purchase_order_id == po_m.id))).all()
+                    po_done = all(float(l.received_quantity or 0.0) + QTY_TOLERANCE >= l.ordered_quantity for l in all_po_lines)
+                    po_m.status = "received" if po_done else "partially_received"
+                    po_m.updated_at = now
+
         db.add(StockLedgerEntry(
             id=str(uuid.uuid4()), item_id=line.item_id, unit_id=line.unit_id,
             warehouse_id=warehouse.id, location_type="warehouse", quantity=qty,
@@ -465,7 +644,12 @@ async def create_supplier_payment(
     )
     if not invoice or invoice.status == "cancelled":
         raise HTTPException(404, "فاتورة المورد غير متاحة.")
-    treasury = await get_main_treasury(db)
+    source_acc = await get_main_treasury(db)
+    if data.from_account_id:
+        acc = await db.get(CashAccount, data.from_account_id)
+        if not acc or not acc.is_active or acc.account_type not in ("treasury", "bank"):
+            raise HTTPException(422, "حساب الصرف لسداد المورد غير صالح.")
+        source_acc = acc
     fin = await supplier_invoice_financials(db, invoice, list(invoice.lines))
     committed = fin.paid_approved + fin.paid_pending
     # قبل اكتمال الاستلام يُسمح بالسداد حتى إجمالي الفاتورة (دفعات مقدمة)،
@@ -481,9 +665,10 @@ async def create_supplier_payment(
     payment_id, document_id = str(uuid.uuid4()), str(uuid.uuid4())
     document = CashDocument(
         id=document_id, document_number=f"CSH-SP-{uuid.uuid4().hex[:10].upper()}",
-        document_type="expense", from_account_id=treasury.id, to_account_id=None,
+        document_type="expense", from_account_id=source_acc.id, to_account_id=None,
         amount=data.amount, description=data.description.strip(), occurred_at=datetime.now(timezone.utc),
         source_system="supplier_payment", source_reference=payment_id,
+        supplier_id=invoice.supplier_id,
         status="pending", created_by=current_user.id,
     )
     payment = SupplierPayment(
@@ -538,6 +723,7 @@ async def request_supplier_full_balance_payment(
         document_type="expense", from_account_id=treasury.id, to_account_id=None,
         amount=amount, description=description, occurred_at=datetime.now(timezone.utc),
         source_system="supplier_payment", source_reference=payment_id,
+        supplier_id=invoice.supplier_id,
         status="pending", created_by=current_user.id,
     )
     payment = SupplierPayment(
@@ -558,6 +744,173 @@ async def request_supplier_full_balance_payment(
             if posted else
             "أُرسل طلب سداد كامل المستحق إلى الخزينة. يحدد النظام المبلغ، ويعتمده المسؤول المالي من شاشة الخزينة."
         ),
+    )
+
+
+@router.get("/suppliers/{supplier_id}/unallocated-payments", response_model=List[UnallocatedPaymentRead])
+async def list_supplier_unallocated_payments(
+    supplier_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("suppliers:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """عرض الدفعات النقدية المسددة للمورد والتي تملك رصيداً غير مخصص بعد على فواتير الشراء."""
+    rows = await get_unallocated_supplier_payments(db, supplier_id)
+    return [UnallocatedPaymentRead(**row) for row in rows]
+
+
+@router.post("/supplier-invoices/{invoice_id}/allocate-payment", response_model=PaymentAllocationRead)
+async def allocate_payment_to_supplier_invoice(
+    invoice_id: str,
+    data: PaymentAllocationCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("suppliers:payments:request")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تخصيص وتسوية دفعة نقدية سابقة ومعتمدة على فاتورة مورد دون تكرار حركة الخزينة."""
+    alloc = await allocate_supplier_payment(
+        db,
+        invoice_id=invoice_id,
+        cash_document_id=data.cash_document_id,
+        amount=data.amount,
+        user_id=current_user.id,
+        notes=data.notes,
+    )
+    await db.commit()
+    await db.refresh(alloc)
+    cd = await db.get(CashDocument, alloc.cash_document_id)
+    return PaymentAllocationRead(
+        id=alloc.id,
+        allocation_number=alloc.allocation_number,
+        cash_document_id=alloc.cash_document_id,
+        cash_document_number=cd.document_number if cd else None,
+        supplier_id=alloc.supplier_id,
+        customer_id=alloc.customer_id,
+        supplier_invoice_id=alloc.supplier_invoice_id,
+        customer_order_id=alloc.customer_order_id,
+        allocated_amount=alloc.allocated_amount,
+        allocated_at=alloc.allocated_at,
+        allocated_by=alloc.allocated_by,
+        notes=alloc.notes,
+    )
+
+
+@router.get("/purchased-items", response_model=PurchasedItemsResponse)
+async def list_purchased_items(
+    item_id: Annotated[Optional[str], Query()] = None,
+    category_id: Annotated[Optional[str], Query()] = None,
+    item_type: Annotated[Optional[str], Query()] = None,
+    supplier_id: Annotated[Optional[str], Query()] = None,
+    invoice_status: Annotated[Optional[str], Query(alias="status")] = None,
+    date_from: Annotated[Optional[date], Query()] = None,
+    date_to: Annotated[Optional[date], Query()] = None,
+    search: Annotated[Optional[str], Query(max_length=120)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    current_user: AuthenticatedUser = Depends(require_permission("suppliers:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """سجل الأصناف المشتراة من فواتير الموردين مباشرةً مع إخفاء الأسعار لأمين المخزن."""
+    user_roles = await get_user_roles(current_user, db=db)
+    show_prices = _can_view_prices(user_roles)
+
+    stmt = (
+        select(SupplierInvoiceLine, SupplierInvoice, Supplier, CatalogItem, Unit, ItemCategory)
+        .join(SupplierInvoice, SupplierInvoice.id == SupplierInvoiceLine.invoice_id)
+        .join(Supplier, Supplier.id == SupplierInvoice.supplier_id)
+        .join(CatalogItem, CatalogItem.id == SupplierInvoiceLine.item_id)
+        .join(Unit, Unit.id == SupplierInvoiceLine.unit_id)
+        .outerjoin(ItemCategory, ItemCategory.id == CatalogItem.category_id)
+        .order_by(SupplierInvoice.invoice_date.desc(), SupplierInvoice.created_at.desc())
+    )
+
+    if item_id:
+        stmt = stmt.where(SupplierInvoiceLine.item_id == item_id)
+    if category_id:
+        stmt = stmt.where(CatalogItem.category_id == category_id)
+    if item_type:
+        stmt = stmt.where(CatalogItem.item_type == item_type)
+    if supplier_id:
+        stmt = stmt.where(SupplierInvoice.supplier_id == supplier_id)
+    if invoice_status:
+        stmt = stmt.where(SupplierInvoice.status == invoice_status)
+    else:
+        stmt = stmt.where(SupplierInvoice.status != "cancelled")
+    if date_from:
+        stmt = stmt.where(SupplierInvoice.invoice_date >= datetime.combine(date_from, time.min, tzinfo=timezone.utc))
+    if date_to:
+        stmt = stmt.where(SupplierInvoice.invoice_date <= datetime.combine(date_to, time.max, tzinfo=timezone.utc))
+    if search and search.strip():
+        q = f"%{search.strip()}%"
+        stmt = stmt.where(
+            or_(
+                CatalogItem.code.ilike(q),
+                CatalogItem.name_ar.ilike(q),
+                Supplier.name.ilike(q),
+                SupplierInvoice.invoice_number.ilike(q),
+                SupplierInvoice.internal_number.ilike(q),
+            )
+        )
+
+    stmt = stmt.limit(limit)
+    rows = (await db.execute(stmt)).all()
+
+    items_out: list[PurchasedItemHistoryRow] = []
+    distinct_item_ids: set[str] = set()
+    total_invoiced_qty = 0.0
+    total_received_qty = 0.0
+    total_amount = Decimal("0.00")
+
+    for line, invoice, supplier, item, unit, category in rows:
+        inv_qty = float(line.invoiced_quantity or 0)
+        rec_qty = float(line.received_quantity or 0)
+        rem_qty = max(0.0, inv_qty - rec_qty)
+        line_tot = supplier_line_total(line)
+        net_cost = supplier_line_net_unit_cost(line)
+
+        if invoice.status != "cancelled":
+            distinct_item_ids.add(item.id)
+            total_invoiced_qty += inv_qty
+            total_received_qty += rec_qty
+            total_amount += line_tot
+
+        items_out.append(
+            PurchasedItemHistoryRow(
+                line_id=line.id,
+                invoice_id=invoice.id,
+                internal_number=invoice.internal_number,
+                invoice_number=invoice.invoice_number,
+                invoice_date=invoice.invoice_date,
+                invoice_status=invoice.status,
+                supplier_id=supplier.id,
+                supplier_code=supplier.code,
+                supplier_name=supplier.name,
+                item_id=item.id,
+                item_code=item.code,
+                item_name_ar=item.name_ar,
+                item_type=item.item_type,
+                category_id=item.category_id,
+                category_name_ar=category.name_ar if category else None,
+                unit_id=unit.id,
+                unit_name_ar=unit.name_ar,
+                invoiced_quantity=inv_qty,
+                received_quantity=rec_qty,
+                remaining_quantity=rem_qty,
+                unit_price=Decimal(str(line.unit_price)) if show_prices else None,
+                discount_amount=Decimal(str(line.discount_amount or 0)) if show_prices else None,
+                net_unit_cost=net_cost if show_prices else None,
+                line_total=line_tot if show_prices else None,
+                notes=line.notes or "",
+            )
+        )
+
+    return PurchasedItemsResponse(
+        summary=PurchasedItemsSummary(
+            lines_count=len(items_out),
+            distinct_items_count=len(distinct_item_ids),
+            total_invoiced_quantity=total_invoiced_qty,
+            total_received_quantity=total_received_qty,
+            total_amount=total_amount if show_prices else None,
+            prices_visible=show_prices,
+        ),
+        items=items_out,
     )
 
 
@@ -945,3 +1298,272 @@ async def get_canonical_treasury_info(
         "balance": float(balance or 0),
         "note": "هذا هو الحساب الكانوني للخزنة الرئيسية — جميع العمليات الجديدة تُسجَّل عليه.",
     }
+
+
+@router.get("/opening-balances", response_model=OpeningBalancesRead)
+async def get_opening_balances(
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعلام عن القيد الافتتاحي وتاريخ بدء الدورة المحاسبية."""
+    entry = await db.scalar(
+        select(JournalEntry)
+        .where(JournalEntry.source_doc_type == "opening_balance")
+        .order_by(JournalEntry.entry_date.desc(), JournalEntry.created_at.desc())
+    )
+    if not entry:
+        return OpeningBalancesRead(
+            is_set=False,
+            message="لم يتم تسجيل القيد الافتتاحي بعد. الميزانية العمومية تتطلب قيداً افتتاحياً متوازناً لتحديد أرصدة البداية الرسمية للمصنع.",
+        )
+    lines = (await db.scalars(select(JournalEntryLine).where(JournalEntryLine.entry_id == entry.id))).all()
+    details: dict[str, Decimal] = {}
+    tot_dr, tot_cr = Decimal("0.00"), Decimal("0.00")
+    for ln in lines:
+        acc = await db.get(Account, ln.account_id)
+        if acc:
+            val = ln.debit if ln.debit > 0 else ln.credit
+            details[acc.code] = val
+            tot_dr += ln.debit
+            tot_cr += ln.credit
+    return OpeningBalancesRead(
+        is_set=True,
+        accounting_start_date=entry.entry_date.date() if entry.entry_date else None,
+        journal_entry_id=entry.id,
+        journal_entry_number=entry.entry_number,
+        posted_at=entry.posted_at or entry.created_at,
+        posted_by=entry.created_by,
+        total_assets=tot_dr,
+        total_liabilities_and_equity=tot_cr,
+        is_balanced=tot_dr == tot_cr,
+        details=details,
+        message=f"القيد الافتتاحي مسجل برقم {entry.entry_number} بتاريخ {entry.entry_date.date() if entry.entry_date else ''}.",
+    )
+
+
+@router.post("/opening-balances", response_model=OpeningBalancesRead, status_code=status.HTTP_201_CREATED)
+async def create_opening_balances(
+    data: OpeningBalancesCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    تسجيل القيد الافتتاحي الرسمي لبدء الدورة المحاسبية (ACC-01 / ACC-02).
+    - يشترط التوازن التام: إجمالي الأصول (المدين) = إجمالي الالتزامات ورأس المال (الدائن).
+    - يمنع المعالجة الآلية أو فرض فروقات في حساب 3000 دون اعتماد صريح.
+    - يدعم حسابات: الخزنة 1010، البنك 1030، العهد 1020، العملاء 1100، مخزون الخامات 1210،
+      تحت التشغيل 1220، التام 1230، الموردين 2100، ورأس المال 3000.
+    """
+    disallowed = []
+    if data.accounts_receivable > Decimal("0.00"):
+        disallowed.append("1100 (ذمم العملاء)")
+    if data.raw_materials_inventory > Decimal("0.00"):
+        disallowed.append("1210 (مخزون الخامات)")
+    if data.wip_inventory > Decimal("0.00"):
+        disallowed.append("1220 (إنتاج تحت التشغيل)")
+    if data.finished_goods_inventory > Decimal("0.00"):
+        disallowed.append("1230 (مخزون التام)")
+    if data.accounts_payable > Decimal("0.00"):
+        disallowed.append("2100 (ذمم الموردين)")
+    if disallowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"يُحظر إدخال أرصدة للحسابات التالية في القيد الافتتاحي العام: {', '.join(disallowed)}. "
+                "أرصدة المخزون والعملاء والموردين تُسجل حصرياً عبر مستنداتها الافتتاحية المخصصة "
+                "(الجرد الافتتاحي، فواتير الموردين الافتتاحية، وأرصدة العملاء الافتتاحية) لمنع ازدواجية القيود."
+            ),
+        )
+
+    existing = await db.scalar(
+        select(JournalEntry.id).where(JournalEntry.source_doc_type == "opening_balance")
+    )
+    if existing:
+        raise HTTPException(
+            409,
+            "تم تسجيل القيد الافتتاحي مسبقاً في النظام. لتعديل أرصدة البداية، راجع الإدارة المالية لإجراء تسوية رسمية معتمدة.",
+        )
+
+    lines: list[dict[str, Any]] = []
+    # النقدية والبنك والعهد (مدين)
+    asset_mappings = [
+        ("1010", data.treasury_balance, "رصيد الخزينة الرئيسية الافتتاحي"),
+        ("1030", data.bank_balance, "رصيد حساب بنك المصنع الافتتاحي"),
+        ("1020", data.custody_balance, "أرصدة العهد النقدية الافتتاحية"),
+    ]
+    for code, amt, label in asset_mappings:
+        if amt > Decimal("0.00"):
+            lines.append({"account_code": code, "debit": amt, "credit": Decimal("0.00"), "description": label})
+
+    # رأس المال (دائن)
+    if data.paid_in_capital > Decimal("0.00"):
+        lines.append({"account_code": "3000", "debit": Decimal("0.00"), "credit": data.paid_in_capital, "description": "رأس المال المدفوع وحقوق الملكية الافتتاحية"})
+
+    if not lines:
+        raise HTTPException(422, "يجب إدخال مبالغ في حسابات القيد الافتتاحي.")
+
+    # موازنة القيد الافتتاحي بحساب 3900 إن وجد فارق بين النقدية ورأس المال
+    cur_dr = sum((l["debit"] for l in lines), Decimal("0.00"))
+    cur_cr = sum((l["credit"] for l in lines), Decimal("0.00"))
+    if cur_dr > cur_cr:
+        lines.append({"account_code": "3900", "debit": Decimal("0.00"), "credit": cur_dr - cur_cr, "description": "توازن الأرصدة الافتتاحية المعلقة"})
+    elif cur_cr > cur_dr:
+        lines.append({"account_code": "3900", "debit": cur_cr - cur_dr, "credit": Decimal("0.00"), "description": "توازن الأرصدة الافتتاحية المعلقة"})
+
+    entry_date = datetime.combine(data.accounting_start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    entry = await post_journal_entry(
+        db,
+        source_doc_type="opening_balance",
+        source_doc_id=f"OB-{data.accounting_start_date.isoformat()}",
+        description=f"القيد الافتتاحي الرسمي لبدء الدورة المحاسبية بتاريخ {data.accounting_start_date} {data.notes}".strip(),
+        lines=lines,
+        user_id=current_user.id,
+        entry_date=entry_date,
+    )
+    await db.commit()
+    await db.refresh(entry)
+
+    tot_dr = sum((l["debit"] for l in lines), Decimal("0.00"))
+    tot_cr = sum((l["credit"] for l in lines), Decimal("0.00"))
+    details = {l["account_code"]: (l["debit"] if l["debit"] > 0 else l["credit"]) for l in lines}
+
+    return OpeningBalancesRead(
+        is_set=True,
+        accounting_start_date=data.accounting_start_date,
+        journal_entry_id=entry.id,
+        journal_entry_number=entry.entry_number,
+        posted_at=entry.posted_at or entry.created_at,
+        posted_by=current_user.id,
+        total_assets=tot_dr,
+        total_liabilities_and_equity=tot_cr,
+        is_balanced=tot_dr == tot_cr,
+        details=details,
+        message="تم ترحيل القيد الافتتاحي وتفعيل الميزانية العمومية بنجاح.",
+    )
+
+
+@router.get("/pre-migration-audit")
+async def get_pre_migration_audit(
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    فحص العمليات التاريخية والتشغيلية المسبقة لمساعدة المحاسب في إعداد القيد الافتتاحي.
+    يعرض الأرصدة التراكمية في دفاتر النقدية والمخزون والعملاء والموردين.
+    """
+    # 1. النقدية
+    cash_total = await db.scalar(select(func.coalesce(func.sum(CashLedgerEntry.amount), 0))) or Decimal("0.00")
+    # 2. حركات المخزون
+    raw_qty = await db.scalar(
+        select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0))
+        .join(Warehouse, Warehouse.id == StockLedgerEntry.warehouse_id)
+        .where(Warehouse.code.like("%raw%"))
+    ) or 0.0
+    fg_qty = await db.scalar(
+        select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0))
+        .join(Warehouse, Warehouse.id == StockLedgerEntry.warehouse_id)
+        .where(Warehouse.code.like("%finish%"))
+    ) or 0.0
+    # 3. قيود اليومية المسجلة
+    je_count = await db.scalar(select(func.count(JournalEntry.id))) or 0
+    ob_entry = await db.scalar(select(JournalEntry).where(JournalEntry.source_doc_type == "opening_balance"))
+
+    return {
+        "cash_ledger_total": float(cash_total),
+        "raw_materials_ledger_quantity": float(raw_qty),
+        "finished_goods_ledger_quantity": float(fg_qty),
+        "total_journal_entries": je_count,
+        "has_opening_balance": ob_entry is not None,
+        "opening_balance_number": ob_entry.entry_number if ob_entry else None,
+        "guidance": "الأرصدة أعلاه هي مؤشرات تشغيلية تاريخية من دفاتر الحركات؛ القيد الافتتاحي الرسمي يجب أن يُعتمد بأرقام الجرد والمطابقة الفعلية المعتمدة من إدارة المصنع دون افتراض تلقائي.",
+    }
+
+
+# ─── أوامر الشراء وإدارة عجز الخامات (Purchase Orders) ────────────────────────
+
+@router.get("/purchase-orders", response_model=List[PurchaseOrderRead])
+async def get_purchase_orders(
+    supplier_id: Annotated[Optional[str], Query()] = None,
+    status: Annotated[Optional[str], Query()] = None,
+    search: Annotated[Optional[str], Query(max_length=120)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+    current_user: AuthenticatedUser = Depends(require_permission("purchase_orders:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعراض أوامر الشراء مع تصفية حسب المورد أو الحالة أو البحث."""
+    user_roles = await get_user_roles(current_user, db=db)
+    return await list_purchase_orders(
+        db, supplier_id=supplier_id, status=status, search=search, limit=limit, user_roles=user_roles
+    )
+
+
+@router.get("/purchase-orders/{po_id}", response_model=PurchaseOrderRead)
+async def get_purchase_order(
+    po_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("purchase_orders:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعراض تفاصيل أمر الشراء وبنوده وحركات استلامه."""
+    user_roles = await get_user_roles(current_user, db=db)
+    return await get_purchase_order_by_id(db, po_id, user_roles=user_roles)
+
+
+@router.post("/purchase-orders", response_model=PurchaseOrderRead, status_code=status.HTTP_201_CREATED)
+async def create_new_purchase_order(
+    data: PurchaseOrderCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("purchase_orders:create")),
+    db: AsyncSession = Depends(get_db),
+):
+    """إنشاء أمر شراء جديد بحالة مسودة."""
+    return await create_purchase_order(db, data, current_user.id)
+
+
+@router.put("/purchase-orders/{po_id}", response_model=PurchaseOrderRead)
+async def update_purchase_order(
+    po_id: str,
+    data: PurchaseOrderUpdate,
+    current_user: AuthenticatedUser = Depends(require_permission("purchase_orders:manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تعديل أمر شراء مسودة (الكميات، الملاحظات، أو إضافة بنود)."""
+    return await update_draft_purchase_order(db, po_id, data, current_user.id)
+
+
+@router.post("/purchase-orders/{po_id}/approve", response_model=PurchaseOrderRead)
+async def approve_po(
+    po_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("purchase_orders:approve")),
+    db: AsyncSession = Depends(get_db),
+):
+    """اعتماد أمر الشراء ليصبح جاهزاً للتوريد والاستلام المخزني (دون التأثير على المخزون)."""
+    return await approve_purchase_order(db, po_id, current_user.id)
+
+
+@router.post("/purchase-orders/{po_id}/cancel", response_model=PurchaseOrderRead)
+async def cancel_po(
+    po_id: str,
+    reason: Annotated[Optional[str], Query(max_length=500)] = None,
+    current_user: AuthenticatedUser = Depends(require_permission("purchase_orders:manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    """إلغاء أمر شراء قبل اكتمال الاستلام مع إبقاء الأثر التوثيقي."""
+    return await cancel_purchase_order(db, po_id, current_user.id, reason=reason)
+
+
+@router.post("/purchase-orders/{po_id}/receive", response_model=PurchaseOrderRead)
+async def receive_po_goods(
+    po_id: str,
+    data: PurchaseOrderReceiptConfirm,
+    current_user: AuthenticatedUser = Depends(require_permission("suppliers:receive")),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    إثبات استلام فعلي بمخزن الخامات بناءً على أمر الشراء (GRN).
+    يزيد رصيد مخزن الخامات الحر في دفتر أستاذ المخزون StockLedgerEntry ويحدث كميات أمر الشراء المستلمة وحالته.
+    """
+    user_roles = await get_user_roles(current_user, db=db)
+    return await receive_purchase_order_goods(
+        db, po_id, data, current_user.id, user_roles=user_roles, idempotency_key=idempotency_key
+    )
+

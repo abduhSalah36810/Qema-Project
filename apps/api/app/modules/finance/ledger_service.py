@@ -19,18 +19,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.finance.models import Account, JournalEntry, JournalEntryLine
 
 CANONICAL_TREASURY_ID = "00000000-0000-0000-0000-000000000001"
+CANONICAL_BANK_ID = "00000000-0000-0000-0000-000000000002"
 
 
 # ── حسابات مخطط الحسابات المعيارية ─────────────────────────────────────────
 ACCOUNT_CODES = {
     "cash":           "1010",
+    "petty_cash":     "1020",
+    "bank":           "1030",
+    "accounts_receivable": "1100",
     "raw_material":   "1210",
     "wip":            "1220",
     "finished_goods": "1230",
     "accounts_payable": "2100",
+    "equity":         "3000",
     "cogs":           "5100",
     "revenue":        "4100",
+    "other_revenue":  "4200",
+    "payroll":        "5200",
+    "direct_wages":   "5210",
+    "scrap_variance": "5220",
+    "mfg_expenses":   "5300",
+    "admin_expenses": "5400",
+    "admin_salaries": "5410",
 }
+
+
+async def resolve_expense_code(db: AsyncSession, preferred_code: str, fallback_code: str = "5200") -> str:
+    """إرجاع كود المصروف المحدد إذا كان موجوداً في الدليل ومفعلاً، وإلا العودة للكود الاحتياطي."""
+    acc = await db.scalar(select(Account.id).where(Account.code == preferred_code, Account.is_active.is_(True)))
+    return preferred_code if acc else fallback_code
 
 
 async def get_account_by_code(db: AsyncSession, code: str) -> Account:
@@ -163,15 +181,21 @@ async def get_weighted_average_cost(db: AsyncSession, item_id: str, warehouse_id
     يُرجع 0 إذا لم تُجد تكاليف.
     """
     # التبعية الدورية: نستورد هنا داخل الدالة لتجنب الحلقة
-    from sqlalchemy import or_
+    from sqlalchemy import and_, or_
 
     from app.modules.production.models import StockLedgerEntry
-    from app.modules.production.stock import RETURN_PENDING_PREFIX
+    from app.modules.production.stock import RETURN_PENDING_PREFIX, CUSTOMER_DEPOSIT_PREFIX
 
-    # حاويات NULL (مخزن الخامات) تبقى داخل الحساب؛ تُستثنى حاوية الفحص فقط
-    exclude_quarantine = or_(
-        StockLedgerEntry.bucket_reference.is_(None),
-        ~StockLedgerEntry.bucket_reference.startswith(RETURN_PENDING_PREFIX),
+    # حاويات NULL (مخزن الخامات) تبقى داخل الحساب؛ تُستثنى حاوية الفحص وأمانات خامات العملاء
+    exclude_quarantine = and_(
+        or_(
+            StockLedgerEntry.bucket_reference.is_(None),
+            ~StockLedgerEntry.bucket_reference.startswith(RETURN_PENDING_PREFIX),
+        ),
+        or_(
+            StockLedgerEntry.bucket_reference.is_(None),
+            ~StockLedgerEntry.bucket_reference.startswith(CUSTOMER_DEPOSIT_PREFIX),
+        ),
     )
 
     filters = [
@@ -198,4 +222,13 @@ async def get_weighted_average_cost(db: AsyncSession, item_id: str, warehouse_id
     if not total_qty or Decimal(str(total_qty)) == 0:
         return Decimal("0.0000")
     return (Decimal(str(total_cost)) / Decimal(str(total_qty))).quantize(Decimal("0.0001"))
+
+
+async def is_opening_balances_locked(db: AsyncSession) -> bool:
+    """التحقق من قفل الأرصدة الافتتاحية: بمجرد اعتماد القيد الافتتاحي العام يمنع إنشاء مستندات افتتاحية جديدة."""
+    has_ob = await db.scalar(
+        select(JournalEntry.id).where(JournalEntry.source_doc_type == "opening_balance").limit(1)
+    )
+    return bool(has_ob)
+
 

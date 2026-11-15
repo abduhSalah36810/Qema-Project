@@ -27,7 +27,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.finance.models import SupplierInvoice, SupplierInvoiceLine, SupplierPayment
+from app.modules.finance.models import CashDocument, PaymentAllocation, SupplierInvoice, SupplierInvoiceLine, SupplierPayment
 
 CENT = Decimal("0.01")
 ZERO = Decimal("0.00")
@@ -87,11 +87,27 @@ async def supplier_invoice_financials(
         .group_by(SupplierPayment.status)
     )).all()
     by_status = {status: money(total) for status, total in payment_rows}
-    invoice_total = sum(line_totals.values(), ZERO) if lines else money(invoice.invoice_total)
+    allocated_approved = ZERO
+    if "allocations" in invoice.__dict__ and invoice.__dict__["allocations"]:
+        allocated_approved = sum((money(getattr(a, "allocated_amount", 0)) for a in invoice.__dict__["allocations"]), ZERO)
+    elif db is not None:
+        try:
+            allocated_total = await db.scalar(
+                select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+                .where(PaymentAllocation.supplier_invoice_id == invoice.id)
+            )
+            allocated_approved = money(allocated_total or 0)
+        except (StopIteration, StopAsyncIteration):
+            allocated_approved = ZERO
+    if getattr(invoice, "is_opening", False):
+        invoice_total = money(invoice.invoice_total)
+        received_value = invoice_total
+    else:
+        invoice_total = sum(line_totals.values(), ZERO) if lines else money(invoice.invoice_total)
     return SupplierInvoiceFinancials(
         invoice_total=invoice_total,
         received_value=received_value,
-        paid_approved=by_status.get("approved", ZERO),
+        paid_approved=by_status.get("approved", ZERO) + allocated_approved,
         paid_pending=by_status.get("pending", ZERO),
         line_totals=line_totals,
         net_unit_costs=unit_costs,
@@ -130,30 +146,42 @@ def customer_order_financials(order) -> CustomerOrderFinancials:
     """
     يحسب الموقف المالي لطلب عميل من علاقاته المحملة (lines, deliveries.lines, returns.lines, payments).
     """
-    gross = sum((money(line.quantity * line.unit_price) for line in order.lines), ZERO)
-    discount = money(order.discount_amount)
-    total = gross - discount
-    ratio = (total / gross) if gross > 0 else Decimal("1")
-    price_by_line = {line.id: Decimal(str(line.unit_price)) for line in order.lines}
+    if getattr(order, "is_opening", False):
+        op_amt = money(getattr(order, "opening_amount", 0) or 0)
+        gross = op_amt
+        discount = ZERO
+        total = op_amt
+        ratio = Decimal("1")
+        price_by_line = {}
+        delivered: dict[str, Decimal] = {}
+        delivered_value = op_amt
+        returned: dict[str, Decimal] = {}
+        returned_value = ZERO
+    else:
+        gross = sum((money(line.quantity * line.unit_price) for line in order.lines), ZERO)
+        discount = money(order.discount_amount)
+        total = gross - discount
+        ratio = (total / gross) if gross > 0 else Decimal("1")
+        price_by_line = {line.id: Decimal(str(line.unit_price)) for line in order.lines}
 
-    delivered: dict[str, Decimal] = {}
-    delivered_value = ZERO
-    for delivery in getattr(order, "deliveries", []) or []:
-        doc_gross = ZERO
-        for d_line in delivery.lines:
-            qty = Decimal(str(d_line.quantity))
-            delivered[d_line.order_line_id] = delivered.get(d_line.order_line_id, ZERO) + qty
-            doc_gross += qty * price_by_line.get(d_line.order_line_id, ZERO)
-        delivered_value += money(doc_gross * ratio)  # تقريب على مستوى المستند كما يُرحّل
-    returned: dict[str, Decimal] = {}
-    returned_value = ZERO
-    for ret in getattr(order, "returns", []) or []:
-        doc_gross = ZERO
-        for r_line in ret.lines:
-            qty = Decimal(str(r_line.quantity))
-            returned[r_line.order_line_id] = returned.get(r_line.order_line_id, ZERO) + qty
-            doc_gross += qty * price_by_line.get(r_line.order_line_id, ZERO)
-        returned_value += money(doc_gross * ratio)
+        delivered: dict[str, Decimal] = {}
+        delivered_value = ZERO
+        for delivery in getattr(order, "deliveries", []) or []:
+            doc_gross = ZERO
+            for d_line in delivery.lines:
+                qty = Decimal(str(d_line.quantity))
+                delivered[d_line.order_line_id] = delivered.get(d_line.order_line_id, ZERO) + qty
+                doc_gross += qty * price_by_line.get(d_line.order_line_id, ZERO)
+            delivered_value += money(doc_gross * ratio)  # تقريب على مستوى المستند كما يُرحّل
+        returned: dict[str, Decimal] = {}
+        returned_value = ZERO
+        for ret in getattr(order, "returns", []) or []:
+            doc_gross = ZERO
+            for r_line in ret.lines:
+                qty = Decimal(str(r_line.quantity))
+                returned[r_line.order_line_id] = returned.get(r_line.order_line_id, ZERO) + qty
+                doc_gross += qty * price_by_line.get(r_line.order_line_id, ZERO)
+            returned_value += money(doc_gross * ratio)
 
     paid_approved = ZERO
     paid_pending = ZERO
@@ -163,6 +191,13 @@ def customer_order_financials(order) -> CustomerOrderFinancials:
             paid_approved += money(payment.amount)
         elif status == "pending":
             paid_pending += money(payment.amount)
+
+    if "allocations" in order.__dict__ and order.__dict__["allocations"]:
+        for alloc in order.__dict__["allocations"]:
+            paid_approved += money(getattr(alloc, "allocated_amount", 0))
+    elif hasattr(order, "allocations") and not hasattr(type(order).allocations, "comparator"):
+        for alloc in getattr(order, "allocations", []) or []:
+            paid_approved += money(getattr(alloc, "allocated_amount", 0))
 
     return CustomerOrderFinancials(
         gross_amount=gross,
@@ -203,6 +238,7 @@ async def load_customer_orders(db: AsyncSession, customer_id: str | None = None)
             selectinload(CustomerOrder.deliveries).selectinload(CustomerDelivery.lines),
             selectinload(CustomerOrder.returns).selectinload(CustomerDeliveryReturn.lines),
             selectinload(CustomerOrder.payments),
+            selectinload(CustomerOrder.allocations),
         )
         .order_by(CustomerOrder.order_date.desc())
     )
@@ -237,6 +273,27 @@ async def customer_totals(db: AsyncSession, customer_id: str | None = None) -> d
         t.returned_value += fin.returned_value
         t.paid += fin.paid_approved
         t.pending_payments += fin.paid_pending
+
+    # إضافة المقبوضات النقدية المباشرة غير المخصصة للعميل
+    from sqlalchemy import or_
+    cash_stmt = select(CashDocument).where(
+        CashDocument.document_type == "income",
+        CashDocument.status == "approved",
+        CashDocument.customer_id.is_not(None),
+        or_(CashDocument.source_system.is_(None), CashDocument.source_system != "customer_payment"),
+    )
+    if customer_id:
+        cash_stmt = cash_stmt.where(CashDocument.customer_id == customer_id)
+    direct_docs = (await db.scalars(cash_stmt)).all()
+    for doc in direct_docs:
+        allocated = await db.scalar(
+            select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+            .where(PaymentAllocation.cash_document_id == doc.id)
+        )
+        unallocated = max(ZERO, money(doc.amount) - money(allocated or 0))
+        t = totals.setdefault(doc.customer_id, PartyTotals())
+        t.paid += unallocated
+
     return totals
 
 
@@ -253,4 +310,25 @@ async def supplier_totals(db: AsyncSession, supplier_id: str | None = None) -> d
         t.delivered_value += fin.received_value
         t.paid += fin.paid_approved
         t.pending_payments += fin.paid_pending
+
+    # إضافة الدفعات النقدية المباشرة غير المخصصة للمورد
+    from sqlalchemy import or_
+    cash_stmt = select(CashDocument).where(
+        CashDocument.document_type == "expense",
+        CashDocument.status == "approved",
+        CashDocument.supplier_id.is_not(None),
+        or_(CashDocument.source_system.is_(None), CashDocument.source_system != "supplier_payment"),
+    )
+    if supplier_id:
+        cash_stmt = cash_stmt.where(CashDocument.supplier_id == supplier_id)
+    direct_docs = (await db.scalars(cash_stmt)).all()
+    for doc in direct_docs:
+        allocated = await db.scalar(
+            select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+            .where(PaymentAllocation.cash_document_id == doc.id)
+        )
+        unallocated = max(ZERO, money(doc.amount) - money(allocated or 0))
+        t = totals.setdefault(doc.supplier_id, PartyTotals())
+        t.paid += unallocated
+
     return totals

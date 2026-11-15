@@ -16,8 +16,17 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.finance.ledger_service import CANONICAL_TREASURY_ID, post_journal_entry
-from app.modules.finance.models import CashAccount, CashDocument, CashLedgerEntry, SupplierPayment
+from app.modules.finance.ledger_service import CANONICAL_BANK_ID, CANONICAL_TREASURY_ID, post_journal_entry, resolve_expense_code
+from app.modules.finance.models import (
+    CashAccount,
+    CashDocument,
+    CashLedgerEntry,
+    PaymentAllocation,
+    Supplier,
+    SupplierInvoice,
+    SupplierPayment,
+)
+from app.modules.customers.models import Customer, CustomerOrder
 from app.modules.finance.schemas import CashDocumentCreate, CashDocumentDecision
 
 # مصادر المستندات التي تنشئها الوحدات المتخصصة فقط (لا تُقبل من شاشة المستند النقدي العام)
@@ -52,8 +61,18 @@ async def get_main_treasury(db: AsyncSession) -> CashAccount:
     return treasury
 
 
+async def get_main_bank(db: AsyncSession) -> CashAccount | None:
+    """حساب البنك الرئيسي للمصنع."""
+    bank = await db.get(CashAccount, CANONICAL_BANK_ID)
+    return bank if bank and bank.is_active else None
+
+
 def _cash_gl_code(account: CashAccount) -> str:
-    return "1010" if account.account_type == "treasury" else "1020"
+    if account.account_type == "treasury":
+        return "1010"
+    if account.account_type == "bank":
+        return "1030"
+    return "1020"
 
 
 async def create_cash_document(
@@ -91,6 +110,14 @@ async def create_cash_document(
         raise HTTPException(422, "تسجل الإيرادات في الخزنة الرئيسية.")
     if data.source_system == "daily_expense" and by_id[data.from_account_id].account_type != "petty_cash":
         raise HTTPException(422, "المصروف اليومي يُصرف من صندوق عهدة فقط.")
+    if data.supplier_id:
+        supplier = await db.get(Supplier, data.supplier_id)
+        if not supplier or not supplier.is_active:
+            raise HTTPException(404, "المورد المحدد غير موجود أو موقوف.")
+    if data.customer_id:
+        customer = await db.get(Customer, data.customer_id)
+        if not customer or getattr(customer, "status", "active") != "active":
+            raise HTTPException(404, "العميل المحدد غير موجود أو موقوف.")
 
     now = utc_now()
     document = CashDocument(
@@ -98,6 +125,8 @@ async def create_cash_document(
         document_type=data.document_type, from_account_id=data.from_account_id, to_account_id=data.to_account_id,
         amount=data.amount, description=data.description, occurred_at=data.occurred_at,
         source_system=data.source_system, source_reference=data.source_reference, created_by=user_id,
+        supplier_id=data.supplier_id, customer_id=data.customer_id,
+        expense_category=getattr(data, "expense_category", None),
         status="pending",
     )
     db.add(document)
@@ -136,7 +165,7 @@ async def _post_document_journal(
     elif document.document_type == "income":
         if not to_acc:
             raise HTTPException(409, "حساب الإيداع غير محدد.")
-        if source == "customer_payment":
+        if source == "customer_payment" or document.customer_id:
             credit_code, doc_type = "1100", "customer_payment"
         else:
             credit_code = "4100" if "مبيعات" in (document.description or "") else "4200"
@@ -148,12 +177,24 @@ async def _post_document_journal(
     else:  # expense
         if not from_acc:
             raise HTTPException(409, "حساب الصرف غير محدد.")
-        if source == "supplier_payment":
+        if source == "supplier_payment" or document.supplier_id:
             debit_code, doc_type = "2100", "supplier_payment"
         elif source == "payroll":
             debit_code, doc_type = PAYROLL_EXPENSE_ACCOUNT, "payroll_disbursement"
         else:
-            debit_code = "5300" if any(w in (document.description or "") for w in ("صيانة", "تشغيل", "إنتاج")) else "5400"
+            cat = getattr(document, "expense_category", None)
+            if cat == "direct_wages":
+                debit_code = await resolve_expense_code(db, "5210", "5200")
+            elif cat == "scrap_variance":
+                debit_code = await resolve_expense_code(db, "5220", "5200")
+            elif cat in ("operating_expense", "maintenance"):
+                debit_code = await resolve_expense_code(db, "5300", "5300")
+            elif cat in ("administrative", "admin_expense"):
+                debit_code = await resolve_expense_code(db, "5400", "5400")
+            elif cat == "admin_salary":
+                debit_code = await resolve_expense_code(db, "5410", "5400")
+            else:
+                debit_code = "5300" if any(w in (document.description or "") for w in ("صيانة", "تشغيل", "إنتاج")) else "5400"
             doc_type = "cash_expense"
         lines = [
             {"account_code": debit_code, "debit": amount, "credit": 0, "description": label},
@@ -370,3 +411,234 @@ async def finalize_cash_document(
         await db.flush()
     await db.refresh(document)
     return document
+
+
+# ─── محرك تخصيص وتسوية المدفوعات (Payment Allocation Engine) ─────────────────
+
+async def get_unallocated_supplier_payments(
+    db: AsyncSession,
+    supplier_id: str,
+) -> list[dict]:
+    """
+    استعراض الدفعات النقدية المعتمدة للمورد التي لم تُخصم/تُخصص بالكامل بعد على فواتير.
+    تشمل: مستندات الصرف المعتمدة التي تحمل supplier_id.
+    """
+    stmt = (
+        select(CashDocument)
+        .where(
+            CashDocument.supplier_id == supplier_id,
+            CashDocument.document_type == "expense",
+            CashDocument.status == "approved",
+        )
+        .order_by(CashDocument.occurred_at.asc())
+    )
+    docs = (await db.scalars(stmt)).all()
+    results = []
+    for doc in docs:
+        allocated = await db.scalar(
+            select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+            .where(PaymentAllocation.cash_document_id == doc.id)
+        )
+        allocated_amt = Decimal(str(allocated or 0))
+        total_amt = Decimal(str(doc.amount or 0))
+        unallocated_amt = max(Decimal("0.00"), total_amt - allocated_amt)
+        if unallocated_amt > Decimal("0.00"):
+            results.append({
+                "cash_document_id": doc.id,
+                "document_number": doc.document_number,
+                "document_type": doc.document_type,
+                "occurred_at": doc.occurred_at,
+                "total_amount": total_amt,
+                "allocated_amount": allocated_amt,
+                "unallocated_amount": unallocated_amt,
+                "description": doc.description,
+            })
+    return results
+
+
+async def get_unallocated_customer_payments(
+    db: AsyncSession,
+    customer_id: str,
+) -> list[dict]:
+    """
+    استعراض المقبوضات النقدية المعتمدة للعميل التي لم تُخصص بالكامل بعد على طلبات بيع.
+    """
+    stmt = (
+        select(CashDocument)
+        .where(
+            CashDocument.customer_id == customer_id,
+            CashDocument.document_type == "income",
+            CashDocument.status == "approved",
+        )
+        .order_by(CashDocument.occurred_at.asc())
+    )
+    docs = (await db.scalars(stmt)).all()
+    results = []
+    for doc in docs:
+        allocated = await db.scalar(
+            select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+            .where(PaymentAllocation.cash_document_id == doc.id)
+        )
+        allocated_amt = Decimal(str(allocated or 0))
+        total_amt = Decimal(str(doc.amount or 0))
+        unallocated_amt = max(Decimal("0.00"), total_amt - allocated_amt)
+        if unallocated_amt > Decimal("0.00"):
+            results.append({
+                "cash_document_id": doc.id,
+                "document_number": doc.document_number,
+                "document_type": doc.document_type,
+                "occurred_at": doc.occurred_at,
+                "total_amount": total_amt,
+                "allocated_amount": allocated_amt,
+                "unallocated_amount": unallocated_amt,
+                "description": doc.description,
+            })
+    return results
+
+
+async def allocate_supplier_payment(
+    db: AsyncSession,
+    *,
+    invoice_id: str,
+    cash_document_id: str,
+    amount: Decimal,
+    user_id: str,
+    notes: str = "",
+) -> PaymentAllocation:
+    """
+    تخصيص وتسوية دفعة نقدية سابقة ومعتمدة على فاتورة مورد دون تكرار حركة الخزينة أو قيد اليومية.
+    """
+    from app.modules.finance.balances import supplier_invoice_financials
+
+    invoice = await db.scalar(
+        select(SupplierInvoice).where(SupplierInvoice.id == invoice_id).with_for_update()
+    )
+    if not invoice or invoice.status == "cancelled":
+        raise HTTPException(404, "فاتورة المورد غير موجودة أو ملغاة.")
+
+    doc = await db.scalar(
+        select(CashDocument).where(CashDocument.id == cash_document_id).with_for_update()
+    )
+    if not doc:
+        raise HTTPException(404, "المستند النقدي غير موجود.")
+    if doc.status != "approved" or doc.document_type != "expense":
+        raise HTTPException(409, "لا يمكن التخصيص إلا من مستند صرف نقدي معتمد.")
+    if doc.supplier_id != invoice.supplier_id:
+        raise HTTPException(422, "المستند النقدي لا يتبع نفس المورد صاحب الفاتورة.")
+
+    allocated = await db.scalar(
+        select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+        .where(PaymentAllocation.cash_document_id == doc.id)
+    )
+    available_on_doc = Decimal(str(doc.amount)) - Decimal(str(allocated or 0))
+    if amount > available_on_doc:
+        raise HTTPException(
+            409,
+            f"المبلغ المطلوب تخصيصه ({amount:.2f}) يتجاوز المتبقي غير المخصص في المستند ({available_on_doc:.2f})."
+        )
+
+    fin = await supplier_invoice_financials(db, invoice)
+    max_payable = fin.received_value if invoice.status == "received" else fin.invoice_total
+    committed = fin.paid_approved + fin.paid_pending
+    unpaid_invoice = max(Decimal("0.00"), max_payable - committed)
+    if amount > unpaid_invoice:
+        raise HTTPException(
+            409,
+            f"المبلغ المطلوب تخصيصه ({amount:.2f}) يتجاوز المستحق غير المسدد على الفاتورة ({unpaid_invoice:.2f})."
+        )
+
+    now = utc_now()
+    alloc_num = f"ALC-{now:%Y%m%d}-{uuid.uuid4().hex[:6].upper()}"
+    allocation = PaymentAllocation(
+        id=str(uuid.uuid4()),
+        allocation_number=alloc_num,
+        cash_document_id=doc.id,
+        supplier_id=invoice.supplier_id,
+        supplier_invoice_id=invoice.id,
+        allocated_amount=amount,
+        allocated_at=now,
+        allocated_by=user_id,
+        notes=notes.strip(),
+    )
+    db.add(allocation)
+    await db.flush()
+    return allocation
+
+
+async def allocate_customer_payment(
+    db: AsyncSession,
+    *,
+    customer_id: str,
+    order_id: str,
+    cash_document_id: str,
+    amount: Decimal,
+    user_id: str,
+    notes: str = "",
+) -> PaymentAllocation:
+    """
+    تخصيص وتسوية دفعة تحصيل سابقة ومعتمدة على طلب عميل دون تكرار حركة الخزينة.
+    """
+    from app.modules.finance.balances import customer_order_financials
+    from app.modules.customers.models import CustomerOrder
+    from sqlalchemy.orm import selectinload
+
+    order = await db.scalar(
+        select(CustomerOrder)
+        .options(
+            selectinload(CustomerOrder.lines),
+            selectinload(CustomerOrder.deliveries),
+            selectinload(CustomerOrder.returns),
+            selectinload(CustomerOrder.payments),
+            selectinload(CustomerOrder.allocations),
+        )
+        .where(CustomerOrder.id == order_id)
+        .with_for_update()
+    )
+    if not order or order.customer_id != customer_id or order.status == "cancelled":
+        raise HTTPException(404, "طلب العميل غير موجود أو ملغى.")
+
+    doc = await db.scalar(
+        select(CashDocument).where(CashDocument.id == cash_document_id).with_for_update()
+    )
+    if not doc:
+        raise HTTPException(404, "المستند النقدي غير موجود.")
+    if doc.status != "approved" or doc.document_type != "income":
+        raise HTTPException(409, "لا يمكن التخصيص إلا من مستند قبض نقدي معتمد.")
+    if doc.customer_id != customer_id:
+        raise HTTPException(422, "المستند النقدي لا يتبع نفس العميل.")
+
+    allocated = await db.scalar(
+        select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+        .where(PaymentAllocation.cash_document_id == doc.id)
+    )
+    available_on_doc = Decimal(str(doc.amount)) - Decimal(str(allocated or 0))
+    if amount > available_on_doc:
+        raise HTTPException(
+            409,
+            f"المبلغ المطلوب تخصيصه ({amount:.2f}) يتجاوز المتبقي غير المخصص في المستند ({available_on_doc:.2f})."
+        )
+
+    fin = customer_order_financials(order)
+    available_on_order = fin.remaining_on_order - fin.paid_pending
+    if amount > available_on_order:
+        raise HTTPException(
+            409,
+            f"المبلغ المطلوب تخصيصه ({amount:.2f}) يتجاوز المتبقي على الطلب ({available_on_order:.2f})."
+        )
+
+    now = utc_now()
+    alloc_num = f"ALC-{now:%Y%m%d}-{uuid.uuid4().hex[:6].upper()}"
+    allocation = PaymentAllocation(
+        id=str(uuid.uuid4()),
+        allocation_number=alloc_num,
+        cash_document_id=doc.id,
+        customer_id=customer_id,
+        customer_order_id=order.id,
+        allocated_amount=amount,
+        allocated_at=now,
+        allocated_by=user_id,
+        notes=notes.strip(),
+    )
+    db.add(allocation)
+    await db.flush()
+    return allocation
