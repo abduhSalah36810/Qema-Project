@@ -420,6 +420,16 @@ async def test_production_multi_size_receipt_reconciliation_and_close(ctx):
     assert await stock_balance(session, fabric.id, raw.id) == 386.0
     assert await stock_balance(session, buttons.id, raw.id) == 764.0
 
+    # حسم مطالبة عجز استلام الخامات بواسطة أمين المخزن قبل إغلاق الأمر
+    claims_res = await a["wh"].get(f"/api/v1/production/orders/{order_id}/discrepancy-claims")
+    assert claims_res.status_code == 200
+    for cl in claims_res.json():
+        res_claim = await a["wh"].post(
+            f"/api/v1/production/discrepancy-claims/{cl['id']}/resolve",
+            json={"decision": "accepted_transit_loss", "resolution_notes": "عجز نقل معتمد"},
+        )
+        assert res_claim.status_code == 200, res_claim.text
+
     res = await a["gm"].post(f"/api/v1/production/orders/{order_id}/close", json={
         "discrepancy_signoff": True, "discrepancy_notes": "عجز نقل 2 متر",
         "under_production_reason": "2 قطعة مرفوضة بالفحص",

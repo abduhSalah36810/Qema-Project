@@ -9,7 +9,7 @@
 5. احتساب متوسط التكلفة المرجح (WAC) لتقييم المخزون.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -249,6 +249,48 @@ async def test_profit_and_loss_report_calculation():
     assert pnl["cost_of_goods_sold"]["total_cogs"] == 60000.0
     assert pnl["gross_profit"] == 40000.0
     assert pnl["gross_profit_margin_pct"] == 40.0
+    assert pnl["operating_expenses"]["total_expenses"] == 15000.0
+    assert pnl["net_income"] == 25000.0
+    assert pnl["net_profit_margin_pct"] == 25.0
+
+
+@pytest.mark.asyncio
+async def test_profit_and_loss_report_date_range_filtering():
+    """التحقق من تمرير date_from/date_to لقائمة الدخل وحساب بنود 4200 و5200 والهوامش."""
+    from app.api.v1.endpoints.reports import report_profit_and_loss
+
+    session = AsyncMock()
+    user = AuthenticatedUser(id="mgr-1", email="mgr@factory.com", claims={"sub": "mgr-1"})
+
+    acc_rev = Account(id="a-4100", code="4100", name_ar="مبيعات منتجات تامة", account_type="revenue", is_active=True)
+    acc_other = Account(id="a-4200", code="4200", name_ar="إيرادات أخرى", account_type="revenue", is_active=True)
+    acc_cogs = Account(id="a-5100", code="5100", name_ar="تكلفة مبيعات", account_type="expense", is_active=True)
+    acc_direct = Account(id="a-5200", code="5200", name_ar="أجور ومصروفات تصنيع مباشرة", account_type="expense", is_active=True)
+    acc_admin = Account(id="a-5400", code="5400", name_ar="مصروفات إدارية", account_type="expense", is_active=True)
+
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = [acc_rev, acc_other, acc_cogs, acc_direct, acc_admin]
+    session.scalars.return_value = scalars_mock
+
+    session.scalar.side_effect = [
+        Decimal("0.00"), Decimal("80000.00"),  # 4100
+        Decimal("0.00"), Decimal("20000.00"),  # 4200
+        Decimal("50000.00"), Decimal("0.00"),  # 5100
+        Decimal("10000.00"), Decimal("0.00"),  # 5200
+        Decimal("15000.00"), Decimal("0.00"),  # 5400
+    ]
+
+    pnl = await report_profit_and_loss(
+        None,
+        user,
+        session,
+        date_from=date(2026, 11, 1),
+        date_to=date(2026, 11, 10),
+    )
+    assert pnl["period"] == {"date_from": "2026-11-01", "date_to": "2026-11-10"}
+    assert pnl["revenues"]["total_revenue"] == 100000.0
+    assert pnl["cost_of_goods_sold"]["total_cogs"] == 60000.0
+    assert pnl["gross_profit"] == 40000.0
     assert pnl["operating_expenses"]["total_expenses"] == 15000.0
     assert pnl["net_income"] == 25000.0
     assert pnl["net_profit_margin_pct"] == 25.0

@@ -510,6 +510,7 @@ async def test_catalog_items_read_only_returns_database_rows_without_seeding():
             "approval_status": "draft", "rejection_reason": None,
             "submitted_at": None, "submitted_by": None,
             "approved_at": None, "approved_by": None,
+            "created_at": None,
             "has_pending_revision": False,
         }]
         session.add.assert_not_called()

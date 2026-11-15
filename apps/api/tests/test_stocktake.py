@@ -626,3 +626,157 @@ async def test_stocktake_audit_trail_is_complete_and_traceable(session: AsyncSes
     assert post_log["actor_id"] == "manager_hassan"
 
     app.dependency_overrides.clear()
+
+
+# ── 8. اختبار تعدد حاويات الملكية لنفس الصنف في التام وتحت التشغيل ──────────────
+
+@pytest.mark.asyncio
+async def test_multi_bucket_stocktake_on_finished_goods_and_wip(session: AsyncSession, setup_stocktake_data):
+    """
+    التحقق من دعم تعدد حاويات الملكية (bucket_reference) لنفس الصنف داخل جلسة الجرد الواحدة
+    في مخزن الإنتاج التام (factory_brand vs private_label) ومخزن تحت التشغيل (order vs order).
+    """
+    data = setup_stocktake_data
+    unit = data["unit"]
+    raw_item = data["item1"]
+
+    fg_wh = (await session.execute(
+        select(Warehouse).where(Warehouse.code == "finished_goods")
+    )).scalar_one_or_none()
+    if not fg_wh:
+        fg_wh = Warehouse(id=_uid(), code="finished_goods", name_ar="مخزن الإنتاج التام", warehouse_type="finished_goods", is_active=True)
+        session.add(fg_wh)
+
+    wip_wh = (await session.execute(
+        select(Warehouse).where(Warehouse.code == "work_in_progress")
+    )).scalar_one_or_none()
+    if not wip_wh:
+        wip_wh = Warehouse(id=_uid(), code="work_in_progress", name_ar="مخزن التشغيل (WIP)", warehouse_type="work_in_progress", is_active=True)
+        session.add(wip_wh)
+
+    fg_code = f"THB-TEST-{uuid.uuid4().hex[:6]}"
+    fg_item = CatalogItem(
+        id=_uid(), code=fg_code, name_ar=f"ثوب تام {fg_code}",
+        item_type="finished_product", unit_id=unit.id, is_active=True,
+        approval_status="approved", classification_status="confirmed",
+    )
+    session.add(fg_item)
+    await session.flush()
+
+    cust_bucket = f"private_label:{_uid()}"
+    ord1_bucket = f"order:{_uid()}"
+    ord2_bucket = f"order:{_uid()}"
+
+    session.add_all([
+        StockLedgerEntry(
+            id=_uid(), item_id=fg_item.id, unit_id=unit.id, warehouse_id=fg_wh.id,
+            location_type="warehouse", bucket_reference="factory_brand", quantity=40.0,
+            reference_doc_type="initial_deposit", reference_doc_id="FG-INIT-1",
+            entry_type="initial_stock", created_by="test_setup",
+        ),
+        StockLedgerEntry(
+            id=_uid(), item_id=fg_item.id, unit_id=unit.id, warehouse_id=fg_wh.id,
+            location_type="warehouse", bucket_reference=cust_bucket, quantity=25.0,
+            reference_doc_type="initial_deposit", reference_doc_id="FG-INIT-2",
+            entry_type="initial_stock", created_by="test_setup",
+        ),
+        StockLedgerEntry(
+            id=_uid(), item_id=raw_item.id, unit_id=unit.id, warehouse_id=wip_wh.id,
+            location_type="warehouse", bucket_reference=ord1_bucket, quantity=15.0,
+            reference_doc_type="initial_deposit", reference_doc_id="WIP-INIT-1",
+            entry_type="initial_stock", created_by="test_setup",
+        ),
+        StockLedgerEntry(
+            id=_uid(), item_id=raw_item.id, unit_id=unit.id, warehouse_id=wip_wh.id,
+            location_type="warehouse", bucket_reference=ord2_bucket, quantity=30.0,
+            reference_doc_type="initial_deposit", reference_doc_id="WIP-INIT-2",
+            entry_type="initial_stock", created_by="test_setup",
+        ),
+    ])
+    await session.commit()
+
+    client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+    app.dependency_overrides[get_db] = lambda: session
+    try:
+        # 1) جرد مخزن الإنتاج التام متعدد الحاويات
+        app.dependency_overrides[get_current_user] = lambda: make_auth_user("wh_mgr", ROLE_WAREHOUSE_MANAGER)
+        fg_create = await client.post(
+            "/api/v1/inventory/stocktakes",
+            json={"warehouse_id": fg_wh.id, "scope_type": "specific_items", "item_ids": [fg_item.id]},
+        )
+        assert fg_create.status_code == 201, fg_create.text
+        fg_lines = fg_create.json()["lines"]
+        assert len(fg_lines) == 2
+        by_fg_bucket = {ln["bucket_reference"]: ln for ln in fg_lines}
+        assert by_fg_bucket["factory_brand"]["book_quantity"] == 40.0
+        assert by_fg_bucket[cust_bucket]["book_quantity"] == 25.0
+
+        fg_st_id = fg_create.json()["id"]
+        assert (await client.post(f"/api/v1/inventory/stocktakes/{fg_st_id}/start-counting")).status_code == 200
+        cnt_res = await client.post(
+            f"/api/v1/inventory/stocktakes/{fg_st_id}/counts",
+            json={
+                "counts": [
+                    {"line_id": by_fg_bucket["factory_brand"]["id"], "counted_quantity": 38.0},
+                    {"line_id": by_fg_bucket[cust_bucket]["id"], "counted_quantity": 27.0},
+                ]
+            },
+        )
+        assert cnt_res.status_code == 200
+        assert (await client.post(f"/api/v1/inventory/stocktakes/{fg_st_id}/submit")).status_code == 200
+
+        app.dependency_overrides[get_current_user] = lambda: make_auth_user("gm_mgr", ROLE_GENERAL_MANAGER)
+        assert (await client.post(f"/api/v1/inventory/stocktakes/{fg_st_id}/approve", json={"decision": "approve"})).status_code == 200
+        post_fg = await client.post(f"/api/v1/inventory/stocktakes/{fg_st_id}/post", json={"notes": "ترحيل جرد التام"})
+        assert post_fg.status_code == 200, post_fg.text
+
+        fg_bal_rows = (await session.execute(
+            select(StockLedgerEntry.bucket_reference, func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
+            .where(StockLedgerEntry.warehouse_id == fg_wh.id, StockLedgerEntry.item_id == fg_item.id, StockLedgerEntry.location_type == "warehouse")
+            .group_by(StockLedgerEntry.bucket_reference)
+        )).all()
+        fg_balances = {b: float(q) for b, q in fg_bal_rows}
+        assert fg_balances["factory_brand"] == 38.0
+        assert fg_balances[cust_bucket] == 27.0
+
+        # 2) جرد مخزن تحت التشغيل متعدد أوامر الإنتاج
+        app.dependency_overrides[get_current_user] = lambda: make_auth_user("wh_mgr", ROLE_WAREHOUSE_MANAGER)
+        wip_create = await client.post(
+            "/api/v1/inventory/stocktakes",
+            json={"warehouse_id": wip_wh.id, "scope_type": "specific_items", "item_ids": [raw_item.id]},
+        )
+        assert wip_create.status_code == 201, wip_create.text
+        wip_lines = wip_create.json()["lines"]
+        assert len(wip_lines) == 2
+        by_wip_bucket = {ln["bucket_reference"]: ln for ln in wip_lines}
+        assert by_wip_bucket[ord1_bucket]["book_quantity"] == 15.0
+        assert by_wip_bucket[ord2_bucket]["book_quantity"] == 30.0
+
+        wip_st_id = wip_create.json()["id"]
+        assert (await client.post(f"/api/v1/inventory/stocktakes/{wip_st_id}/start-counting")).status_code == 200
+        assert (await client.post(
+            f"/api/v1/inventory/stocktakes/{wip_st_id}/counts",
+            json={
+                "counts": [
+                    {"line_id": by_wip_bucket[ord1_bucket]["id"], "counted_quantity": 12.0},
+                    {"line_id": by_wip_bucket[ord2_bucket]["id"], "counted_quantity": 30.0},
+                ]
+            },
+        )).status_code == 200
+        assert (await client.post(f"/api/v1/inventory/stocktakes/{wip_st_id}/submit")).status_code == 200
+
+        app.dependency_overrides[get_current_user] = lambda: make_auth_user("gm_mgr", ROLE_GENERAL_MANAGER)
+        assert (await client.post(f"/api/v1/inventory/stocktakes/{wip_st_id}/approve", json={"decision": "approve"})).status_code == 200
+        post_wip = await client.post(f"/api/v1/inventory/stocktakes/{wip_st_id}/post", json={"notes": "ترحيل جرد WIP"})
+        assert post_wip.status_code == 200, post_wip.text
+
+        wip_bal_rows = (await session.execute(
+            select(StockLedgerEntry.bucket_reference, func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0))
+            .where(StockLedgerEntry.warehouse_id == wip_wh.id, StockLedgerEntry.item_id == raw_item.id, StockLedgerEntry.location_type == "warehouse")
+            .group_by(StockLedgerEntry.bucket_reference)
+        )).all()
+        wip_balances = {b: float(q) for b, q in wip_bal_rows}
+        assert wip_balances[ord1_bucket] == 12.0
+        assert wip_balances[ord2_bucket] == 30.0
+    finally:
+        app.dependency_overrides.clear()

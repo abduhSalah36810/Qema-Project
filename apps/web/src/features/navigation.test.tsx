@@ -110,6 +110,8 @@ const SERVER_ROLE_PERMISSIONS: Record<string, string[]> = {
     'finance:payroll:manage', 'finance:payroll:view', 'finance:reports:view', 'pricing:manage',
     'reports:view', 'suppliers:manage', 'suppliers:payments:request',
     'suppliers:payments:request_full_balance', 'suppliers:view',
+    'catalog:item:approve', 'catalog:item:reject', 'catalog:item:manage_revisions',
+    'inventory:stocktake:view', 'inventory:stocktake:review', 'inventory:stocktake:approve', 'inventory:stocktake:post',
   ],
 };
 
@@ -176,7 +178,6 @@ describe('Navigation gated by server permissions (GET /api/v1/auth/me)', () => {
       'فواتير الشراء والاستلام',
       'مخزن الخامات',
       'مخزن المنتج التام',
-      'أرصدة المخازن',
       'الجرد',
       'أوامر التشغيل',
       'العملاء وطلبات البيع',
@@ -242,10 +243,11 @@ describe('Navigation gated by server permissions (GET /api/v1/auth/me)', () => {
       ['سندات القبض والصرف', 'سندات القبض والصرف'],
       ['العهد والمصروفات', 'العهد المالية المؤقتة'],
       ['العملاء وطلبات البيع', 'العملاء وطلبات البيع'],
+      ['الأصناف المباعة', 'الأصناف المباعة'],
       ['فواتير الشراء والاستلام', 'فواتير الشراء واستلام الخامات'],
+      ['الأصناف المشتراة', 'الأصناف المشتراة'],
       ['الرواتب', 'الرواتب والأجور المالية'],
       ['التقارير', 'التقارير المالية ومؤشرات السيولة'],
-      ['أرصدة المخازن', 'تقرير حركة وأرصدة المخزون'],
       ['الموردون والعملاء والموديلات', 'البيانات الأساسية'],
     ];
 
@@ -255,25 +257,51 @@ describe('Navigation gated by server permissions (GET /api/v1/auth/me)', () => {
     }
   });
 
-  it('warehouse manager sees inventory report but not financial reports, payroll or treasury', async () => {
+  it('warehouse manager sees warehouses but no finance reports, payroll or treasury', async () => {
     await renderSignedIn('warehouse_manager');
 
-    expect(screen.getByRole('button', { name: 'أرصدة المخازن' })).toBeInTheDocument();
+    // «أرصدة المخازن» أزيلت: كانت تفتح تقارير التقييم المالية؛ الأرصدة في صفحتي مخزن الخامات والمنتج التام
+    expect(screen.queryByRole('button', { name: 'أرصدة المخازن' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'مخزن الخامات' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'التقارير' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'الرواتب' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'الخزينة والاعتمادات' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /أمر تشغيل جديد/ })).not.toBeInTheDocument();
   });
 
-  it('finance manager can reach payroll and treasury but not warehouse screens', async () => {
+  it('finance manager can reach grouped Purchases, Sales, Treasury, Payroll and Reports but not warehouse screens', async () => {
     await renderSignedIn('finance_manager');
 
+    expect(screen.getByRole('button', { name: /^المشتريات/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^المبيعات/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^الخزينة والنقدية/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'فواتير الشراء والموردين' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'العملاء والطلبات والتحصيل' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'الخزينة والاعتمادات' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'التقارير' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'قائمة الدخل' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'الميزانية العمومية' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'كشوف الحسابات' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'تقارير الإدارة' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'مخزن الخامات' })).not.toBeInTheDocument();
+    // معتمد الأصناف والجرد (قرار المالك 2026-11-11)
+    expect(screen.getByRole('button', { name: /اعتماد الأصناف والجرد/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'الرواتب' }));
     await waitFor(() => expect(headerTitle()).toBe('الرواتب والأجور المالية'));
     expect(await screen.findByRole('heading', { level: 2, name: 'العمال والمرتبات' })).toBeInTheDocument();
+
+    const reportSteps: Array<[string, string]> = [
+      ['قائمة الدخل', 'قائمة الدخل'],
+      ['الميزانية العمومية', 'الميزانية العمومية'],
+      ['كشوف الحسابات', 'كشوف الحسابات'],
+      ['تقارير الإدارة', 'تقارير الإدارة'],
+    ];
+
+    for (const [btn, expectedTitle] of reportSteps) {
+      fireEvent.click(screen.getByRole('button', { name: btn }));
+      await waitFor(() => expect(headerTitle()).toBe(expectedTitle));
+    }
   });
 
   it('production manager sees production screens but no payroll or treasury', async () => {

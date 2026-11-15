@@ -106,8 +106,8 @@ def _allowed_roles(reqs) -> set[str]:
 
 
 EXPECTED_MATRIX = {
-    # المشتريات
-    ("POST", f"{API}/finance/supplier-invoices"): {GM, WH},
+    # المشتريات: إنشاء الفاتورة للمدير العام وأمين المخزن والمدير المالي (PUR-DEC-01)؛ الاستلام المخزني لأمين المخزن والمدير العام فقط
+    ("POST", f"{API}/finance/supplier-invoices"): {GM, WH, FM},
     ("POST", f"{API}/finance/supplier-invoices/{{invoice_id}}/receive"): {GM, WH},
     # طلب سداد بمبلغ يحدده المستخدم: المالية والمدير العام؛ أمين المخزن يطلب "كامل المستحق" دون رؤية المبلغ
     ("POST", f"{API}/finance/supplier-invoices/{{invoice_id}}/payments"): {GM, FM},
@@ -201,25 +201,30 @@ def test_full_role_matrix_snapshot():
         "inventory:view", "inventory:stocktake:view", "inventory:stocktake:create", "inventory:stocktake:count",
         "inventory:stocktake:submit", "inventory:stocktake:cancel",
         "catalog:view", "catalog:categories:manage", "catalog:item:create", "catalog:item:update",
-        "catalog:item:submit", "catalog:item:request_revision",
+        "catalog:item:submit", "catalog:item:request_revision", "catalog:units:manage",
         "warehouse:dispatch", "warehouse:finished_goods:receive", "warehouse:returns:receive",
+        "warehouse:claims:resolve",
         "production:orders:view", "customers:deliveries:manage",
         "suppliers:view", "suppliers:manage", "suppliers:invoices:create",
         "suppliers:payments:request_full_balance", "suppliers:receive",
+        "purchase_orders:view",
     }
     assert ROLE_PERMISSIONS_MAP[PM] == {
         "production:orders:view", "production:orders:create", "production:orders:manage",
         "production:wip:receive", "production:stages:manage", "production:templates:manage",
         "production:returns:resolve", "production:orders:close", "inventory:view", "catalog:view", "reports:view",
+        "purchase_orders:view", "purchase_orders:create",
     }
     assert ROLE_PERMISSIONS_MAP[FM] == {
         "finance:cash:view", "finance:cash:create", "finance:cash:manage", "finance:cash:approve",
         "finance:expenses:manage", "finance:payments:manage", "finance:payroll:view",
         "finance:payroll:calculate", "finance:payroll:disburse", "finance:payroll:manage",
         "finance:reports:view", "reports:view",
-        "suppliers:view", "suppliers:manage", "suppliers:payments:request", "suppliers:payments:request_full_balance",
+        "suppliers:view", "suppliers:manage", "suppliers:invoices:create", "suppliers:payments:request", "suppliers:payments:request_full_balance",
+        "purchase_orders:view", "purchase_orders:create", "purchase_orders:manage", "purchase_orders:approve",
         "customers:view", "customers:manage", "customers:orders:create", "pricing:manage",
-        "catalog:view",
+        "catalog:view", "catalog:item:approve", "catalog:item:reject", "catalog:item:manage_revisions",
+        "inventory:stocktake:view", "inventory:stocktake:review", "inventory:stocktake:approve", "inventory:stocktake:post",
     }
     # لا صلاحية لإدارة المستخدمين قبل وجود شاشة وAPI مكتملين لها
     assert not any(p.startswith("admin:") for perms in ROLE_PERMISSIONS_MAP.values() for p in perms)
@@ -535,9 +540,17 @@ async def test_supplier_invoice_roles_and_general_manager_cannot_self_approve(ct
         "invoice_date": datetime.now(timezone.utc).isoformat(),
         "lines": [{"item_id": fabric.id, "unit_id": meter.id, "invoiced_quantity": 10, "unit_price": "50"}],
     }
-    for role in (FM, PM):
-        res = await a[role].post(f"{API}/finance/supplier-invoices", json=invoice_body)
-        assert res.status_code == 403, (role, res.text)
+    # مدير الإنتاج محظور من إنشاء فاتورة المورد
+    res = await a[PM].post(f"{API}/finance/supplier-invoices", json=invoice_body)
+    assert res.status_code == 403, (PM, res.text)
+    # المدير المالي مصرّح له بإنشاء الفاتورة (PUR-DEC-01) لكن محظور من الاستلام الفعلي
+    res = await a[FM].post(f"{API}/finance/supplier-invoices", json={**invoice_body, "invoice_number": f"INV-FM-{_tag()}"})
+    assert res.status_code == 201, res.text
+    fm_inv = res.json()
+    res = await a[FM].post(f"{API}/finance/supplier-invoices/{fm_inv['id']}/receive", json={
+        "lines": [{"line_id": fm_inv["lines"][0]["id"], "received_quantity": 10}],
+    })
+    assert res.status_code == 403
     res = await a[WH].post(f"{API}/finance/supplier-invoices", json=invoice_body)
     assert res.status_code == 201, res.text
     res = await a[GM].post(f"{API}/finance/supplier-invoices", json={**invoice_body, "invoice_number": f"INV-{_tag()}"})

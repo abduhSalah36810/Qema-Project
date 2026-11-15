@@ -567,12 +567,12 @@ describe('Supabase Auth Integration & Token Handling', () => {
 
   describe('Local Development Authentication Flow', () => {
     beforeEach(() => {
-      localStorage.clear();
+      window.localStorage.clear();
       apiClient.setAccessToken(null);
     });
 
     afterEach(() => {
-      localStorage.clear();
+      window.localStorage.clear();
       vi.restoreAllMocks();
     });
 
@@ -613,13 +613,13 @@ describe('Supabase Auth Integration & Token Handling', () => {
         expect(screen.getByTestId('user-email').textContent).toBe('dev@qemma.local');
       });
 
-      expect(localStorage.getItem('qemma_local_dev_token')).toBe('local-test-jwt-token-12345');
+      expect(window.localStorage.getItem('qemma_local_dev_token')).toBe('local-test-jwt-token-12345');
       expect(apiClient.getAccessToken()).toBe('local-test-jwt-token-12345');
       expect(localLoginSpy).toHaveBeenCalledTimes(1);
     });
 
     it('restores local dev session from localStorage on mount', async () => {
-      localStorage.setItem('qemma_local_dev_token', 'saved-local-token-999');
+      window.localStorage.setItem('qemma_local_dev_token', 'saved-local-token-999');
 
       vi.spyOn(apiClient, 'getAuthMe').mockResolvedValue({
         id: 'dev-user-00000000-0000-0000-0000-000000000001',
@@ -642,7 +642,7 @@ describe('Supabase Auth Integration & Token Handling', () => {
     });
 
     it('clears local dev session on signOut', async () => {
-      localStorage.setItem('qemma_local_dev_token', 'token-to-be-cleared');
+      window.localStorage.setItem('qemma_local_dev_token', 'token-to-be-cleared');
 
       vi.spyOn(apiClient, 'getAuthMe').mockResolvedValue({
         id: 'dev-user-00000000-0000-0000-0000-000000000001',
@@ -668,7 +668,7 @@ describe('Supabase Auth Integration & Token Handling', () => {
         expect(screen.getByTestId('user-id').textContent).toBe('none');
       });
 
-      expect(localStorage.getItem('qemma_local_dev_token')).toBeNull();
+      expect(window.localStorage.getItem('qemma_local_dev_token')).toBeNull();
       expect(apiClient.getAccessToken()).toBeNull();
     });
 

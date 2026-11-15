@@ -541,3 +541,164 @@ async def test_real_db_revenue_and_expense_query_accuracy(auth_general_manager, 
         if created_doc_ids:
             await session.execute(delete(CashDocument).where(CashDocument.id.in_(created_doc_ids)))
             await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_report_account_ledger_uses_source_doc_fields():
+    """كشف حساب دفتر الأستاذ يقرأ source_doc_type و source_doc_id ويحسب الرصيد التراكمي."""
+    from datetime import date
+    from types import SimpleNamespace
+    from app.api.v1.endpoints.reports import report_account_ledger
+
+    account = SimpleNamespace(
+        id=_uid(),
+        code="1010",
+        name_ar="الخزينة الرئيسية",
+        account_type="asset",
+    )
+    je = SimpleNamespace(
+        entry_number="JE-0001",
+        entry_date=date(2026, 11, 10),
+        source_doc_type="cash_document",
+        source_doc_id="cd-1",
+        description="قيد تحصيل نقدي",
+    )
+    line1 = SimpleNamespace(id="jl-1", description="تحصيل عميل", debit=Decimal("1500.00"), credit=Decimal("0.00"))
+    line2 = SimpleNamespace(id="jl-2", description="صرف مصروف", debit=Decimal("0.00"), credit=Decimal("300.00"))
+
+    exec_res = MagicMock()
+    exec_res.all = MagicMock(return_value=[(line1, je), (line2, je)])
+
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=account)
+    db.execute = AsyncMock(return_value=exec_res)
+
+    user = MagicMock()
+    result = await report_account_ledger(account_code=" 1010 ", current_user=user, db=db)
+
+    assert result["account"]["code"] == "1010"
+    assert result["account"]["nature"] == "debit"
+    assert result["summary"]["total_debit"] == 1500.0
+    assert result["summary"]["total_credit"] == 300.0
+    assert result["summary"]["net_balance"] == 1200.0
+    assert result["summary"]["lines_count"] == 2
+    assert result["lines"][0]["reference_type"] == "cash_document"
+    assert result["lines"][0]["reference_id"] == "cd-1"
+    assert result["lines"][0]["running_balance"] == 1500.0
+    assert result["lines"][1]["running_balance"] == 1200.0
+
+
+@pytest.mark.asyncio
+async def test_cash_account_statement_chronological_with_opening_balance():
+    """كشف حساب الخزينة/العهدة يحسب الرصيد الافتتاحي والحركات الزمنية والرصيد الختامي."""
+    from datetime import date, datetime, timezone
+    from types import SimpleNamespace
+    from app.api.v1.endpoints.reports import report_cash_account_statement
+
+    acc = SimpleNamespace(
+        id="acc-1",
+        account_number="CA-001",
+        name="الخزينة الرئيسية",
+        account_type="treasury",
+        is_active=True,
+    )
+    row1 = (
+        SimpleNamespace(amount=Decimal("5000.00"), created_at=datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc)),
+        SimpleNamespace(document_type="income", document_number="CSH-1", description="رصيد سابق", occurred_at=datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc)),
+    )
+    row2 = (
+        SimpleNamespace(amount=Decimal("-1200.00"), created_at=datetime(2026, 11, 5, 11, 0, tzinfo=timezone.utc)),
+        SimpleNamespace(document_type="expense", document_number="CSH-2", description="مصروف تشغيل", occurred_at=datetime(2026, 11, 5, 11, 0, tzinfo=timezone.utc)),
+    )
+
+    exec_res = MagicMock()
+    exec_res.all = MagicMock(return_value=[row1, row2])
+    db = AsyncMock()
+    db.get = AsyncMock(return_value=acc)
+    db.execute = AsyncMock(return_value=exec_res)
+
+    result = await report_cash_account_statement(
+        account_id="acc-1",
+        date_from=date(2026, 11, 1),
+        date_to=date(2026, 11, 30),
+        current_user=MagicMock(),
+        db=db,
+    )
+
+    st = result["statement"]
+    assert st["opening_balance"] == 5000.0
+    assert st["total_debit"] == 0.0
+    assert st["total_credit"] == 1200.0
+    assert st["closing_balance"] == 3800.0
+    assert len(st["transactions"]) == 1
+    assert st["transactions"][0]["reference"] == "CSH-2"
+    assert st["transactions"][0]["running_balance"] == 3800.0
+
+
+@pytest.mark.asyncio
+async def test_employee_statement_requires_payroll_permission():
+    """كشف حساب الموظف يرفض الوصول لمن لا يملك صلاحية الرواتب."""
+    from fastapi import HTTPException
+    from unittest.mock import patch as _patch
+    from app.api.v1.endpoints.reports import report_employee_statement
+
+    db = AsyncMock()
+    with _patch("app.api.v1.endpoints.reports.get_user_roles", AsyncMock(return_value={"warehouse_manager"})), \
+         _patch("app.api.v1.endpoints.reports.get_permissions_for_roles", AsyncMock(return_value={"finance:reports:view"})):
+        with pytest.raises(HTTPException) as exc:
+            await report_employee_statement(employee_id="emp-1", current_user=MagicMock(), db=db)
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_profit_and_loss_drilldown_returns_underlying_journal_lines():
+    """تفاصيل بند قائمة الدخل تُرجع القيود والمستندات المصدرية وصافي الأثر للحساب."""
+    from datetime import date, datetime, timezone
+    from types import SimpleNamespace
+    from app.api.v1.endpoints.reports import report_profit_and_loss_drilldown
+
+    acc = SimpleNamespace(
+        id="acc-5200",
+        code="5200",
+        name_ar="أجور ومصروفات تصنيع مباشرة",
+        account_type="expense",
+    )
+    je = SimpleNamespace(
+        entry_number="JE-520",
+        entry_date=datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc),
+        source_doc_type="payroll_disbursement",
+        source_doc_id="pay-1",
+        description="صرف رواتب نوفمبر",
+    )
+    ln = SimpleNamespace(
+        id="jl-520",
+        description="رواتب عمال التشغيل",
+        debit=Decimal("18000.00"),
+        credit=Decimal("0.00"),
+    )
+
+    exec_res = MagicMock()
+    exec_res.all = MagicMock(return_value=[(ln, je)])
+    db = AsyncMock()
+    db.scalar = AsyncMock(return_value=acc)
+    db.execute = AsyncMock(return_value=exec_res)
+
+    res = await report_profit_and_loss_drilldown(
+        account_code="5200",
+        since_days=None,
+        date_from=date(2026, 11, 1),
+        date_to=date(2026, 11, 30),
+        current_user=MagicMock(),
+        db=db,
+    )
+
+    assert res["account"]["code"] == "5200"
+    assert res["summary"]["total_debit"] == 18000.0
+    assert res["summary"]["net_amount"] == 18000.0
+    assert res["summary"]["lines_count"] == 1
+    assert res["lines"][0]["entry_number"] == "JE-520"
+    assert res["lines"][0]["source_doc_type"] == "payroll_disbursement"
+    assert res["lines"][0]["net_effect"] == 18000.0
+
+
+

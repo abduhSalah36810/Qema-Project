@@ -38,8 +38,13 @@ def _suffix() -> str:
 
 
 @pytest.mark.asyncio
-async def test_only_general_manager_manages_units(client_factory):
-    for role in ("warehouse_manager", "production_manager", "finance_manager"):
+async def test_warehouse_manager_manages_units_others_cannot(client_factory):
+    # أمين المخازن مسؤول الوحدات (والمدير العام يملك كل الصلاحيات)؛ الإنتاج والمالية لا
+    async with client_factory("warehouse_manager") as client:
+        res = await client.post("/api/v1/catalog/units", json={"code": f"wh{_suffix()}", "name_ar": f"وحدة أمين {_suffix()}"})
+        assert res.status_code == 201, res.text
+        assert (await client.delete(f"/api/v1/catalog/units/{res.json()['id']}")).status_code == 204
+    for role in ("production_manager", "finance_manager"):
         async with client_factory(role) as client:
             assert (await client.get("/api/v1/catalog/units/usage")).status_code in (200, 403)
             res = await client.post("/api/v1/catalog/units", json={"code": f"u{_suffix()}", "name_ar": f"وحدة {_suffix()}"})

@@ -391,12 +391,18 @@ async def test_local_login_finance_manager_produces_only_finance_role_and_permis
     assert "finance:expenses:manage" in fin_perms
     assert "finance:payroll:manage" in fin_perms
     assert "finance:reports:view" in fin_perms
-    # محظورات المدير المالي
+    # محظورات المدير المالي (الفصل الصارم: لا استلام فعلي)
     assert "warehouse:finished_goods:receive" not in fin_perms
     assert "production:wip:receive" not in fin_perms
-    assert "suppliers:invoices:create" not in fin_perms
+    assert "warehouse:materials:receive" not in fin_perms
+    # قرار PUR-DEC-01 (2026-11-12): المدير المالي يملك إنشاء فاتورة الشراء دون الاستلام
+    assert "suppliers:invoices:create" in fin_perms
     assert "catalog:item:create" not in fin_perms
-    assert "inventory:stocktake:post" not in fin_perms
+    assert "inventory:stocktake:count" not in fin_perms
+    assert "inventory:stocktake:create" not in fin_perms
+    # قرار المالك 2026-11-11: المدير المالي يعتمد الجرد ويرحّله ويعتمد الأصناف
+    assert "inventory:stocktake:post" in fin_perms
+    assert "catalog:item:approve" in fin_perms
     assert "production:templates:manage" not in fin_perms
 
 

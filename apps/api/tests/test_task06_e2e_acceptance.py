@@ -193,10 +193,10 @@ async def test_02_supplier_and_receiving_lifecycle(session: AsyncSession):
     session.add_all([supplier, active_item, draft_item])
     await session.commit()
 
-    # 0. المدير المالي لا ينشئ فواتير الموردين (قرار مالك المشروع 2026-11-09)
+    # 0. المدير المالي يملك إنشاء فاتورة المورد (قرار PUR-DEC-01 معتمد 2026-11-12) لكن يُحظر تماماً من الاستلام المخزني
     app.dependency_overrides[get_current_user] = lambda: make_auth("fin_user", ROLE_FINANCE_MANAGER)
-    res_fin_denied = await client.post("/api/v1/finance/supplier-invoices", json={"supplier_id": supplier.id})
-    assert res_fin_denied.status_code == 403
+    res_fin_receive_denied = await client.post(f"/api/v1/finance/supplier-invoices/{uuid.uuid4()}/receive", json={"lines": []})
+    assert res_fin_receive_denied.status_code == 403
 
     # 1. رفض إنشاء فاتورة توريد لصنف مسودة أو غير نشط (422) — أمين المخزن ينشئ الفاتورة
     app.dependency_overrides[get_current_user] = lambda: make_auth("wh_user", ROLE_WAREHOUSE_MANAGER)

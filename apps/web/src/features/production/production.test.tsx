@@ -360,4 +360,118 @@ describe('Production Orders Feature — Frontend Tests', () => {
     ]);
     expect(typeof reconcileSpy.mock.calls[0][2]).toBe('string');
   });
+
+  // ─── Phase 4.5 / T1: إصلاح عداد المراحل وحماية أدوات الإنتاج وتمييز نمط التصنيع ───
+
+  const t1BaseMocks = (orders: ProductionOrder[]) => {
+    vi.spyOn(productionApi, 'fetchOrders').mockResolvedValue(orders);
+    vi.spyOn(productionApi, 'fetchProducts').mockResolvedValue(PROVISIONAL_FALLBACK_PRODUCTS);
+    vi.spyOn(productionApi, 'fetchTemplates').mockResolvedValue([]);
+    vi.spyOn(productionApi, 'fetchCatalogItems').mockResolvedValue([]);
+  };
+
+  it('T1.1 counts skipped stages as done but excludes them from the required denominator', async () => {
+    const skippedOrder: ProductionOrder = {
+      ...PROVISIONAL_FALLBACK_ORDERS[0],
+      id: 'ord-skip',
+      status: 'in_production',
+      stage_events: [
+        { id: 's1', stage_name: 'cutting', status: 'completed', actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: '' },
+        { id: 's2', stage_name: 'finishing', status: 'skipped', is_skipped: true, actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: 'لا تتطلب التخطيط' },
+        { id: 's3', stage_name: 'snap_installation', status: 'completed', actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: '' },
+        { id: 's4', stage_name: 'ironing', status: 'not_started', actor_id: 'sys', actor_name: 'النظام', timestamp: new Date().toISOString(), notes: '' },
+        { id: 's5', stage_name: 'packing', status: 'not_started', actor_id: 'sys', actor_name: 'النظام', timestamp: new Date().toISOString(), notes: '' },
+      ],
+    } as ProductionOrder;
+    t1BaseMocks([skippedOrder]);
+    render(<ProductionOrdersView />);
+    await waitFor(() => expect(screen.getByText(/ord-skip|PO-2026-0001/i)).toBeInTheDocument());
+    // المنفذ فعلياً 3 (مكتملتان + متخطاة) من 4 مطلوبة — لا «من 5»
+    expect(screen.getByText(/أُنجزت 3 من 4 مراحل/)).toBeInTheDocument();
+    // التخطي يظل مرئياً ولا يُعامل كمرحلة مكتملة عادية
+    expect(screen.getByText(/تم تخطي 1/)).toBeInTheDocument();
+    expect(screen.queryByText(/من 5 مراحل/)).not.toBeInTheDocument();
+  });
+
+  it('T1.2 shows completion without a misleading 5/5 when a required stage was skipped', async () => {
+    const doneWithSkip: ProductionOrder = {
+      ...PROVISIONAL_FALLBACK_ORDERS[0],
+      id: 'ord-done-skip',
+      status: 'manufacturing_completed',
+      stage_events: [
+        { id: 's1', stage_name: 'cutting', status: 'completed', actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: '' },
+        { id: 's2', stage_name: 'finishing', status: 'skipped', is_skipped: true, actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: '' },
+        { id: 's3', stage_name: 'snap_installation', status: 'completed', actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: '' },
+        { id: 's4', stage_name: 'ironing', status: 'completed', actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: '' },
+        { id: 's5', stage_name: 'packing', status: 'completed', actor_id: 'u', actor_name: 'م', timestamp: new Date().toISOString(), notes: '' },
+      ],
+    } as ProductionOrder;
+    t1BaseMocks([doneWithSkip]);
+    render(<ProductionOrdersView />);
+    await waitFor(() => expect(screen.getByText('اكتملت جميع المراحل المطلوبة')).toBeInTheDocument());
+  });
+
+  it('T1.3 shows production-management tools only to holders of production:orders:manage', async () => {
+    t1BaseMocks(PROVISIONAL_FALLBACK_ORDERS);
+    grantedPermissions.clear();
+    // صلاحيات أمين المخزن: عرض الأوامر + الصرف والاستلام، بلا production:orders:manage
+    ['production:orders:view', 'warehouse:dispatch', 'warehouse:finished_goods:receive', 'warehouse:claims:resolve'].forEach((p) => grantedPermissions.add(p));
+    render(<ProductionOrdersView />);
+    await waitFor(() => expect(screen.getByText(/PO-2026-0001/i)).toBeInTheDocument());
+    expect(screen.queryByText(/خامات العملاء والأمانات/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/تقويم واختناقات التشغيل/)).not.toBeInTheDocument();
+  });
+
+  it('T1.4 shows the tools again for the production manager role permissions', async () => {
+    t1BaseMocks(PROVISIONAL_FALLBACK_ORDERS);
+    grantedPermissions.clear();
+    ['production:orders:view', 'production:orders:manage', 'production:stages:manage'].forEach((p) => grantedPermissions.add(p));
+    render(<ProductionOrdersView />);
+    await waitFor(() => expect(screen.getByText(/PO-2026-0001/i)).toBeInTheDocument());
+    expect(screen.getByText(/خامات العملاء والأمانات/)).toBeInTheDocument();
+    expect(screen.getByText(/تقويم واختناقات التشغيل/)).toBeInTheDocument();
+  });
+
+  it('T1.5 shows the manufacturing-type banner with the customer name at the top of order details (CMT)', () => {
+    const cmtOrder: ProductionOrder = {
+      ...PROVISIONAL_FALLBACK_ORDERS[0],
+      manufacturing_type: 'external',
+      customer_name: 'عميل الأمانة التجريبي',
+    };
+    render(<OrderDetailModal order={cmtOrder} isOpen={true} onClose={vi.fn()} onOrderUpdated={vi.fn()} />);
+    const banner = screen.getByLabelText('نمط التصنيع');
+    expect(banner).toHaveTextContent('تشغيل للغير (CMT)');
+    expect(banner).toHaveTextContent('عميل الأمانة التجريبي');
+    expect(banner).toHaveTextContent('سقف الهالك 1.5%');
+  });
+
+  it('T1.6 shows the internal-manufacturing banner for factory-owned orders', () => {
+    const internalOrder: ProductionOrder = {
+      ...PROVISIONAL_FALLBACK_ORDERS[0],
+      manufacturing_type: 'internal',
+    };
+    render(<OrderDetailModal order={internalOrder} isOpen={true} onClose={vi.fn()} onOrderUpdated={vi.fn()} />);
+    const banner = screen.getByLabelText('نمط التصنيع');
+    expect(banner).toHaveTextContent('تصنيع داخلي');
+    expect(banner).toHaveTextContent('ملك المصنع');
+    expect(banner).not.toHaveTextContent('CMT');
+  });
+
+  it('T1.7 places the manufacturing-type section first and reveals the customer requirement for CMT', () => {
+    render(<NewOrderModal isOpen={true} onClose={vi.fn()} onOrderCreated={vi.fn()} products={PROVISIONAL_FALLBACK_PRODUCTS} />);
+
+    const mfgHeading = screen.getByRole('heading', { name: '١. نمط التصنيع والعمالة والتكاليف' });
+    const linesHeading = screen.getByRole('heading', { name: '٢. الموديلات والكميات' });
+    const reqHeading = screen.getByRole('heading', { name: '٣. الاحتياجات من مخزن الخامات' });
+    expect(mfgHeading.compareDocumentPosition(linesHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(linesHeading.compareDocumentPosition(reqHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // الوضع الافتراضي داخلي: تلميح خامات المصنع
+    expect(screen.getByText(/الخامات تُصرف من مخزن خامات المصنع/)).toBeInTheDocument();
+
+    // عند اختيار التشغيل للغير: يظهر اختيار العميل وتلميح الأمانة والهالك 1.5%
+    fireEvent.change(screen.getByLabelText('نمط التصنيع *'), { target: { value: 'external' } });
+    expect(screen.getByLabelText('العميل صاحب الأمر والخامات *')).toBeInTheDocument();
+    expect(screen.getByText(/رصيد أمانته في مخزن الخامات \(سقف الهالك المسموح 1.5%\)/)).toBeInTheDocument();
+  });
 });
