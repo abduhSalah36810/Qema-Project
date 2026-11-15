@@ -13,13 +13,15 @@ from app.core.idempotency import execute_idempotent_operation
 from app.core.permissions import get_user_roles, require_permission
 from app.db.session import get_db
 from app.modules.finance.models import (
-    Account, CashAccount, CashDocument, CashLedgerEntry, CustodySettlement, JournalEntry, JournalEntryLine,
+    Account, AccountingLock, CashAccount, CashDocument, CashLedgerEntry, CustodySettlement, JournalEntry, JournalEntryLine,
     PaymentAllocation, PurchaseOrder, PurchaseOrderLine, Supplier, SupplierInvoice, SupplierInvoiceLine, SupplierPayment, SupplierReceipt,
 )
 from app.modules.finance.schemas import (
+    AccountingLockRead, AccountingLockStatusRead,
     CashAccountRead, CashDocumentCreate, CashDocumentDecision, CashDocumentRead,
     CustodySettlementCreate, CustodySettlementRead,
-    OpeningBalancesCreate, OpeningBalancesRead,
+    OpeningBalancesCreate, OpeningBalancesLockCreate, OpeningBalancesRead,
+    OpeningBalancesUnlockApproveCreate, OpeningBalancesUnlockRequestCreate,
     OpeningSupplierInvoiceCreate,
     PaymentAllocationCreate, PaymentAllocationRead, UnallocatedPaymentRead,
     PurchasedItemHistoryRow, PurchasedItemsResponse, PurchasedItemsSummary,
@@ -39,7 +41,7 @@ from app.modules.finance.purchase_orders import (
     update_draft_purchase_order, approve_purchase_order, cancel_purchase_order,
     receive_purchase_order_goods,
 )
-from app.modules.finance.ledger_service import post_journal_entry, CANONICAL_TREASURY_ID, is_opening_balances_locked
+from app.modules.finance.ledger_service import post_journal_entry, CANONICAL_TREASURY_ID, is_opening_balances_locked, set_accounting_lock
 from app.modules.finance.balances import supplier_invoice_financials, supplier_line_net_unit_cost, supplier_line_total
 
 _CANONICAL_TREASURY_ID = CANONICAL_TREASURY_ID
@@ -1375,13 +1377,10 @@ async def create_opening_balances(
             ),
         )
 
-    existing = await db.scalar(
-        select(JournalEntry.id).where(JournalEntry.source_doc_type == "opening_balance")
-    )
-    if existing:
+    if await is_opening_balances_locked(db):
         raise HTTPException(
-            409,
-            "تم تسجيل القيد الافتتاحي مسبقاً في النظام. لتعديل أرصدة البداية، راجع الإدارة المالية لإجراء تسوية رسمية معتمدة.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="تم قفل الأرصدة الافتتاحية ولا يمكن ترحيل قيد افتتاحي جديد. راجع الإدارة لطلب إعادة فتح القفل.",
         )
 
     lines: list[dict[str, Any]] = []
@@ -1420,6 +1419,15 @@ async def create_opening_balances(
         user_id=current_user.id,
         entry_date=entry_date,
     )
+    # قفل الأرصدة الافتتاحية تلقائياً عند ترحيل القيد الافتتاحي العام
+    await set_accounting_lock(
+        db,
+        lock_type="opening_balances",
+        is_locked=True,
+        action="locked",
+        performed_by=current_user.id,
+        reason="قفل تلقائي عند ترحيل القيد الافتتاحي العام",
+    )
     await db.commit()
     await db.refresh(entry)
 
@@ -1440,6 +1448,165 @@ async def create_opening_balances(
         details=details,
         message="تم ترحيل القيد الافتتاحي وتفعيل الميزانية العمومية بنجاح.",
     )
+
+
+@router.get("/opening-balances/lock-status", response_model=AccountingLockStatusRead)
+async def get_opening_balances_lock_status(
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعلام عن حالة قفل الأرصدة الافتتاحية وسجل التدقيق التاريخي الكامل للأقفال والفتحات."""
+    history_records = (
+        await db.scalars(
+            select(AccountingLock)
+            .where(AccountingLock.lock_type == "opening_balances")
+            .order_by(AccountingLock.performed_at.desc(), AccountingLock.id.desc())
+        )
+    ).all()
+
+    latest = history_records[0] if history_records else None
+    is_locked = latest.is_locked if latest else False
+
+    return AccountingLockStatusRead(
+        is_locked=is_locked,
+        lock_type="opening_balances",
+        current_action=latest.action if latest else None,
+        latest_reason=latest.reason if latest else None,
+        latest_performed_by=latest.performed_by if latest else None,
+        latest_performed_at=latest.performed_at if latest else None,
+        history=[
+            AccountingLockRead(
+                id=h.id,
+                lock_type=h.lock_type,
+                is_locked=h.is_locked,
+                action=h.action,
+                reason=h.reason,
+                performed_by=h.performed_by,
+                performed_at=h.performed_at,
+                requested_by=h.requested_by,
+                unlock_request_id=h.unlock_request_id,
+            )
+            for h in history_records
+        ],
+    )
+
+
+@router.post("/opening-balances/lock", status_code=status.HTTP_200_OK)
+async def lock_opening_balances(
+    payload: OpeningBalancesLockCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """قفل يدوي صريح للأرصدة الافتتاحية (محصور بالمدير العام general_manager)."""
+    user_roles = await get_user_roles(current_user, db=db)
+    if "general_manager" not in user_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="صلاحية قفل الدورة الافتتاحية محصورة بالمدير العام فقط (general_manager).",
+        )
+
+    await set_accounting_lock(
+        db,
+        lock_type="opening_balances",
+        is_locked=True,
+        action="locked",
+        performed_by=current_user.id,
+        reason=payload.reason or "قفل يدوي صريح للأرصدة الافتتاحية من المدير العام",
+    )
+    await db.commit()
+    return {"is_locked": True, "message": "تم قفل الأرصدة الافتتاحية بنجاح."}
+
+
+@router.post("/opening-balances/request-unlock", status_code=status.HTTP_201_CREATED)
+async def request_unlock_opening_balances(
+    payload: OpeningBalancesUnlockRequestCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تقديم طلب فتح قفل الأرصدة الافتتاحية بسبب مكتوب إلزامي (المدير المالي أو المدير العام)."""
+    user_roles = await get_user_roles(current_user, db=db)
+    if not user_roles.intersection({"finance_manager", "general_manager"}):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="طلب فتح القفل متاح للمدير المالي أو المدير العام فقط.",
+        )
+
+    if not await is_opening_balances_locked(db):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="الأرصدة الافتتاحية غير مقفلة بالفعل.",
+        )
+
+    lock_req = await set_accounting_lock(
+        db,
+        lock_type="opening_balances",
+        is_locked=True,
+        action="unlock_requested",
+        performed_by=current_user.id,
+        reason=payload.reason.strip(),
+    )
+    await db.commit()
+    return {
+        "status": "pending_approval",
+        "request_id": lock_req.id,
+        "reason": lock_req.reason,
+        "message": "تم تقديم طلب فتح القفل بنجاح وفي انتظار اعتماد المدير العام.",
+    }
+
+
+@router.post("/opening-balances/approve-unlock", status_code=status.HTTP_200_OK)
+async def approve_unlock_opening_balances(
+    payload: OpeningBalancesUnlockApproveCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """اعتماد طلب فتح القفل (المدير العام حصراً، مع فرض ضابط Maker-Checker لمنع الاعتماد الذاتي)."""
+    user_roles = await get_user_roles(current_user, db=db)
+    if "general_manager" not in user_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="صلاحية اعتماد فتح القفل محصورة بالمدير العام فقط (general_manager).",
+        )
+
+    # البحث عن طلب الفتح المعلق
+    stmt = (
+        select(AccountingLock)
+        .where(
+            AccountingLock.lock_type == "opening_balances",
+            AccountingLock.action == "unlock_requested",
+        )
+        .order_by(AccountingLock.performed_at.desc(), AccountingLock.id.desc())
+        .limit(1)
+    )
+    req = await db.scalar(stmt)
+    if not req:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="لا يوجد طلب فتح قفل معلق للأرصدة الافتتاحية.",
+        )
+
+    # ضابط فصل المهام (Maker-Checker)
+    if req.performed_by == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="لا يجوز لمُقدم طلب فتح القفل اعتماده بنفسه (فصل المهام / Maker-Checker).",
+        )
+
+    reason = payload.approval_notes.strip() if payload.approval_notes else f"اعتماد فتح القفل: {req.reason}"
+
+    await set_accounting_lock(
+        db,
+        lock_type="opening_balances",
+        is_locked=False,
+        action="unlocked",
+        performed_by=current_user.id,
+        reason=reason,
+        requested_by=req.performed_by,
+        unlock_request_id=req.id,
+    )
+    await db.commit()
+    return {"is_locked": False, "message": "تم اعتماد فتح قفل الأرصدة الافتتاحية بنجاح."}
+
 
 
 @router.get("/pre-migration-audit")

@@ -342,3 +342,19 @@ class SupplierReceipt(Base):
 
     invoice: Mapped["SupplierInvoice | None"] = relationship("SupplierInvoice", foreign_keys=[invoice_id])
     purchase_order: Mapped["PurchaseOrder | None"] = relationship("PurchaseOrder", foreign_keys=[purchase_order_id])
+
+
+class AccountingLock(Base):
+    """سجل وتاريخ أقفال الدورات المحاسبية والأرصدة الافتتاحية (إغلاق / طلب فتح / اعتماد فتح / إعادة قفل)."""
+    __tablename__ = "accounting_locks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    lock_type: Mapped[str] = mapped_column(String(64), nullable=False, default="opening_balances")
+    is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)  # locked, unlock_requested, unlocked, relocked
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    performed_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    requested_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    unlock_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+

@@ -362,6 +362,24 @@ class OpeningBalancesCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_balance(self):
+        disallowed = []
+        if self.accounts_receivable > Decimal("0.00"):
+            disallowed.append("1100 (ذمم العملاء)")
+        if self.raw_materials_inventory > Decimal("0.00"):
+            disallowed.append("1210 (مخزون الخامات)")
+        if self.wip_inventory > Decimal("0.00"):
+            disallowed.append("1220 (إنتاج تحت التشغيل)")
+        if self.finished_goods_inventory > Decimal("0.00"):
+            disallowed.append("1230 (مخزون التام)")
+        if self.accounts_payable > Decimal("0.00"):
+            disallowed.append("2100 (ذمم الموردين)")
+        if disallowed:
+            raise ValueError(
+                f"يُحظر إدخال أرصدة للحسابات التالية في القيد الافتتاحي العام: {', '.join(disallowed)}. "
+                "أرصدة المخزون والعملاء والموردين تُسجل حصرياً عبر مستنداتها الافتتاحية المخصصة "
+                "(الجرد الافتتاحي، فواتير الموردين الافتتاحية، وأرصدة العملاء الافتتاحية) لمنع ازدواجية القيود."
+            )
+
         total_assets = (
             self.treasury_balance
             + self.bank_balance
@@ -401,6 +419,42 @@ class OpeningBalancesRead(BaseModel):
     is_balanced: bool = True
     details: dict[str, Decimal] = {}
     message: str = ""
+
+
+class OpeningBalancesUnlockRequestCreate(BaseModel):
+    reason: str = Field(..., min_length=5, max_length=1000, description="سبب إلزامي لطلب فتح قفل الأرصدة الافتتاحية")
+
+
+class OpeningBalancesUnlockApproveCreate(BaseModel):
+    request_id: Optional[str] = Field(default=None, description="معرف طلب فتح القفل المراد اعتماده")
+    approval_notes: Optional[str] = Field(default="", max_length=1000)
+
+
+class OpeningBalancesLockCreate(BaseModel):
+    reason: Optional[str] = Field(default="قفل رسمي للأرصدة الافتتاحية من الإدارة العامة", max_length=1000)
+
+
+class AccountingLockRead(BaseModel):
+    id: str
+    lock_type: str
+    is_locked: bool
+    action: str
+    reason: str
+    performed_by: str
+    performed_at: datetime
+    requested_by: Optional[str] = None
+    unlock_request_id: Optional[str] = None
+
+
+class AccountingLockStatusRead(BaseModel):
+    is_locked: bool
+    lock_type: str = "opening_balances"
+    current_action: Optional[str] = None
+    latest_reason: Optional[str] = None
+    latest_performed_by: Optional[str] = None
+    latest_performed_at: Optional[datetime] = None
+    history: list[AccountingLockRead] = Field(default_factory=list)
+
 
 
 # ─── أوامر الشراء وإدارة عجز الإنتاج (Purchase Orders - Phase 5 / T5) ────────

@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.finance.models import Account, JournalEntry, JournalEntryLine
+from app.modules.finance.models import Account, AccountingLock, JournalEntry, JournalEntryLine
 
 CANONICAL_TREASURY_ID = "00000000-0000-0000-0000-000000000001"
 CANONICAL_BANK_ID = "00000000-0000-0000-0000-000000000002"
@@ -225,10 +225,41 @@ async def get_weighted_average_cost(db: AsyncSession, item_id: str, warehouse_id
 
 
 async def is_opening_balances_locked(db: AsyncSession) -> bool:
-    """التحقق من قفل الأرصدة الافتتاحية: بمجرد اعتماد القيد الافتتاحي العام يمنع إنشاء مستندات افتتاحية جديدة."""
-    has_ob = await db.scalar(
-        select(JournalEntry.id).where(JournalEntry.source_doc_type == "opening_balance").limit(1)
+    """التحقق من قفل الأرصدة الافتتاحية: يقرأ حصرياً من جدول accounting_locks."""
+    stmt = (
+        select(AccountingLock.is_locked)
+        .where(AccountingLock.lock_type == "opening_balances")
+        .order_by(AccountingLock.performed_at.desc(), AccountingLock.id.desc())
+        .limit(1)
     )
-    return bool(has_ob)
+    locked = await db.scalar(stmt)
+    return bool(locked) if locked is not None else False
+
+
+async def set_accounting_lock(
+    db: AsyncSession,
+    *,
+    lock_type: str = "opening_balances",
+    is_locked: bool,
+    action: str,
+    performed_by: str,
+    reason: str,
+    requested_by: str | None = None,
+    unlock_request_id: str | None = None,
+) -> AccountingLock:
+    """تسجيل حركة قفل أو فتح جديدة كسطر تاريخي دائم في جدول accounting_locks."""
+    lock_record = AccountingLock(
+        id=str(uuid.uuid4()),
+        lock_type=lock_type,
+        is_locked=is_locked,
+        action=action,
+        reason=reason,
+        performed_by=performed_by,
+        requested_by=requested_by,
+        unlock_request_id=unlock_request_id,
+    )
+    db.add(lock_record)
+    return lock_record
+
 
 
