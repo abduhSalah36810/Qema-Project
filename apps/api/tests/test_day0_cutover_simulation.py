@@ -564,6 +564,16 @@ async def test_day0_cutover_full_simulation(ctx):
     assert ob_data["is_balanced"] is True
     je_ob_id = ob_data["journal_entry_id"]
 
+    # محاولة ترحيل قيد افتتاحي عام ثانٍ فوراً بتاريخ مختلف
+    dup_ob_res = await a["fm"].post(f"{API}/finance/opening-balances", json={
+        "accounting_start_date": "2026-10-31",
+        "treasury_balance": "5000.00",
+        "bank_balance": "5000.00",
+        "paid_in_capital": "10000.00",
+        "notes": "محاولة قيد عام مكرر فوراً",
+    })
+    assert dup_ob_res.status_code == 409, "يجب رفض محاولة قيد افتتاحي عام مكرر برمز 409"
+
     # التحقق من أن جدول accounting_locks تم قفله تلقائياً
     lock_status_res = await a["fm"].get(f"{API}/finance/opening-balances/lock-status")
     assert lock_status_res.status_code == 200, lock_status_res.text
@@ -731,6 +741,17 @@ async def test_day0_cutover_full_simulation(ctx):
     })
     assert appr_unlock.status_code == 200, appr_unlock.text
     assert appr_unlock.json()["is_locked"] is False
+
+    # محاولة ترحيل قيد افتتاحي عام ثانٍ أثناء فتح القفل بتاريخ مختلف (مرفوض 409 صراحة لوجود قيد عام مسبق)
+    dup_unlocked_ob = await a["fm"].post(f"{API}/finance/opening-balances", json={
+        "accounting_start_date": "2026-10-28",
+        "treasury_balance": "1000.00",
+        "bank_balance": "1000.00",
+        "paid_in_capital": "2000.00",
+        "notes": "محاولة قيد عام مكرر والقفل مفتوح",
+    })
+    assert dup_unlocked_ob.status_code == 409, "يجب رفض تكرار القيد الافتتاحي العام حتى بعد فتح القفل"
+    assert "مسبقاً" in dup_unlocked_ob.text
 
     # 4. إدخال الرصيد المنسي: فاتورة مورد 3 بمبلغ 2,000 ج.م
     sup3_res = await a["wh"].post(f"{API}/finance/suppliers", json={"code": f"S3_{tag}", "name": f"مورد 3 {tag}"})
@@ -909,3 +930,170 @@ async def test_auto_lock_on_first_dispatch_if_unset(ctx):
     status_after = (await a["fm"].get(f"{API}/finance/opening-balances/lock-status")).json()
     assert status_after["is_locked"] is True, "يجب قفل الأرصدة الافتتاحية تلقائياً عند أول صرف خامات"
     assert "صرف خامات" in status_after["latest_reason"]
+
+
+@pytest.mark.asyncio
+async def test_advance_supplier_payment_lifecycle(ctx):
+    """
+    اختبار دورة حياة الدفعة المقدمة للمورد قبل الاستلام وبعده (PUR-DEC-02 و FIN-DEC-01):
+    1. إنشاء فاتورة مورد عادية بمبلغ 10,000 ج.م بانتظار الاستلام.
+    2. المدير المالي يُنشئ دفعة مقدمة بمبلغ 8,000 ج.م:
+       - ترحيل واعتماد فوري (FIN-DEC-01).
+       - الحقل المهيكل is_prepayment == True وقيمة المستلم == 0.00 وإجمالي الفاتورة == 10,000.00.
+    3. محاولة سداد دفعة ثانية بـ 3,000 ج.م تتجاوز إجمالي الفاتورة (8,000 + 3,000 = 11,000 > 10,000):
+       - ترفض برمز 409 Conflict.
+    4. مطابقة كشف حساب المورد (-8,000.00 مدين للمصنع) مع حساب 2100 في الأستاذ العام (مدين 8,000.00).
+    5. أمين المخزن يؤكد استلام كامل بضاعة الفاتورة (10,000.00 ج.م).
+    6. الاستعلام عن سند الصرف عبر GET /finance/cash-documents:
+       - تحول is_prepayment إلى False تلقائياً لأن المستلم أصبح يغطي المدفوع.
+       - قيمة received_value أصبحت 10,000.00 ج.م.
+    7. استقرار كشف حساب المورد عند 2,000.00 دائن ومطابقته التامة مع صافي حساب 2100.
+    """
+    session, a = ctx
+    tag = _tag()
+
+    # التأكد من كفاية رصيد الخزينة الرئيسية للصرف
+    tr_bal = await _get_treasury_balance(a["fm"])
+    if tr_bal < Decimal("20000.00"):
+        fund_res = await a["fm"].post(f"{API}/finance/cash-documents", json={
+            "document_type": "income",
+            "to_account_id": CANONICAL_TREASURY_ID,
+            "amount": "50000.00",
+            "description": f"تمويل تجريبي للخزينة لاختبار الدفع المقدم {tag}",
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+        })
+        assert fund_res.status_code == 201, fund_res.text
+
+    # قراءة رصيد 2100 المبدئي في الأستاذ العام لحساب الفارق الصافي
+    tb_init = (await a["fm"].get(f"{API}/finance/gl/trial-balance")).json()
+    acc_2100_init = next((r for r in tb_init["rows"] if r["code"] == "2100"), None)
+    initial_2100_cr = (
+        Decimal(str(acc_2100_init["total_credit"])) - Decimal(str(acc_2100_init["total_debit"]))
+        if acc_2100_init else Decimal("0.00")
+    )
+
+    # 1. إنشاء مورد وخامة معتمدة
+    sup_res = await a["wh"].post(f"{API}/finance/suppliers", json={
+        "code": f"SUP_ADV_{tag}",
+        "name": f"مورد دفعة مقدمة {tag}",
+    })
+    assert sup_res.status_code == 201, sup_res.text
+    sup_id = sup_res.json()["id"]
+
+    unit = await _unit(session, "meter")
+    item = await _approved_item(session, f"ITEM_ADV_{tag}", unit)
+
+    # 2. إنشاء فاتورة مورد عادية بقيمة 10,000 ج.م (100 متر × 100 ج.م) بواسطة المدير المالي لرؤية الأسعار
+    inv_res = await a["fm"].post(f"{API}/finance/supplier-invoices", json={
+        "supplier_id": sup_id,
+        "invoice_number": f"INV-ADV-{tag}",
+        "invoice_date": datetime.now(timezone.utc).isoformat(),
+        "notes": "فاتورة بانتظار الاستلام لاختبار السداد المقدم",
+        "lines": [{
+            "item_id": item.id,
+            "unit_id": unit.id,
+            "invoiced_quantity": 100.0,
+            "unit_price": "100.00",
+            "discount_amount": "0.00",
+            "notes": "100 متر قماش بسعر 100 ج.م",
+        }],
+    })
+    assert inv_res.status_code == 201, inv_res.text
+    inv_data = inv_res.json()
+    inv_id = inv_data["id"]
+    line_id = inv_data["lines"][0]["id"]
+    assert inv_data["status"] == "awaiting_receipt"
+    assert Decimal(str(inv_data["invoice_total"])) == Decimal("10000.00")
+
+    # كشف حساب المورد قبل أي سداد أو استلام = 0
+    stmt_init = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup_id}")).json()
+    assert Decimal(str(stmt_init["totals"]["balance_due"])) == Decimal("0.00")
+
+    # 3. سداد دفعة مقدمة بمبلغ 8,000 ج.م بواسطة المدير المالي
+    pay_res = await a["fm"].post(f"{API}/finance/supplier-invoices/{inv_id}/payments", json={
+        "amount": "8000.00",
+        "description": f"سداد دفعة مقدمة قبل الاستلام {tag}",
+    })
+    assert pay_res.status_code == 201, pay_res.text
+    pay_doc = pay_res.json()
+    pay_doc_id = pay_doc["id"]
+
+    # فحص الترحيل الفوري بقرار FIN-DEC-01 والحقول المهيكلة للدفعة المقدمة
+    assert pay_doc["status"] == "approved", "مستند سداد المدير المالي يجب أن يُرحل ويُعتمد فوراً (FIN-DEC-01)"
+    assert pay_doc["approved_by"] == a["fm"].user.id
+    assert pay_doc["is_prepayment"] is True, "يجب تحديد is_prepayment = True لأن المسدد يتجاوز المستلم الفعلي (0)"
+    assert Decimal(str(pay_doc["invoice_total"])) == Decimal("10000.00")
+    assert Decimal(str(pay_doc["received_value"])) == Decimal("0.00")
+
+    # 4. محاولة سداد دفعة ثانية بـ 3,000 ج.م (8000 + 3000 = 11000 > 10000)
+    overpay_res = await a["fm"].post(f"{API}/finance/supplier-invoices/{inv_id}/payments", json={
+        "amount": "3000.00",
+        "description": "دفعة تتجاوز إجمالي الفاتورة",
+    })
+    assert overpay_res.status_code == 409, "يجب رفض الدفعة برمز 409 لتجاوزها الحد الأقصى المتاح للفاتورة"
+    assert "تتجاوز المستحق الفعلي" in overpay_res.text
+
+    # 5. مطابقة كشف الحساب والأستاذ العام 2100 بعد سداد الدفعة المقدمة
+    stmt_step1 = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup_id}")).json()
+    assert Decimal(str(stmt_step1["totals"]["balance_due"])) == Decimal("-8000.00"), (
+        f"رصيد المورد في كشف الحساب يجب أن يكون -8000.00 (مدين للمصنع)، الفعلي: {stmt_step1['totals']['balance_due']}"
+    )
+
+    tb_step1 = (await a["fm"].get(f"{API}/finance/gl/trial-balance")).json()
+    acc_2100_step1 = next((r for r in tb_step1["rows"] if r["code"] == "2100"), None)
+    net_2100_step1_cr = (
+        Decimal(str(acc_2100_step1["total_credit"])) - Decimal(str(acc_2100_step1["total_debit"]))
+        if acc_2100_step1 else Decimal("0.00")
+    )
+    delta_2100_step1 = net_2100_step1_cr - initial_2100_cr
+    assert delta_2100_step1 == Decimal("-8000.00"), (
+        f"الأثر الصافي على 2100 يجب أن يكون -8000.00 (مدين)، الفعلي: {delta_2100_step1}"
+    )
+    assert delta_2100_step1 == Decimal(str(stmt_step1["totals"]["balance_due"])), (
+        "رصيد 2100 في الأستاذ العام يجب أن يطابق تماماً كشف حساب المورد بعد السداد المقدم"
+    )
+
+    # 6. أمين المخزن يؤكد استلام البضاعة بالكامل (100 متر = 10,000 ج.م)
+    rcv_res = await a["wh"].post(f"{API}/finance/supplier-invoices/{inv_id}/receive", json={
+        "lines": [{
+            "line_id": line_id,
+            "received_quantity": 100.0,
+            "notes": "استلام كامل الكمية 100 متر",
+        }],
+        "notes": f"إذن استلام بضاعة {tag}",
+    })
+    assert rcv_res.status_code == 200, rcv_res.text
+    rcv_data = rcv_res.json()
+    assert rcv_data["status"] == "received"
+
+    # 7. الاستعلام عن سندات الصرف والتأكد من تحديث حالة الدفعة المقدمة عند القراءة
+    cash_docs_res = await a["fm"].get(f"{API}/finance/cash-documents")
+    assert cash_docs_res.status_code == 200, cash_docs_res.text
+    target_doc = next(d for d in cash_docs_res.json() if d["id"] == pay_doc_id)
+    assert target_doc["is_prepayment"] is False, (
+        "يجب أن تصبح is_prepayment = False بعد استلام بضاعة تغطي قيمة الدفعة المسددة"
+    )
+    assert Decimal(str(target_doc["received_value"])) == Decimal("10000.00"), (
+        f"قيمة المستلم الفعلي يجب أن تكون 10000.00، الفعلي: {target_doc['received_value']}"
+    )
+    assert Decimal(str(target_doc["invoice_total"])) == Decimal("10000.00")
+
+    # 8. استقرار كشف حساب المورد عند 2,000.00 دائن ومطابقته للأستاذ العام 2100
+    stmt_step2 = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup_id}")).json()
+    assert Decimal(str(stmt_step2["totals"]["balance_due"])) == Decimal("2000.00"), (
+        f"رصيد المورد بعد الاستلام يجب أن يصبح 2000.00 دائن (10000 استلام - 8000 سداد)، الفعلي: {stmt_step2['totals']['balance_due']}"
+    )
+
+    tb_step2 = (await a["fm"].get(f"{API}/finance/gl/trial-balance")).json()
+    acc_2100_step2 = next((r for r in tb_step2["rows"] if r["code"] == "2100"), None)
+    net_2100_step2_cr = (
+        Decimal(str(acc_2100_step2["total_credit"])) - Decimal(str(acc_2100_step2["total_debit"]))
+        if acc_2100_step2 else Decimal("0.00")
+    )
+    delta_2100_step2 = net_2100_step2_cr - initial_2100_cr
+    assert delta_2100_step2 == Decimal("2000.00"), (
+        f"الأثر الصافي على 2100 بعد الاستلام يجب أن يكون +2000.00 دائن، الفعلي: {delta_2100_step2}"
+    )
+    assert delta_2100_step2 == Decimal(str(stmt_step2["totals"]["balance_due"])), (
+        "رصيد 2100 في الأستاذ العام يجب أن يطابق تماماً كشف حساب المورد بعد استلام البضاعة"
+    )
