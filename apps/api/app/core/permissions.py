@@ -58,6 +58,7 @@ PERMISSION_REGISTRY: dict[str, PermissionDefinition] = {
     "warehouse:dispatch": PermissionDefinition("warehouse:dispatch", "inventory", "execute", "صرف خامات من مخزن الخامات لأوامر التشغيل"),
     "warehouse:finished_goods:receive": PermissionDefinition("warehouse:finished_goods:receive", "inventory", "execute", "استلام المنتج التام في مخزن المنتج التام"),
     "warehouse:returns:receive": PermissionDefinition("warehouse:returns:receive", "inventory", "execute", "فحص واستلام مرتجعات الورشة بمخزن الخامات (مقبول/مرفوض/عجز)"),
+    "warehouse:claims:resolve": PermissionDefinition("warehouse:claims:resolve", "inventory", "approve", "مراجعة وحسم طلبات عجز استلام خامات الورشة ميدانياً (قبول كعجز نقل/فقد، أو خطأ قياس، أو رفض)"),
     "inventory:stocktake:view": PermissionDefinition("inventory:stocktake:view", "inventory", "view", "استعراض جلسات الجرد وخطوط العد"),
     "inventory:stocktake:create": PermissionDefinition("inventory:stocktake:create", "inventory", "create", "إنشاء جلسة جرد جديدة وأخذ اللقطة"),
     "inventory:stocktake:count": PermissionDefinition("inventory:stocktake:count", "inventory", "execute", "تسجيل وتحديث العد الميداني"),
@@ -105,6 +106,12 @@ PERMISSION_REGISTRY: dict[str, PermissionDefinition] = {
     "suppliers:payments:request_full_balance": PermissionDefinition("suppliers:payments:request_full_balance", "suppliers", "submit", "طلب سداد كامل المستحق لفاتورة مورد يحسبه النظام دون عرض المبلغ"),
     "suppliers:receive": PermissionDefinition("suppliers:receive", "suppliers", "execute", "إثبات استلام وتوريد الخامات بالمخزن"),
 
+    # ── أوامر الشراء وإدارة عجز الإنتاج (Purchase Orders - Phase 5 / T5) ──
+    "purchase_orders:view": PermissionDefinition("purchase_orders:view", "suppliers", "view", "استعراض أوامر الشراء وحالاتها وسجلات المتابعة"),
+    "purchase_orders:create": PermissionDefinition("purchase_orders:create", "suppliers", "create", "إنشاء أمر شراء (مسودة جديدة أو توليد من عجز خامات الإنتاج)"),
+    "purchase_orders:manage": PermissionDefinition("purchase_orders:manage", "suppliers", "execute", "تعديل بنود وأسعار ومسودات أوامر الشراء وإلغاؤها"),
+    "purchase_orders:approve": PermissionDefinition("purchase_orders:approve", "suppliers", "approve", "اعتماد أمر الشراء رسمياً تمهيداً للتوريد"),
+
     # ── التقارير والرقابة العامة (Reports & Oversight) ──
     "reports:view": PermissionDefinition("reports:view", "reports", "view", "استعراض لوحة التشغيل والتقارير التنفيذية"),
 }
@@ -151,9 +158,11 @@ ROLE_PERMISSIONS_MAP: dict[str, Set[str]] = {
         "catalog:item:update",
         "catalog:item:submit",
         "catalog:item:request_revision",
+        "catalog:units:manage",
         "warehouse:dispatch",
         "warehouse:finished_goods:receive",
         "warehouse:returns:receive",
+        "warehouse:claims:resolve",
         "production:orders:view",
         "customers:deliveries:manage",
         "suppliers:view",
@@ -161,6 +170,7 @@ ROLE_PERMISSIONS_MAP: dict[str, Set[str]] = {
         "suppliers:invoices:create",
         "suppliers:payments:request_full_balance",
         "suppliers:receive",
+        "purchase_orders:view",
     },
 
     # ── مسؤول الإنتاج: إنشاء أوامر التشغيل، استلام الورشة، المراحل، العيوب والهالك، والإغلاق ──
@@ -174,6 +184,8 @@ ROLE_PERMISSIONS_MAP: dict[str, Set[str]] = {
         "production:templates:manage",
         "production:returns:resolve",
         "production:orders:close",
+        "purchase_orders:view",
+        "purchase_orders:create",
         "inventory:view",
         "catalog:view",
         "reports:view",
@@ -196,13 +208,27 @@ ROLE_PERMISSIONS_MAP: dict[str, Set[str]] = {
         "reports:view",
         "suppliers:view",
         "suppliers:manage",
+        "suppliers:invoices:create",
         "suppliers:payments:request",
         "suppliers:payments:request_full_balance",
+        "purchase_orders:view",
+        "purchase_orders:create",
+        "purchase_orders:manage",
+        "purchase_orders:approve",
         "customers:view",
         "customers:manage",
         "customers:orders:create",
         "pricing:manage",
         "catalog:view",
+        # قرار المالك 2026-11-11: المدير المالي هو معتمد الأصناف والجرد (المدير العام حساب بكل الصلاحيات فقط).
+        # يبقى منع الاعتماد الذاتي مطبقاً في الخدمة: لا يعتمد صنفاً قدّمه ولا جرداً أنشأه أو عدّه.
+        "catalog:item:approve",
+        "catalog:item:reject",
+        "catalog:item:manage_revisions",
+        "inventory:stocktake:view",
+        "inventory:stocktake:review",
+        "inventory:stocktake:approve",
+        "inventory:stocktake:post",
     },
 }
 
@@ -225,27 +251,31 @@ async def get_user_roles(
     """
     candidate_roles: Set[str] = set()
 
-    claims = user.claims or {}
-    if isinstance(claims.get("role"), str):
-        candidate_roles.add(claims["role"].strip().lower())
+    from app.core.config import settings
+    is_production = settings.app_env.lower() == "production"
 
-    for key in ("roles", "user_roles"):
-        val = claims.get(key)
-        if isinstance(val, (list, tuple, set)):
-            for r in val:
-                if isinstance(r, str):
-                    candidate_roles.add(r.strip().lower())
+    if not is_production:
+        claims = user.claims or {}
+        if isinstance(claims.get("role"), str):
+            candidate_roles.add(claims["role"].strip().lower())
 
-    app_meta = claims.get("app_metadata")
-    if isinstance(app_meta, dict):
-        r = app_meta.get("role")
-        if isinstance(r, str):
-            candidate_roles.add(r.strip().lower())
-        rs = app_meta.get("roles")
-        if isinstance(rs, (list, tuple, set)):
-            for item in rs:
-                if isinstance(item, str):
-                    candidate_roles.add(item.strip().lower())
+        for key in ("roles", "user_roles"):
+            val = claims.get(key)
+            if isinstance(val, (list, tuple, set)):
+                for r in val:
+                    if isinstance(r, str):
+                        candidate_roles.add(r.strip().lower())
+
+        app_meta = claims.get("app_metadata")
+        if isinstance(app_meta, dict):
+            r = app_meta.get("role")
+            if isinstance(r, str):
+                candidate_roles.add(r.strip().lower())
+            rs = app_meta.get("roles")
+            if isinstance(rs, (list, tuple, set)):
+                for item in rs:
+                    if isinstance(item, str):
+                        candidate_roles.add(item.strip().lower())
 
     if db is not None:
         try:
@@ -325,6 +355,11 @@ def require_any_permission(*required_permissions: str) -> Callable:
     تبعية FastAPI تفرض توفر أي صلاحية من الصلاحيات المحددة (OR logic).
     مفيدة للمسارات التي يمكن تنفيذها بصلاحيات بديلة (مثل الإدارة العامة أو صلاحية الوحدة المحددة).
     """
+    if len(required_permissions) == 1 and isinstance(required_permissions[0], (list, tuple, set)):
+        perms_tuple = tuple(required_permissions[0])
+    else:
+        perms_tuple = required_permissions
+
     async def dependency(
         request: Request = None,  # type: ignore
         current_user: AuthenticatedUser = Depends(get_current_user),
@@ -336,7 +371,7 @@ def require_any_permission(*required_permissions: str) -> Callable:
         for role in user_roles:
             user_perms.update(ROLE_PERMISSIONS_MAP.get(role, set()))
 
-        has_any = any(p in user_perms for p in required_permissions)
+        has_any = any(p in user_perms for p in perms_tuple)
 
         if not has_any:
             request_id = get_request_id(request) if request else "-"
@@ -345,7 +380,7 @@ def require_any_permission(*required_permissions: str) -> Callable:
             logger.warning(
                 "access_denied reason=missing_any_permission user_id=%s required_any=%s roles=%s method=%s path=%s request_id=%s",
                 current_user.id,
-                list(required_permissions),
+                list(perms_tuple),
                 sorted(list(user_roles)),
                 method,
                 path,
@@ -353,7 +388,7 @@ def require_any_permission(*required_permissions: str) -> Callable:
             )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"تم رفض الوصول: يتطلب هذا الإجراء إحدى الصلاحيات التالية: ({', '.join(required_permissions)}).",
+                detail=f"تم رفض الوصول: يتطلب هذا الإجراء إحدى الصلاحيات التالية: ({', '.join(perms_tuple)}).",
             )
 
         return current_user
