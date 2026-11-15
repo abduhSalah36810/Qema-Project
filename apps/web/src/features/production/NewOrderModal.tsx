@@ -70,6 +70,13 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
   const [lines, setLines] = useState<DraftLine[]>([emptyLine()]);
   const [assignedTo, setAssignedTo] = useState('');
   const [notes, setNotes] = useState('');
+  const [manufacturingType, setManufacturingType] = useState<'internal' | 'external'>('internal');
+  const [orderCustomerId, setOrderCustomerId] = useState<string>('');
+  const [laborCostingMethod, setLaborCostingMethod] = useState<'piece_based' | 'time_based'>('piece_based');
+  const [laborRate, setLaborRate] = useState<string>('');
+  const [laborHours, setLaborHours] = useState<string>('');
+  const [overheadAllocationBasis, setOverheadAllocationBasis] = useState<'' | 'produced_pieces' | 'labor_hours'>('');
+  const [allocatedOverheadRate, setAllocatedOverheadRate] = useState<string>('');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customersUnavailable, setCustomersUnavailable] = useState(false);
   const [requirements, setRequirements] = useState<Requirements | null>(null);
@@ -84,6 +91,13 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
     setLines([emptyLine()]);
     setAssignedTo('');
     setNotes('');
+    setManufacturingType('internal');
+    setOrderCustomerId('');
+    setLaborCostingMethod('piece_based');
+    setLaborRate('');
+    setLaborHours('');
+    setOverheadAllocationBasis('');
+    setAllocatedOverheadRate('');
     setRequirements(null);
     setSubmitError('');
     fetchCustomers()
@@ -159,7 +173,8 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
   const blockedLines = requirements?.lines.filter((l) => !l.has_bom) ?? [];
 
   const totalPieces = validLines.reduce((sum, l) => sum + Number(l.quantity), 0);
-  const canCreate = allValid && !!requirements?.can_create && !reqLoading && !submitting;
+  const mfgValid = manufacturingType === 'internal' || Boolean(orderCustomerId);
+  const canCreate = allValid && mfgValid && !!requirements?.can_create && !reqLoading && !submitting;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -175,7 +190,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
           target_quantity: Number(l.quantity),
           season: variant?.season || 'summer',
           product_type: l.product_type,
-          customer_id: l.product_type === 'private_label' ? l.customer_id : null,
+          customer_id: l.product_type === 'private_label' ? l.customer_id : (manufacturingType === 'external' ? orderCustomerId : null),
           fabric_name: l.fabric_name.trim(),
           fabric_area: l.fabric_area.trim(),
           fabric_color: l.fabric_color.trim(),
@@ -183,7 +198,18 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
           notes: l.notes.trim(),
         };
       });
-      const order = await createProductionOrderApi({ items, assigned_to: assignedTo.trim(), notes: notes.trim() });
+      const order = await createProductionOrderApi({
+        items,
+        assigned_to: assignedTo.trim(),
+        notes: notes.trim(),
+        manufacturing_type: manufacturingType,
+        customer_id: manufacturingType === 'external' ? orderCustomerId : undefined,
+        labor_costing_method: laborCostingMethod,
+        labor_rate: laborRate ? Number(laborRate) : undefined,
+        labor_hours: laborHours ? Number(laborHours) : undefined,
+        overhead_allocation_basis: overheadAllocationBasis || undefined,
+        allocated_overhead_rate: allocatedOverheadRate ? Number(allocatedOverheadRate) : undefined,
+      });
       onOrderCreated(order);
       onClose();
     } catch (err) {
@@ -205,8 +231,118 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
         </div>
 
         <form className="modal-body" onSubmit={(e) => void handleSubmit(e)}>
+          {/* نمط التصنيع والتكاليف المعتمدة (MFG-DEC-01 & 04 & 06) — Phase 4.5 T1: أول قسم قبل بنود المنتجات */}
+          <section aria-labelledby="order-mfg-title">
+            <h3 id="order-mfg-title" className="new-order__title">١. نمط التصنيع والعمالة والتكاليف</h3>
+            <div className="payroll-add__grid">
+              <label>
+                نمط التصنيع *
+                <select
+                  value={manufacturingType}
+                  onChange={(e) => setManufacturingType(e.target.value as 'internal' | 'external')}
+                >
+                  <option value="internal">تصنيع داخلي (لحساب المصنع)</option>
+                  <option value="external">تشغيل للغير / أمانة (CMT Tolling)</option>
+                </select>
+              </label>
+
+              {manufacturingType === 'internal' && (
+                <p className="form-hint payroll-add__wide">
+                  الخامات تُصرف من مخزن خامات المصنع، والمنتج التام يُسجل برصيد براند المصنع.
+                </p>
+              )}
+
+              {manufacturingType === 'external' && (
+                <>
+                  <label>
+                    العميل صاحب الأمر والخامات *
+                    <select
+                      required
+                      value={orderCustomerId}
+                      onChange={(e) => setOrderCustomerId(e.target.value)}
+                    >
+                      <option value="">— اختر العميل —</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} ({c.code})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="form-hint payroll-add__wide">
+                    ستُخصم خامات العميل من رصيد أمانته في مخزن الخامات (سقف الهالك المسموح 1.5%)،
+                    والمنتج التام يُسجل برصيد هذا العميل دون المساس بأرصدة العملاء الآخرين.
+                  </p>
+                </>
+              )}
+
+              <label>
+                طريقة احتساب العمالة
+                <select
+                  value={laborCostingMethod}
+                  onChange={(e) => setLaborCostingMethod(e.target.value as 'piece_based' | 'time_based')}
+                >
+                  <option value="piece_based">بالقطعة (Piece-based)</option>
+                  <option value="time_based">بالساعة / الزمن (Time-based)</option>
+                </select>
+              </label>
+
+              <label>
+                {laborCostingMethod === 'piece_based' ? 'أجر القطعة التقديري (ج)' : 'أجر الساعة التقديري (ج)'}
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={laborRate}
+                  onChange={(e) => setLaborRate(e.target.value)}
+                />
+              </label>
+
+              {laborCostingMethod === 'time_based' && (
+                <label>
+                  الساعات التقديرية للأمر
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="عدد الساعات"
+                    value={laborHours}
+                    onChange={(e) => setLaborHours(e.target.value)}
+                  />
+                </label>
+              )}
+
+              <label>
+                أساس تحميل التكاليف غير المباشرة
+                <select
+                  value={overheadAllocationBasis}
+                  onChange={(e) => setOverheadAllocationBasis(e.target.value as any)}
+                >
+                  <option value="">بدون تحميل إداري</option>
+                  <option value="produced_pieces">على أساس القطع التامة (ج/قطعة)</option>
+                  <option value="labor_hours">على أساس ساعات العمل (ج/ساعة)</option>
+                </select>
+              </label>
+
+              {overheadAllocationBasis && (
+                <label>
+                  معدل التحميل (ج)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="معدل التحميل"
+                    value={allocatedOverheadRate}
+                    onChange={(e) => setAllocatedOverheadRate(e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
+          </section>
+
           <section aria-labelledby="order-lines-title">
-            <h3 id="order-lines-title" className="new-order__title">١. الموديلات والكميات</h3>
+            <h3 id="order-lines-title" className="new-order__title">٢. الموديلات والكميات</h3>
             {products.length === 0 && (
               <p className="notice notice--warning">لا توجد موديلات نشطة. أضف الموديلات ومقاساتها ومستلزماتها من «البيانات الأساسية ← الموديلات والمقاسات» أولاً.</p>
             )}
@@ -312,7 +448,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
           </section>
 
           <section aria-labelledby="order-req-title" className="new-order__req">
-            <h3 id="order-req-title" className="new-order__title">٢. الاحتياجات من مخزن الخامات</h3>
+            <h3 id="order-req-title" className="new-order__title">٣. الاحتياجات من مخزن الخامات</h3>
             {reqError && <p className="notice notice--error" role="alert">{reqError}</p>}
             {!requirements && !reqLoading && <p className="form-hint">اختر الموديلات والمقاسات والكميات لتظهر الخامات المطلوبة.</p>}
             {blockedLines.length > 0 && (
@@ -386,6 +522,8 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({ isOpen, onClose, o
             <label>خط التشغيل المسؤول<input maxLength={128} value={assignedTo} placeholder="مثال: خط الإنتاج 1" onChange={(e) => setAssignedTo(e.target.value)} /></label>
             <label className="payroll-add__wide">ملاحظات الأمر<input maxLength={2000} value={notes} onChange={(e) => setNotes(e.target.value)} /></label>
           </section>
+
+          {/* نمط التصنيع والتكاليف المعتمدة (MFG-DEC-01 & 04 & 06) — نُقل إلى أعلى النموذج (Phase 4.5 T1) */}
 
           {submitError && <p className="field-error" role="alert">{submitError}</p>}
           <div className="modal-footer">

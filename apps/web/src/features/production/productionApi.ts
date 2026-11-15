@@ -98,6 +98,13 @@ export interface OrderMaterialSnapshot {
   discrepancy_quantity: number;
   status: string;
   notes: string;
+  supplied_by?: 'customer' | 'factory';
+  commercial_treatment?: 'included_in_service_fee' | 'billed_separately';
+  actual_consumed_quantity?: number;
+  actual_waste_quantity?: number;
+  actual_returned_quantity?: number;
+  unit_cost?: number;
+  total_cost?: number;
 }
 
 export interface StageEvent {
@@ -108,6 +115,17 @@ export interface StageEvent {
   actor_name: string;
   timestamp: string;
   notes: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  expected_duration_minutes?: number;
+  elapsed_minutes?: number;
+  working_minutes?: number;
+  is_working_time_provisional?: boolean;
+  is_skipped?: boolean;
+  skip_reason?: string | null;
+  delay_reason?: string | null;
+  delay_notes?: string | null;
+  is_bottleneck?: boolean;
 }
 
 export interface StageHistoryEvent {
@@ -203,6 +221,28 @@ export interface ProductionOrder {
   returns_awaiting_resolution?: number;
   returns_pending_declared_by?: string[];
   returns_pending_received_by?: string[];
+  manufacturing_type?: 'internal' | 'external';
+  customer_id?: string | null;
+  customer_name?: string | null;
+  labor_costing_method?: 'piece_based' | 'time_based';
+  labor_rate?: number;
+  labor_hours?: number;
+  allowed_waste_pct?: number;
+  actual_waste_pct?: number;
+  excess_waste_qty?: number;
+  excess_waste_cost?: number;
+  overhead_allocation_basis?: 'produced_pieces' | 'labor_hours' | 'machine_hours' | null;
+  allocated_overhead_rate?: number;
+  planned_material_cost?: number;
+  actual_material_cost?: number;
+  actual_labor_cost?: number;
+  actual_overhead_cost?: number;
+  total_actual_cost?: number;
+  unit_manufacturing_cost?: number;
+  agreed_service_price?: number;
+  excess_waste_settlement_status?: 'pending_review' | 'approved_by_factory' | 'claimed_from_customer' | 'waived';
+  cost_calculated_at?: string | null;
+  cost_calculated_by?: string | null;
   items?: ProductionOrderItem[];
   materials: OrderMaterialSnapshot[];
   stage_events: StageEvent[];
@@ -267,6 +307,14 @@ export interface OrderCreatePayload {
   }>;
   assigned_to?: string;
   notes?: string;
+  manufacturing_type?: 'internal' | 'external';
+  customer_id?: string | null;
+  labor_costing_method?: 'piece_based' | 'time_based';
+  labor_rate?: number;
+  labor_hours?: number;
+  allowed_waste_pct?: number;
+  overhead_allocation_basis?: 'produced_pieces' | 'labor_hours' | 'machine_hours' | null;
+  allocated_overhead_rate?: number;
 }
 
 export interface ReceiptConfirmPayload {
@@ -568,11 +616,23 @@ export async function receiveMaterialsApi(
   });
 }
 
-export async function updateStageApi(orderId: string, stageName: string, status: string, notes: string = ''): Promise<StageEvent> {
+export async function updateStageApi(
+  orderId: string,
+  stageName: string,
+  status: string,
+  notes: string = '',
+  delayReason?: string,
+  delayNotes?: string
+): Promise<StageEvent> {
   return apiClient.request<StageEvent>(`/api/v1/production/orders/${orderId}/stages/${stageName}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status, notes }),
+    body: JSON.stringify({
+      status,
+      notes,
+      delay_reason: delayReason || undefined,
+      delay_notes: delayNotes || undefined,
+    }),
   });
 }
 
@@ -849,3 +909,639 @@ export async function closeProductionOrderApi(
     body: JSON.stringify(payload),
   });
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// مطالبات عجز استلام خامات الورشة (Transfer Discrepancy Claims - Phase 3)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** مطالبة عجز استلام — تطابق TransferDiscrepancyClaimRead في apps/api/app/modules/production/schemas.py */
+export interface TransferDiscrepancyClaimRead {
+  id: string;
+  claim_number: string;
+  transfer_id: string;
+  transfer_number: string;
+  transfer_line_id: string;
+  order_id: string;
+  order_number: string;
+  item_id: string;
+  item_name_ar: string;
+  item_code: string;
+  unit_id: string;
+  unit_name_ar: string;
+  dispatched_quantity: number;
+  received_quantity: number;
+  discrepancy_quantity: number;
+  unit_cost: number | string;
+  total_cost: number | string;
+  status: string;
+  status_ar: string;
+  claimed_by: string;
+  claimed_at: string;
+  claim_notes: string;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  resolution_notes: string;
+  created_at: string;
+}
+
+/** تسميات الحالات — مطابقة لـ DISCREPANCY_CLAIM_STATUS_AR في الخادم (لا حالات أخرى مدعومة) */
+export const DISCREPANCY_CLAIM_STATUS_AR: Record<string, string> = {
+  pending_investigation: 'معلقة · بانتظار مراجعة وحسم أمين المخزن',
+  accepted_transit_loss: 'معتمدة · عجز نقل وفقد مبرر',
+  accepted_measurement_error: 'معتمدة · خطأ كيل وقياس عند الصرف',
+  rejected_under_carrier_liability: 'مرفوضة · مسؤولية الناقل/المسؤول الميداني',
+};
+
+/** شارة مختصرة للحالة */
+export const DISCREPANCY_CLAIM_STATUS_BADGE: Record<string, string> = {
+  pending_investigation: 'معلقة',
+  accepted_transit_loss: 'معتمدة · عجز نقل',
+  accepted_measurement_error: 'معتمدة · خطأ قياس',
+  rejected_under_carrier_liability: 'مرفوضة',
+};
+
+/**
+ * القرارات المدعومة فعلياً في الخادم فقط (Literal في TransferDiscrepancyClaimResolveRequest
+ * وتحقق valid_decisions في service.resolve_discrepancy_claim) — لا تُعرض غيرها.
+ * كل قرار مع أثره المخزني كما ينفذه الخادم (StockLedgerEntry entry_type="claim_settlement").
+ */
+export const DISCREPANCY_CLAIM_DECISIONS = [
+  {
+    value: 'accepted_transit_loss',
+    label: 'قبول · عجز نقل وفقد مبرر',
+    impact: 'يُثبت الفرق كعجز نقل مبرر: يسوّي الخادم رصيد الفرق المفتوح في سجل الحركات ويُحمّل كلفته على مصروف عجز النقل (5200/5220). لا تُعاد الكميات للمخزن.',
+  },
+  {
+    value: 'accepted_measurement_error',
+    label: 'قبول · خطأ كيل وقياس عند الصرف',
+    impact: 'الكميات المرسلة كانت خاطئة القياس: يسوّي الخادم رصيد الفرق المفتوح في سجل الحركات بلا تعويض من أحد، والرصيد الورشي يبقى كما استُلم فعلياً.',
+  },
+  {
+    value: 'rejected_under_carrier_liability',
+    label: 'رفض · مسؤولية الناقل/المسؤول الميداني',
+    impact: 'يُسجل القرار بالرفض وتُحمّل مسؤولية الفرق على الناقل أو المسؤول الميداني، ويسوّي الخادم رصيد الفرق المفتوح في سجل الحركات.',
+  },
+] as const;
+
+export type DiscrepancyClaimDecision = (typeof DISCREPANCY_CLAIM_DECISIONS)[number]['value'];
+
+/** جلب سجل المطالبات مع تصفية اختيارية بالحالة/الأمر (GET /production/discrepancy-claims) */
+export async function fetchDiscrepancyClaims(
+  filters: { status?: string; order_id?: string; limit?: number; offset?: number } = {},
+): Promise<TransferDiscrepancyClaimRead[]> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  if (filters.order_id) params.set('order_id', filters.order_id);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  if (filters.offset) params.set('offset', String(filters.offset));
+  const qs = params.toString();
+  return apiClient.request<TransferDiscrepancyClaimRead[]>(`/api/v1/production/discrepancy-claims${qs ? `?${qs}` : ''}`);
+}
+
+/** مطالبات أمر تشغيل محدد (GET /production/orders/{id}/discrepancy-claims) */
+export async function fetchOrderDiscrepancyClaims(orderId: string): Promise<TransferDiscrepancyClaimRead[]> {
+  return apiClient.request<TransferDiscrepancyClaimRead[]>(`/api/v1/production/orders/${orderId}/discrepancy-claims`);
+}
+
+/**
+ * حسم مطالبة (POST /production/discrepancy-claims/{id}/resolve).
+ * الخادم وحده يسجل claim_settlement ويحدّث الأرصدة؛ Maker-Checker مطبق خادمياً:
+ * لا يجوز لمن أثبت العجز (claimed_by) الحسم، والقرارات غير الثلاثة تُرفض.
+ */
+export async function resolveDiscrepancyClaimApi(
+  claimId: string,
+  payload: { decision: DiscrepancyClaimDecision; resolution_notes: string },
+  idempotencyKey?: string,
+): Promise<TransferDiscrepancyClaimRead> {
+  return apiClient.request<TransferDiscrepancyClaimRead>(`/api/v1/production/discrepancy-claims/${claimId}/resolve`, {
+    method: 'POST',
+    headers: jsonHeaders(idempotencyKey),
+    body: JSON.stringify(payload),
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// سلة طلبات العملاء غير المخططة (Demand Pool & Aggregation - Phase 4)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** بند طلب عميل غير مخطط — مطابق لـ DemandPoolItemRead في الخادم */
+export interface DemandPoolItemRead {
+  customer_order_line_id: string;
+  customer_order_id: string;
+  customer_order_number: string;
+  customer_id: string;
+  customer_name: string;
+  product_id: string;
+  product_name: string;
+  variant_id: string;
+  numeric_size?: number | null;
+  letter_size?: string | null;
+  season: string;
+  variant_label: string;
+  ordered_quantity: number;
+  planned_quantity: number;
+  unplanned_quantity: number;
+  order_date: string;
+  expected_delivery_at?: string | null;
+}
+
+/** تخصيص بند طلب ضمن أمر مجمع */
+export interface DemandAllocationItem {
+  customer_order_line_id: string;
+  allocated_quantity: number;
+}
+
+/** حصة عميل في الأمر المجمع */
+export interface DemandCustomerShareItem {
+  customer_id: string;
+  customer_name: string;
+  customer_order_id: string;
+  customer_order_number: string;
+  customer_order_line_id: string;
+  allocated_quantity: number;
+  percentage: number;
+}
+
+/** احتياج خامة للامر المجمع مقابل الرصيد المتاح بمخزن الخامات */
+export interface DemandMaterialRequirementItem {
+  item_id: string;
+  item_code: string;
+  item_name_ar: string;
+  unit_id: string;
+  unit_name_ar: string;
+  quantity_per_piece: number;
+  required_quantity: number;
+  available_quantity: number;
+  shortage_quantity: number;
+  is_sufficient: boolean;
+}
+
+/** نتيجة المعاينة — مطابقة لـ DemandMaterialsPreviewResponse في الخادم */
+export interface DemandMaterialsPreviewResponse {
+  product_id: string;
+  product_name: string;
+  variant_id: string;
+  variant_label: string;
+  total_target_quantity: number;
+  template_version_id?: string | null;
+  customer_shares: DemandCustomerShareItem[];
+  materials: DemandMaterialRequirementItem[];
+  all_materials_available: boolean;
+}
+
+/** تخصيص طلب عميل على أمر تشغيل — مطابق لـ ProductionOrderDemandRead في الخادم */
+export interface ProductionOrderDemandRead {
+  id: string;
+  production_order_id: string;
+  customer_order_line_id: string;
+  customer_order_id: string;
+  customer_order_number: string;
+  customer_id: string;
+  customer_name: string;
+  product_id: string;
+  variant_id: string;
+  allocated_quantity: number;
+  fulfilled_quantity: number;
+  remaining_quantity: number;
+  fulfillment_pct: number;
+  notes: string;
+  created_at: string;
+}
+
+/** سلة الطلبات غير المخططة مع تصفية اختيارية (GET /production/demand-pool) */
+export async function fetchDemandPool(
+  filters: { product_id?: string; variant_id?: string; customer_id?: string } = {},
+): Promise<DemandPoolItemRead[]> {
+  const params = new URLSearchParams();
+  if (filters.product_id) params.set('product_id', filters.product_id);
+  if (filters.variant_id) params.set('variant_id', filters.variant_id);
+  if (filters.customer_id) params.set('customer_id', filters.customer_id);
+  const qs = params.toString();
+  return apiClient.request<DemandPoolItemRead[]>(`/api/v1/production/demand-pool${qs ? `?${qs}` : ''}`);
+}
+
+/** معاينة التجميع: حصص العملاء وصافي احتياج الخامات والعجز (POST /production/demand-pool/preview) */
+export async function previewDemandAggregation(items: DemandAllocationItem[]): Promise<DemandMaterialsPreviewResponse> {
+  return apiClient.request<DemandMaterialsPreviewResponse>('/api/v1/production/demand-pool/preview', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({ items }),
+  });
+}
+
+/**
+ * إنشاء أمر تشغيل مجمع (POST /production/orders/aggregate) — بصلاحية production:orders:create.
+ * الخادم يتحقق من توافق الموديل والمقاس ومن عدم تجاوز المتبقي (409) ويحفظ تخصيصات كل عميل.
+ */
+export async function createAggregatedOrderApi(
+  payload: {
+    items: DemandAllocationItem[];
+    template_version_id?: string | null;
+    season?: string | null;
+    notes?: string;
+  },
+  idempotencyKey?: string,
+): Promise<ProductionOrder> {
+  return apiClient.request<ProductionOrder>('/api/v1/production/orders/aggregate', {
+    method: 'POST',
+    headers: jsonHeaders(idempotencyKey),
+    body: JSON.stringify(payload),
+  });
+}
+
+/** تخصيصات طلبات العملاء المرتبطة بأمر التشغيل (GET /production/orders/{id}/demands) */
+export async function fetchOrderDemands(orderId: string): Promise<ProductionOrderDemandRead[]> {
+  return apiClient.request<ProductionOrderDemandRead[]>(`/api/v1/production/orders/${orderId}/demands`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// خامات العملاء والتكلفة (Customer Materials & Costing - Phase 6)
+// ═════════════════════════════════════════════════════════════════════════════
+
+export interface CustomerMaterialReceiptLine {
+  id: string;
+  receipt_id: string;
+  item_id: string;
+  item_code: string;
+  item_name_ar: string;
+  unit_id: string;
+  unit_name: string;
+  quantity_received: number;
+  quantity_consumed: number;
+  quantity_wasted: number;
+  quantity_returned: number;
+  quantity_remaining: number;
+  unit_cost_estimate: number;
+  order_id?: string | null;
+  notes: string;
+}
+
+export interface CustomerMaterialReceipt {
+  id: string;
+  receipt_number: string;
+  customer_id: string;
+  customer_name: string;
+  received_date: string;
+  received_by: string;
+  status: string;
+  notes: string;
+  created_at: string;
+  lines: CustomerMaterialReceiptLine[];
+}
+
+export interface CustomerMaterialReceiptLineCreatePayload {
+  item_id: string;
+  unit_id: string;
+  quantity_received: number;
+  unit_cost_estimate?: number;
+  order_id?: string | null;
+  notes?: string;
+}
+
+export interface CustomerMaterialReceiptCreatePayload {
+  customer_id: string;
+  received_date?: string;
+  lines: CustomerMaterialReceiptLineCreatePayload[];
+  notes?: string;
+}
+
+export interface CustomerMaterialReturn {
+  id: string;
+  return_number: string;
+  customer_id: string;
+  customer_name: string;
+  receipt_line_id: string;
+  item_name_ar: string;
+  quantity: number;
+  returned_date: string;
+  returned_by: string;
+  notes: string;
+}
+
+export interface CustomerMaterialReturnCreatePayload {
+  customer_id: string;
+  receipt_line_id: string;
+  quantity: number;
+  notes?: string;
+}
+
+export interface CustomerMaterialBalanceItem {
+  customer_id: string;
+  customer_name: string;
+  item_id: string;
+  item_code: string;
+  item_name_ar: string;
+  unit_name: string;
+  total_received: number;
+  total_consumed: number;
+  total_wasted: number;
+  total_returned: number;
+  current_balance: number;
+  active_receipt_lines_count: number;
+}
+
+export interface OrderMaterialConsumptionPayload {
+  items: Array<{
+    material_line_id: string;
+    consumed_quantity: number;
+    waste_quantity: number;
+    returned_quantity: number;
+    notes?: string;
+  }>;
+  notes?: string;
+}
+
+export interface OrderCostCalculationPayload {
+  labor_costing_method?: 'piece_based' | 'time_based';
+  labor_rate?: number;
+  labor_hours?: number;
+  overhead_allocation_basis?: 'produced_pieces' | 'labor_hours' | 'machine_hours' | null;
+  allocated_overhead_rate?: number;
+  agreed_service_price?: number;
+}
+
+export async function fetchCustomerMaterialReceipts(customerId?: string): Promise<CustomerMaterialReceipt[]> {
+  const query = customerId ? `?customer_id=${customerId}` : '';
+  return apiClient.request<CustomerMaterialReceipt[]>(`/api/v1/production/customer-materials/receipts${query}`);
+}
+
+export async function createCustomerMaterialReceipt(payload: CustomerMaterialReceiptCreatePayload): Promise<CustomerMaterialReceipt> {
+  return apiClient.request<CustomerMaterialReceipt>('/api/v1/production/customer-materials/receipts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCustomerMaterialBalances(customerId?: string): Promise<CustomerMaterialBalanceItem[]> {
+  const query = customerId ? `?customer_id=${customerId}` : '';
+  return apiClient.request<CustomerMaterialBalanceItem[]>(`/api/v1/production/customer-materials/balance${query}`);
+}
+
+export async function createCustomerMaterialReturn(payload: CustomerMaterialReturnCreatePayload): Promise<CustomerMaterialReturn> {
+  return apiClient.request<CustomerMaterialReturn>('/api/v1/production/customer-materials/returns', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function logOrderMaterialConsumption(orderId: string, payload: OrderMaterialConsumptionPayload): Promise<ProductionOrder> {
+  return apiClient.request<ProductionOrder>(`/api/v1/production/orders/${orderId}/material-consumption`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function calculateOrderCosts(orderId: string, payload: OrderCostCalculationPayload): Promise<ProductionOrder> {
+  return apiClient.request<ProductionOrder>(`/api/v1/production/orders/${orderId}/calculate-costs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+// ─── T6 — بطاقة التكلفة والربحية وتقارير ربحية التشغيل ──────────────────────────────
+
+export interface JobCostSheetMaterialLine {
+  item_id: string;
+  item_code: string;
+  item_name_ar: string;
+  unit_name_ar: string;
+  ownership: 'factory' | 'customer';
+  commercial_treatment: string;
+  planned_quantity: number;
+  dispatched_quantity: number;
+  received_quantity: number;
+  actual_consumed_quantity: number;
+  actual_waste_quantity: number;
+  actual_returned_quantity: number;
+  unit_cost: number;
+  total_cost: number;
+  unit_cost_estimate: number;
+}
+
+export interface JobCostSheetLaborDetail {
+  method: string;
+  method_label_ar: string;
+  rate: number;
+  quantity_basis: number;
+  total_cost: number;
+}
+
+export interface JobCostSheetOverheadDetail {
+  basis: string | null;
+  basis_label_ar: string;
+  rate: number;
+  base_quantity: number;
+  total_cost: number;
+}
+
+export interface JobCostSheetWasteAnalysis {
+  allowed_waste_pct: number;
+  allowed_waste_qty: number;
+  actual_waste_qty: number;
+  actual_waste_pct: number;
+  excess_waste_qty: number;
+  excess_waste_cost: number;
+  is_excess: boolean;
+  settlement_status: string;
+  settlement_status_ar: string;
+}
+
+export interface JobCostSheet {
+  order_id: string;
+  order_number: string;
+  manufacturing_type: 'internal' | 'external';
+  manufacturing_type_label_ar: string;
+  customer_id?: string | null;
+  customer_name?: string | null;
+  product_name_ar: string;
+  variant_info: string;
+  target_quantity: number;
+  status: string;
+  status_label_ar: string;
+  factory_materials: JobCostSheetMaterialLine[];
+  customer_materials: JobCostSheetMaterialLine[];
+  total_factory_material_cost: number;
+  total_customer_material_cost: number;
+  labor: JobCostSheetLaborDetail;
+  overhead: JobCostSheetOverheadDetail;
+  waste_analysis: JobCostSheetWasteAnalysis;
+  total_manufacturing_cost: number;
+  unit_manufacturing_cost: number;
+  agreed_service_price: number;
+  expected_revenue: number;
+  gross_margin: number;
+  gross_margin_pct: number;
+  can_view_prices: boolean;
+  cost_calculated_at?: string | null;
+  cost_calculated_by?: string | null;
+}
+
+export interface WasteSettlementPayload {
+  decision: 'pending_review' | 'approved_by_factory' | 'claimed_from_customer' | 'waived';
+  notes?: string;
+}
+
+export interface ManufacturingProfitabilityItem {
+  order_id: string;
+  order_number: string;
+  manufacturing_type: 'internal' | 'external';
+  manufacturing_type_ar: string;
+  customer_name?: string | null;
+  product_name_ar: string;
+  variant_info: string;
+  target_quantity: number;
+  status: string;
+  factory_material_cost: number;
+  labor_cost: number;
+  overhead_cost: number;
+  total_cost: number;
+  unit_cost: number;
+  service_price: number;
+  revenue: number;
+  gross_margin: number;
+  gross_margin_pct: number;
+  excess_waste_cost: number;
+  waste_settlement_status: string;
+}
+
+export interface ManufacturingProfitabilityReport {
+  generated_at: string;
+  total_orders_count: number;
+  internal_orders_count: number;
+  cmt_orders_count: number;
+  total_factory_cost: number;
+  total_revenue: number;
+  total_gross_margin: number;
+  overall_gross_margin_pct: number;
+  cmt_total_service_fee: number;
+  cmt_total_cost: number;
+  cmt_net_margin: number;
+  items: ManufacturingProfitabilityItem[];
+}
+
+export async function fetchOrderCostSheet(orderId: string): Promise<JobCostSheet> {
+  return apiClient.request<JobCostSheet>(`/api/v1/production/orders/${orderId}/cost-sheet`);
+}
+
+export async function updateWasteSettlement(orderId: string, payload: WasteSettlementPayload): Promise<ProductionOrder> {
+  return apiClient.request<ProductionOrder>(`/api/v1/production/orders/${orderId}/waste-settlement`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchManufacturingProfitability(params?: {
+  date_from?: string;
+  date_to?: string;
+  manufacturing_type?: string;
+  customer_id?: string;
+}): Promise<ManufacturingProfitabilityReport> {
+  const q = new URLSearchParams();
+  if (params?.date_from) q.append('date_from', params.date_from);
+  if (params?.date_to) q.append('date_to', params.date_to);
+  if (params?.manufacturing_type) q.append('manufacturing_type', params.manufacturing_type);
+  if (params?.customer_id) q.append('customer_id', params.customer_id);
+  const qs = q.toString() ? `?${q.toString()}` : '';
+  return apiClient.request<ManufacturingProfitabilityReport>(`/api/v1/reports/manufacturing-profitability${qs}`);
+}
+
+// ─── Phase 7 — تقويم المصنع وتوقيت المراحل والاختناقات ──────────────────────────────
+
+export interface FactoryCalendarConfig {
+  id: string;
+  shift_name: string;
+  shift_start_time: string;
+  shift_end_time: string;
+  working_days: string;
+  weekly_holidays: string;
+  is_active: boolean;
+  is_approved: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FactoryCalendarConfigUpdate {
+  shift_name?: string;
+  shift_start_time?: string;
+  shift_end_time?: string;
+  working_days?: string;
+  weekly_holidays?: string;
+  is_active?: boolean;
+  is_approved?: boolean;
+}
+
+export interface BottleneckStageMetric {
+  stage_name: string;
+  stage_name_ar: string;
+  total_completed_orders: number;
+  avg_expected_minutes: number;
+  avg_working_minutes: number;
+  avg_elapsed_minutes: number;
+  variance_minutes: number;
+  bottleneck_count: number;
+  bottleneck_percentage: number;
+}
+
+export interface BottleneckAnalysisResponse {
+  stages: BottleneckStageMetric[];
+  top_delay_reasons: Array<{ reason_code: string; reason_name_ar: string; count: number }>;
+  active_bottlenecks_count: number;
+  active_bottlenecks: Array<{
+    order_id: string;
+    order_number: string;
+    stage_name: string;
+    stage_name_ar: string;
+    expected_minutes: number;
+    current_working_minutes: number;
+    delay_reason: string;
+    delay_reason_ar: string;
+  }>;
+  calendar_configured: boolean;
+  calendar_approved: boolean;
+}
+
+export async function fetchFactoryCalendar(): Promise<FactoryCalendarConfig> {
+  return apiClient.request<FactoryCalendarConfig>('/api/v1/production/calendar');
+}
+
+export async function updateFactoryCalendar(payload: FactoryCalendarConfigUpdate): Promise<FactoryCalendarConfig> {
+  return apiClient.request<FactoryCalendarConfig>('/api/v1/production/calendar', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function skipProductionStage(
+  orderId: string,
+  stageName: string,
+  skipReason: string
+): Promise<StageEvent> {
+  return apiClient.request<StageEvent>(`/api/v1/production/orders/${orderId}/stages/${stageName}/skip`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ skip_reason: skipReason }),
+  });
+}
+
+export async function adjustStageDuration(
+  orderId: string,
+  stageName: string,
+  expectedDurationMinutes: number
+): Promise<StageEvent> {
+  return apiClient.request<StageEvent>(`/api/v1/production/orders/${orderId}/stages/${stageName}/duration`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expected_duration_minutes: expectedDurationMinutes }),
+  });
+}
+
+export async function fetchBottleneckAnalysis(): Promise<BottleneckAnalysisResponse> {
+  return apiClient.request<BottleneckAnalysisResponse>('/api/v1/production/bottleneck-analysis');
+}
+

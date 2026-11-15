@@ -11,7 +11,9 @@ import {
   fetchTemplates,
 } from './productionApi';
 import { NewOrderModal } from './NewOrderModal';
-import { OrderDetailModal } from './OrderDetailModal';
+import { OrderDetailsPage } from './OrderDetailsPage';
+import { CustomerMaterialsModal } from './CustomerMaterialsModal';
+import { BottleneckCalendarModal } from './BottleneckCalendarModal';
 import { nextStep, ORDER_STATUS_LABEL } from './orderWorkflow';
 import type { NavFocus, OrderDetailTab } from '@/lib/navigation';
 import { ApiError } from '@/lib/api';
@@ -48,6 +50,9 @@ interface ProductionOrdersViewProps {
 export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focus, onFocusHandled }) => {
   const { hasPermission, user } = useAuth();
   const canCreateOrder = hasPermission('production:orders:create');
+  const canManageStages = hasPermission('production:stages:manage');
+  // أدوات إدارة الإنتاج (خامات العملاء، التقويم والاختناقات): مدير الإنتاج والمدير العام فقط (Phase 4.5 T1)
+  const canManageProduction = hasPermission('production:orders:manage');
 
   const [orders, setOrders] = useState<ProductionOrder[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -61,6 +66,8 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
 
   // حالة النوافذ المنبثقة
   const [isNewModalOpen, setIsNewModalOpen] = useState<boolean>(false);
+  const [isCustomerMaterialsOpen, setIsCustomerMaterialsOpen] = useState<boolean>(false);
+  const [isBottleneckCalendarOpen, setIsBottleneckCalendarOpen] = useState<boolean>(false);
   const [selectedOrder, setSelectedOrder] = useState<ProductionOrder | null>(null);
   const [selectedTab, setSelectedTab] = useState<OrderDetailTab | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -192,6 +199,26 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
   const inProdOrders = orders.filter((o) => o.status === 'in_production' || o.status === 'manufacturing_completed').length;
   const completedOrders = orders.filter((o) => ['completed', 'receipt_completed', 'closed'].includes(o.status)).length;
 
+  if (selectedOrder) {
+    return (
+      <div className="production-view-container" dir="rtl">
+        <OrderDetailsPage
+          key={`${selectedOrder.id}:${selectedTab ?? ''}`}
+          order={selectedOrder}
+          initialTab={selectedTab}
+          onBack={() => {
+            setSelectedOrder(null);
+            setSelectedTab(undefined);
+          }}
+          onOrderUpdated={handleOrderUpdated}
+          catalogItems={catalogItems}
+          isCatalogLoading={isCatalogLoading}
+          catalogError={catalogError}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="production-view-container" dir="rtl">
       {/* ── شريط المراحل الخمس الرئيسي ────────────────────────────── */}
@@ -296,6 +323,28 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
           >
             {isRefreshing ? 'جاري التحديث...' : '🔄 تحديث'}
           </button>
+          {canManageProduction && (
+            <button
+              type="button"
+              className="tool"
+              onClick={() => setIsCustomerMaterialsOpen(true)}
+              title="خامات الأمانة المستلمة من العملاء للتشغيل للغير (MFG-DEC-02)"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              📦 خامات العملاء والأمانات
+            </button>
+          )}
+          {canManageProduction && (
+            <button
+              type="button"
+              className="tool"
+              onClick={() => setIsBottleneckCalendarOpen(true)}
+              title="تحليل الاختناقات وتقويم المصنع (TIME-DEC-01..04)"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              ⏱️ تقويم واختناقات التشغيل
+            </button>
+          )}
           {canCreateOrder && (
             <button
               className="tool primary"
@@ -346,9 +395,13 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
             ) : (
               <div className="batch-list">
                 {filteredOrders.map((ord) => {
-                  const activeStage = ord.stage_events.find((s) => s.status === 'in_progress');
-                  const completedCount = ord.stage_events.filter((s) => s.status === 'completed').length;
-                  const progressPct = Math.round((completedCount / 5) * 100);
+                  const activeStage = ord.stage_events.find((s) => s.status === 'in_progress' && !s.is_skipped);
+                  // عدّاد المراحل (Phase 4.5 T1): المنفذ فعلياً = مكتملة أو متخطاة رسمياً؛
+                  // والمقام = المراحل المطلوبة بعد استبعاد المتخطاة (لا مقام ثابت /5).
+                  const doneCount = ord.stage_events.filter((s) => s.status === 'completed' || s.is_skipped).length;
+                  const skippedCount = ord.stage_events.filter((s) => s.is_skipped).length;
+                  const requiredCount = Math.max(0, 5 - skippedCount);
+                  const progressPct = requiredCount > 0 ? Math.min(100, Math.round((doneCount / requiredCount) * 100)) : 100;
                   const sizes = (ord.items && ord.items.length > 0 ? ord.items : [{ variant_info: ord.variant_info, target_quantity: ord.target_quantity }])
                     .map((it) => `مقاس ${sizeOf(it.variant_info)}: ${Number(it.target_quantity)}`)
                     .join('، ');
@@ -362,6 +415,21 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
                           {ord.product_name_ar}
                         </div>
                         <div className="batch-variant-tag">{sizes} — {seasonAr(ord.season)}</div>
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px', flexWrap: 'wrap' }}>
+                          <span className={`badge ${ord.manufacturing_type === 'external' ? 'badge--primary' : 'badge--secondary'}`} style={{ fontSize: '0.75rem' }}>
+                            {ord.manufacturing_type === 'external' ? `تشغيل للغير (عميل: ${ord.customer_name || 'عميل'})` : 'تصنيع داخلي'}
+                          </span>
+                          {ord.excess_waste_qty && Number(ord.excess_waste_qty) > 0 ? (
+                            <span className="badge badge--danger" style={{ fontSize: '0.75rem' }} title={`هالك زائد: ${ord.excess_waste_qty} متر`}>
+                              ⚠️ هالك زائد: {Number(ord.excess_waste_qty)}
+                            </span>
+                          ) : null}
+                          {ord.unit_manufacturing_cost && Number(ord.unit_manufacturing_cost) > 0 ? (
+                            <span className="badge badge--info" style={{ fontSize: '0.75rem' }}>
+                              تكلفة: {Number(ord.unit_manufacturing_cost).toFixed(2)} ج/قطعة
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
 
                       <div className="batch-progress">
@@ -371,12 +439,17 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
                               ? 'مغلق'
                               : activeStage
                               ? `جارٍ الآن: ${STAGE_AR[activeStage.stage_name] || activeStage.stage_name}`
-                              : completedCount === 5
-                              ? 'اكتملت المراحل الخمس'
-                              : completedCount > 0
-                              ? `أُنجزت ${completedCount} من 5 مراحل`
+                              : requiredCount > 0 && doneCount >= requiredCount
+                              ? 'اكتملت جميع المراحل المطلوبة'
+                              : doneCount > 0
+                              ? `أُنجزت ${doneCount} من ${requiredCount} مراحل`
                               : 'لم تبدأ المراحل'}
                           </span>
+                          {skippedCount > 0 && ord.status !== 'closed' && (
+                            <span style={{ color: 'var(--text-light, #94a3b8)' }} title="مراحل مخطاة رسمياً (TIME-DEC-03)">
+                              · تم تخطي {skippedCount}
+                            </span>
+                          )}
                           <span>{Number(ord.target_quantity)} قطعة</span>
                         </div>
                         <div className="progress">
@@ -430,6 +503,20 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
         </aside>
       </div>
 
+      {/* النافذة المنبثقة لخامات العملاء الموردة أمانة (Phase 6) */}
+      <CustomerMaterialsModal
+        isOpen={isCustomerMaterialsOpen}
+        onClose={() => setIsCustomerMaterialsOpen(false)}
+        catalogItems={catalogItems}
+      />
+
+      {/* النافذة المنبثقة لتحليل الاختناقات وتقويم المصنع (Phase 7) */}
+      <BottleneckCalendarModal
+        isOpen={isBottleneckCalendarOpen}
+        onClose={() => setIsBottleneckCalendarOpen(false)}
+        canManageStages={canManageStages}
+      />
+
       {/* النافذة المنبثقة لإنشاء أمر جديد */}
       <NewOrderModal
         isOpen={isNewModalOpen}
@@ -441,21 +528,6 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
         isCatalogLoading={isCatalogLoading}
         catalogError={catalogError}
       />
-
-      {/* النافذة المنبثقة لتفاصيل الأمر ولقطة الخامات والمراحل */}
-      {selectedOrder && (
-        <OrderDetailModal
-          key={`${selectedOrder.id}:${selectedTab ?? ''}`}
-          order={selectedOrder}
-          initialTab={selectedTab}
-          isOpen={Boolean(selectedOrder)}
-          onClose={() => setSelectedOrder(null)}
-          onOrderUpdated={handleOrderUpdated}
-          catalogItems={catalogItems}
-          isCatalogLoading={isCatalogLoading}
-          catalogError={catalogError}
-        />
-      )}
     </div>
   );
 };
