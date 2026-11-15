@@ -39,33 +39,54 @@ def test_opening_balances_schema_rejects_unbalanced_entry():
             accounting_start_date=date(2026, 11, 1),
             treasury_balance=Decimal("50000.00"),
             bank_balance=Decimal("100000.00"),
-            accounts_receivable=Decimal("20000.00"),
-            # Total Assets = 170,000
-            accounts_payable=Decimal("30000.00"),
+            # Total Assets = 150,000
             paid_in_capital=Decimal("120000.00"),
-            # Total Liab + Capital = 150,000 (Difference = 20,000)
+            # Total Liab + Capital = 120,000 (Difference = 30,000)
         )
     assert "القيد الافتتاحي غير متوازن" in str(exc_info.value)
-    assert "الفارق: 20000.00" in str(exc_info.value)
+    assert "الفارق: 30000.00" in str(exc_info.value)
 
 
 def test_opening_balances_schema_accepts_balanced_entry():
-    """قبول القيد الافتتاحي المتوازن تماماً (الأصول = الالتزامات + رأس المال)."""
+    """قبول القيد الافتتاحي المتوازن تماماً المقتصر على النقدية والبنك والعهد ورأس المال."""
     ob = OpeningBalancesCreate(
         accounting_start_date=date(2026, 11, 1),
         treasury_balance=Decimal("50000.00"),
         bank_balance=Decimal("100000.00"),
         custody_balance=Decimal("10000.00"),
-        accounts_receivable=Decimal("40000.00"),
-        raw_materials_inventory=Decimal("80000.00"),
-        wip_inventory=Decimal("20000.00"),
-        finished_goods_inventory=Decimal("50000.00"),
-        # Total Assets = 350,000.00
-        accounts_payable=Decimal("70000.00"),
-        paid_in_capital=Decimal("280000.00"),
-        # Total Liabilities + Equity = 350,000.00
+        paid_in_capital=Decimal("160000.00"),
     )
     assert ob.accounting_start_date == date(2026, 11, 1)
+
+
+@pytest.mark.parametrize(
+    "prohibited_field,field_name_ar",
+    [
+        ("accounts_receivable", "1100 (ذمم العملاء)"),
+        ("raw_materials_inventory", "1210 (مخزون الخامات)"),
+        ("wip_inventory", "1220 (إنتاج تحت التشغيل)"),
+        ("finished_goods_inventory", "1230 (مخزون التام)"),
+        ("accounts_payable", "2100 (ذمم الموردين)"),
+    ],
+)
+def test_opening_balances_schema_rejects_prohibited_subledger_accounts(prohibited_field, field_name_ar):
+    """رفض إدخال أي رصيد للحسابات الخمسة الممنوعة في القيد الافتتاحي العام على مستوى Schema بـ 422."""
+    kwargs = {
+        "accounting_start_date": date(2026, 11, 1),
+        "treasury_balance": Decimal("50000.00"),
+        "paid_in_capital": Decimal("50000.00"),
+        prohibited_field: Decimal("1000.00"),
+    }
+    # موازنة رأس المال حتى لا يفشل بسبب التوازن بل بسبب الحساب المحظور
+    if prohibited_field in ("accounts_receivable", "raw_materials_inventory", "wip_inventory", "finished_goods_inventory"):
+        kwargs["paid_in_capital"] = Decimal("51000.00")
+    elif prohibited_field == "accounts_payable":
+        kwargs["treasury_balance"] = Decimal("51000.00")
+
+    with pytest.raises(ValidationError) as exc_info:
+        OpeningBalancesCreate(**kwargs)
+    assert field_name_ar in str(exc_info.value)
+
 
 
 @pytest.mark.asyncio
@@ -124,7 +145,7 @@ async def test_create_opening_balances_rejects_duplicate():
     with pytest.raises(HTTPException) as exc_info:
         await create_opening_balances(payload, user, session)
     assert exc_info.value.status_code == 409
-    assert "مسبقاً" in exc_info.value.detail
+    assert "قفل الأرصدة الافتتاحية" in exc_info.value.detail or "مسبقاً" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
