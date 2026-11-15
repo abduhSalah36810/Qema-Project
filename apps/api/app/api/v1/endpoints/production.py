@@ -21,9 +21,18 @@ from sqlalchemy.orm import selectinload
 
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.idempotency import execute_idempotent_operation
-from app.core.permissions import require_any_permission, require_permission
+from app.core.permissions import get_user_roles, require_any_permission, require_permission
 from app.db.session import get_db
-from app.modules.finance.ledger_service import post_journal_entry
+from app.modules.finance.ledger_service import post_journal_entry, resolve_expense_code
+from app.modules.finance.schemas import (
+    GeneratePurchaseOrdersRequest,
+    ProductionOrderShortageReport,
+    PurchaseOrderRead,
+)
+from app.modules.finance.purchase_orders import (
+    generate_purchase_orders_from_shortage,
+    get_production_order_shortages,
+)
 from app.modules.production.stock import finished_goods_bucket, order_wip_bucket, stock_balance
 from app.modules.production.service import (
     get_or_create_finished_goods_item,
@@ -50,9 +59,35 @@ from app.modules.production.models import (
     Warehouse,
     WarehouseTransfer,
     WarehouseTransferLine,
+    TransferDiscrepancyClaim,
+    ProductionOrderDemand,
+    CustomerMaterialReceipt,
+    CustomerMaterialReceiptLine,
+    CustomerMaterialReturn,
 )
 from app.modules.production.schemas import (
     CatalogItemRead,
+    CustomerMaterialReceiptCreate,
+    CustomerMaterialReceiptRead,
+    CustomerMaterialReceiptLineRead,
+    CustomerMaterialReturnCreate,
+    CustomerMaterialReturnRead,
+    CustomerMaterialBalanceItem,
+    DemandPoolItemRead,
+    DemandPoolPreviewRequest,
+    DemandAllocationItem,
+    DemandCustomerShareItem,
+    DemandMaterialRequirementItem,
+    DemandMaterialsPreviewResponse,
+    OrderAggregateCreate,
+    ProductionOrderDemandRead,
+    DISCREPANCY_CLAIM_STATUS_AR,
+    TransferDiscrepancyClaimRead,
+    TransferDiscrepancyClaimResolveRequest,
+    OrderMaterialConsumptionLogRequest,
+    OrderCostCalculationRequest,
+    JobCostSheetRead,
+    WasteSettlementUpdateRequest,
     FinishedGoodsReceiptCreate,
     FinishedGoodsReceiptLineRead,
     FinishedGoodsReceiptRead,
@@ -85,6 +120,12 @@ from app.modules.production.schemas import (
     ProductionDefectUpdate,
     StagePerformanceItem,
     StageRollbackRequest,
+    StageSkipRequest,
+    StageDurationAdjustRequest,
+    FactoryCalendarConfigRead,
+    FactoryCalendarConfigUpdate,
+    BottleneckAnalysisResponse,
+    BottleneckStageMetric,
     ExtraIssueCreate,
     ReceiptConfirmRequest,
     StageUpdate,
@@ -105,8 +146,15 @@ from app.modules.production.service import (
     dispatch_order_materials,
     update_production_stage,
     reopen_last_completed_stage,
+    resolve_discrepancy_claim,
 )
 
+from app.modules.production.demand_service import (
+    get_demand_pool,
+    preview_demand_aggregation,
+    create_aggregated_production_order,
+    get_order_demands,
+)
 from app.modules.production.returns import (
     RETURN_STATUS_IN_TRANSIT,
     RETURN_STATUS_PENDING_RESOLUTION,
@@ -127,6 +175,16 @@ from app.modules.production.extra_issue import (
     receive_extra_issue,
 )
 from app.modules.production.bom import active_bom_version, compute_requirements, save_variant_bom, variant_label
+from app.modules.production.customer_materials import (
+    create_customer_material_receipt,
+    list_customer_material_receipts,
+    get_customer_material_balances,
+    create_customer_material_return,
+    log_order_material_consumption,
+    calculate_order_costs,
+    get_job_cost_sheet,
+    update_waste_settlement,
+)
 from app.modules.production.schemas import (
     BomLineRead,
     BomSaveRequest,
@@ -144,7 +202,38 @@ from app.modules.production.schemas import (
     ReturnTransferRead,
 )
 
+from app.modules.production.stage_timing import (
+    get_or_create_active_calendar,
+    update_calendar_config,
+    skip_production_stage,
+    adjust_stage_expected_duration,
+    get_bottleneck_analysis,
+)
+
 router = APIRouter(prefix="/production", tags=["production"])
+
+
+def _map_stage_event(st: ProductionStageEvent) -> ProductionStageEventRead:
+    return ProductionStageEventRead(
+        id=st.id,
+        stage_name=st.stage_name,
+        status=st.status,
+        actor_id=st.actor_id,
+        actor_name=st.actor_name or "",
+        timestamp=st.timestamp,
+        notes=st.notes or "",
+        started_at=st.started_at,
+        completed_at=st.completed_at,
+        expected_duration_minutes=st.expected_duration_minutes or 0,
+        elapsed_minutes=st.elapsed_minutes or 0,
+        working_minutes=st.working_minutes or 0,
+        is_working_time_provisional=st.is_working_time_provisional,
+        is_skipped=st.is_skipped or False,
+        skip_reason=st.skip_reason,
+        delay_reason=st.delay_reason,
+        delay_notes=st.delay_notes,
+        is_bottleneck=st.is_bottleneck or False,
+    )
 
 
 def _defect_read(defect: ProductionDefect) -> ProductionDefectRead:
@@ -450,7 +539,8 @@ async def list_catalog_items(
 
 @router.get("/warehouses", response_model=List[WarehouseRead])
 async def list_warehouses(
-    current_user: AuthenticatedUser = Depends(require_permission("production:orders:view")),
+    # أسماء المخازن الثلاثة فقط (بلا أرصدة)؛ يحتاجها أيضاً من يراجع الجرد ويعتمده
+    current_user: AuthenticatedUser = Depends(require_any_permission("production:orders:view", "inventory:stocktake:view")),
     db: AsyncSession = Depends(get_db),
 ):
     """استعراض المخازن التشغيلية الثلاثة."""
@@ -701,6 +791,54 @@ async def create_order(
     return await get_order_details(order.id, current_user=current_user, db=db)
 
 
+# ─── 4-ب. تجميع طلبات العملاء وتخطيط الاحتياجات (Demand Aggregation - Phase 4) ───
+
+@router.get("/demand-pool", response_model=List[DemandPoolItemRead])
+async def list_demand_pool(
+    product_id: Optional[str] = Query(None, description="تصفية بموديل محدد"),
+    variant_id: Optional[str] = Query(None, description="تصفية بمقاس محدد"),
+    customer_id: Optional[str] = Query(None, description="تصفية بعميل محدد"),
+    current_user: AuthenticatedUser = Depends(require_any_permission(["production:orders:view", "customers:orders:view"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعراض بنود طلبات العملاء المفتوحة غير المخططة القابلة للتجميع في أوامر إنتاج موحدة."""
+    del current_user
+    return await get_demand_pool(db, product_id=product_id, variant_id=variant_id, customer_id=customer_id)
+
+
+@router.post("/demand-pool/preview", response_model=DemandMaterialsPreviewResponse)
+async def preview_demands_aggregation_endpoint(
+    data: DemandPoolPreviewRequest,
+    current_user: AuthenticatedUser = Depends(require_any_permission(["production:orders:view", "customers:orders:view"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """معاينة تجميع طلبات العملاء وحساب نسب الحصص وصافي احتياج الخامات والرصيد المتاح بالمخزن."""
+    del current_user
+    return await preview_demand_aggregation(db, data.items)
+
+
+@router.post("/orders/aggregate", response_model=OrderRead, status_code=status.HTTP_201_CREATED)
+async def create_aggregated_order_endpoint(
+    data: OrderAggregateCreate,
+    current_user: AuthenticatedUser = Depends(require_permission("production:orders:create")),
+    db: AsyncSession = Depends(get_db),
+):
+    """إنشاء أمر تشغيل مجمع يدمج طلبات عملاء متعددة لنفس الموديل والمقاس مع تتبع حصص كل عميل."""
+    order = await create_aggregated_production_order(db, data, creator_id=current_user.id)
+    return await get_order_details(order.id, current_user=current_user, db=db)
+
+
+@router.get("/orders/{order_id}/demands", response_model=List[ProductionOrderDemandRead])
+async def list_order_demands_endpoint(
+    order_id: str,
+    current_user: AuthenticatedUser = Depends(require_any_permission(["production:orders:view", "customers:orders:view"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعراض تفاصيل تخصيصات طلبات العملاء المرتبطة بأمر التشغيل ومتابعة استيفائها."""
+    del current_user
+    return await get_order_demands(db, order_id=order_id)
+
+
 def _return_fields(pending) -> dict:
     if pending is None:
         return {}
@@ -742,6 +880,7 @@ async def list_orders(
         .options(
             selectinload(ProductionOrder.product),
             selectinload(ProductionOrder.variant),
+            selectinload(ProductionOrder.customer),
             selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.item),
             selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.unit),
             selectinload(ProductionOrder.stage_events),
@@ -751,6 +890,8 @@ async def list_orders(
             selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.customer),
             selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.bom_lines),
             selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.template_version),
+            selectinload(ProductionOrder.demands).selectinload(ProductionOrderDemand.customer),
+            selectinload(ProductionOrder.demands).selectinload(ProductionOrderDemand.customer_order),
         )
         .order_by(ProductionOrder.created_at.desc())
     )
@@ -788,15 +929,7 @@ async def list_orders(
             for m in o.materials
         ]
         stages = [
-            ProductionStageEventRead(
-                id=st.id,
-                stage_name=st.stage_name,
-                status=st.status,
-                actor_id=st.actor_id,
-                actor_name=st.actor_name,
-                timestamp=st.timestamp,
-                notes=st.notes or "",
-            )
+            _map_stage_event(st)
             for st in sorted(o.stage_events, key=lambda x: x.timestamp)
         ]
         items = [
@@ -869,6 +1002,7 @@ async def get_order_details(
         .options(
             selectinload(ProductionOrder.product),
             selectinload(ProductionOrder.variant),
+            selectinload(ProductionOrder.customer),
             selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.item),
             selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.unit),
             selectinload(ProductionOrder.stage_events),
@@ -878,6 +1012,8 @@ async def get_order_details(
             selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.customer),
             selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.bom_lines),
             selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.template_version),
+            selectinload(ProductionOrder.demands).selectinload(ProductionOrderDemand.customer),
+            selectinload(ProductionOrder.demands).selectinload(ProductionOrderDemand.customer_order),
         )
         .where(ProductionOrder.id == order_id)
     )
@@ -905,19 +1041,18 @@ async def get_order_details(
             discrepancy_quantity=m.discrepancy_quantity,
             status=m.status,
             notes=m.notes or "",
+            supplied_by=getattr(m, "supplied_by", "factory") or "factory",
+            commercial_treatment=getattr(m, "commercial_treatment", "included_in_service_fee") or "included_in_service_fee",
+            actual_consumed_quantity=float(m.actual_consumed_quantity or 0.0),
+            actual_waste_quantity=float(m.actual_waste_quantity or 0.0),
+            actual_returned_quantity=float(m.actual_returned_quantity or 0.0),
+            unit_cost=m.unit_cost or Decimal("0.0000"),
+            total_cost=m.total_cost or Decimal("0.00"),
         )
         for m in o.materials
     ]
     stages = [
-        ProductionStageEventRead(
-            id=st.id,
-            stage_name=st.stage_name,
-            status=st.status,
-            actor_id=st.actor_id,
-            actor_name=st.actor_name,
-            timestamp=st.timestamp,
-            notes=st.notes or "",
-        )
+        _map_stage_event(st)
         for st in sorted(o.stage_events, key=lambda x: x.timestamp)
     ]
     items = [
@@ -961,6 +1096,28 @@ async def get_order_details(
         assigned_to=o.assigned_to or "",
         created_at=o.created_at,
         notes=o.notes or "",
+        manufacturing_type=getattr(o, "manufacturing_type", "internal") or "internal",
+        customer_id=o.customer_id,
+        customer_name=o.customer.name if getattr(o, "customer", None) else None,
+        labor_costing_method=getattr(o, "labor_costing_method", "piece_based") or "piece_based",
+        labor_rate=o.labor_rate or Decimal("0.00"),
+        labor_hours=o.labor_hours or Decimal("0.00"),
+        allowed_waste_pct=o.allowed_waste_pct or Decimal("1.50"),
+        actual_waste_pct=o.actual_waste_pct or Decimal("0.00"),
+        excess_waste_qty=o.excess_waste_qty or Decimal("0.000"),
+        excess_waste_cost=o.excess_waste_cost or Decimal("0.00"),
+        overhead_allocation_basis=o.overhead_allocation_basis,
+        allocated_overhead_rate=o.allocated_overhead_rate or Decimal("0.00"),
+        planned_material_cost=o.planned_material_cost or Decimal("0.00"),
+        actual_material_cost=o.actual_material_cost or Decimal("0.00"),
+        actual_labor_cost=o.actual_labor_cost or Decimal("0.00"),
+        actual_overhead_cost=o.actual_overhead_cost or Decimal("0.00"),
+        total_actual_cost=o.total_actual_cost or Decimal("0.00"),
+        unit_manufacturing_cost=o.unit_manufacturing_cost or Decimal("0.0000"),
+        agreed_service_price=getattr(o, "agreed_service_price", Decimal("0.00")) or Decimal("0.00"),
+        excess_waste_settlement_status=getattr(o, "excess_waste_settlement_status", "pending_review") or "pending_review",
+        cost_calculated_at=getattr(o, "cost_calculated_at", None),
+        cost_calculated_by=getattr(o, "cost_calculated_by", None),
         pending_transfer_dispatched_by=(await _pending_dispatchers(db, [o.id])).get(o.id),
         extra_issue_pending_dispatched_by=(await pending_extra_issue_orders(db, [o.id])).get(o.id),
         **_return_fields((await unresolved_return_counts(db, [o.id])).get(o.id)),
@@ -972,6 +1129,26 @@ async def get_order_details(
             to_status=h.to_status, actor_id=h.actor_id, actor_name=h.actor_name or "",
             previous_notes=h.previous_notes or "", reason=h.reason, timestamp=h.timestamp,
         ) for h in sorted(o.stage_history, key=lambda item: item.timestamp)],
+        demands=[
+            ProductionOrderDemandRead(
+                id=d.id,
+                production_order_id=d.production_order_id,
+                customer_order_line_id=d.customer_order_line_id,
+                customer_order_id=d.customer_order_id,
+                customer_order_number=d.customer_order.order_number if d.customer_order else "",
+                customer_id=d.customer_id,
+                customer_name=d.customer.name if d.customer else "",
+                product_id=d.product_id,
+                variant_id=d.variant_id,
+                allocated_quantity=d.allocated_quantity,
+                fulfilled_quantity=d.fulfilled_quantity,
+                remaining_quantity=max(0.0, round(d.allocated_quantity - d.fulfilled_quantity, 4)),
+                fulfillment_pct=round((d.fulfilled_quantity / d.allocated_quantity) * 100, 2) if d.allocated_quantity > 0 else 0.0,
+                notes=d.notes or "",
+                created_at=d.created_at,
+            )
+            for d in (getattr(o, "demands", None) or [])
+        ],
     )
 
 
@@ -1174,6 +1351,117 @@ async def get_transfer_details(transfer_id: str, db: AsyncSession) -> WarehouseT
     )
 
 
+# ─── 5-ج. مطالبات وحسم عجز استلام خامات الورشة (Phase 3) ───────────────────
+
+def _claim_to_read(c: TransferDiscrepancyClaim) -> TransferDiscrepancyClaimRead:
+    return TransferDiscrepancyClaimRead(
+        id=c.id,
+        claim_number=c.claim_number,
+        transfer_id=c.transfer_id,
+        transfer_number=c.transfer.transfer_number if c.transfer else "",
+        transfer_line_id=c.transfer_line_id,
+        order_id=c.order_id,
+        order_number=c.order.order_number if c.order else "",
+        item_id=c.item_id,
+        item_name_ar=c.item.name_ar if c.item else "",
+        item_code=c.item.code if c.item else "",
+        unit_id=c.unit_id,
+        unit_name_ar=c.unit.name_ar if c.unit else "",
+        dispatched_quantity=c.dispatched_quantity,
+        received_quantity=c.received_quantity,
+        discrepancy_quantity=c.discrepancy_quantity,
+        unit_cost=c.unit_cost,
+        total_cost=c.total_cost,
+        status=c.status,
+        status_ar=DISCREPANCY_CLAIM_STATUS_AR.get(c.status, c.status),
+        claimed_by=c.claimed_by,
+        claimed_at=c.claimed_at,
+        claim_notes=c.claim_notes or "",
+        resolved_by=c.resolved_by,
+        resolved_at=c.resolved_at,
+        resolution_notes=c.resolution_notes or "",
+        created_at=c.created_at,
+    )
+
+
+@router.get("/orders/{order_id}/discrepancy-claims", response_model=List[TransferDiscrepancyClaimRead])
+async def list_order_discrepancy_claims(
+    order_id: str,
+    current_user: AuthenticatedUser = Depends(require_any_permission(["production:orders:view", "warehouse:transfers:view"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعراض مطالبات عجز استلام الخامات بالورشة التابعة لأمر التشغيل مع بيان حالة الحسم."""
+    del current_user
+    stmt = (
+        select(TransferDiscrepancyClaim)
+        .options(
+            selectinload(TransferDiscrepancyClaim.transfer),
+            selectinload(TransferDiscrepancyClaim.order),
+            selectinload(TransferDiscrepancyClaim.item),
+            selectinload(TransferDiscrepancyClaim.unit),
+        )
+        .where(TransferDiscrepancyClaim.order_id == order_id)
+        .order_by(TransferDiscrepancyClaim.created_at.desc())
+    )
+    claims = (await db.execute(stmt)).scalars().all()
+    return [_claim_to_read(c) for c in claims]
+
+
+@router.get("/discrepancy-claims", response_model=List[TransferDiscrepancyClaimRead])
+async def list_discrepancy_claims(
+    status_filter: Optional[str] = Query(None, alias="status", description="تصفية بالحالة: pending_investigation, accepted_transit_loss, accepted_measurement_error, rejected_under_carrier_liability"),
+    order_id: Optional[str] = Query(None, description="تصفية بأمر تشغيل محدد"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: AuthenticatedUser = Depends(require_any_permission(["production:orders:view", "warehouse:transfers:view", "warehouse:claims:resolve"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """سجل مطالبات عجز استلام خامات الورشة لأمين المخزن والإدارة."""
+    del current_user
+    stmt = (
+        select(TransferDiscrepancyClaim)
+        .options(
+            selectinload(TransferDiscrepancyClaim.transfer),
+            selectinload(TransferDiscrepancyClaim.order),
+            selectinload(TransferDiscrepancyClaim.item),
+            selectinload(TransferDiscrepancyClaim.unit),
+        )
+        .order_by(TransferDiscrepancyClaim.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    if status_filter:
+        stmt = stmt.where(TransferDiscrepancyClaim.status == status_filter)
+    if order_id:
+        stmt = stmt.where(TransferDiscrepancyClaim.order_id == order_id)
+
+    claims = (await db.execute(stmt)).scalars().all()
+    return [_claim_to_read(c) for c in claims]
+
+
+@router.post("/discrepancy-claims/{claim_id}/resolve", response_model=TransferDiscrepancyClaimRead)
+async def resolve_order_discrepancy_claim(
+    claim_id: str,
+    data: TransferDiscrepancyClaimResolveRequest,
+    current_user: AuthenticatedUser = Depends(require_permission("warehouse:claims:resolve")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    أمين المخزن (أو المدير العام) يحسم طلب عجز استلام خامات الورشة:
+    - Maker-Checker: لا يجوز لمستلم الورشة الذي أثبت العجز أن يفصل في الطلب بنفسه.
+    - القرار: قبول كعجز نقل مبرر، قبول كخطأ كيل وقياس، أو رفض وتحميل المسؤولية للميداني/الناقل.
+    - يسوي رصيد العجز المفتوح في سجل الحركات المخزنية ويسمح بإغلاق الأمر بعد استيفاء باقي الشروط.
+    """
+    claim = await resolve_discrepancy_claim(
+        session=db,
+        claim_id=claim_id,
+        decision=data.decision,
+        resolution_notes=data.resolution_notes,
+        resolver_id=current_user.id,
+    )
+    return _claim_to_read(claim)
+
+
 # ─── 6. مراحل التشغيل التتابعية ───────────────────────────────────────────
 
 @router.post("/orders/{order_id}/stages/{stage_name}", response_model=ProductionStageEventRead)
@@ -1194,15 +1482,7 @@ async def update_stage(
         actor_id=current_user.id,
         actor_name=actor_name,
     )
-    return ProductionStageEventRead(
-        id=event.id,
-        stage_name=event.stage_name,
-        status=event.status,
-        actor_id=event.actor_id,
-        actor_name=event.actor_name,
-        timestamp=event.timestamp,
-        notes=event.notes or "",
-    )
+    return _map_stage_event(event)
 
 
 @router.post("/orders/{order_id}/stages/{stage_name}/rollback", response_model=OrderRead)
@@ -1219,6 +1499,78 @@ async def rollback_stage_completion(
         actor_id=current_user.id, actor_name=current_user.email or "المدير العام",
     )
     return await get_order_details(order_id, current_user=current_user, db=db)
+
+
+@router.post("/orders/{order_id}/stages/{stage_name}/skip", response_model=ProductionStageEventRead)
+async def skip_stage_endpoint(
+    order_id: str,
+    stage_name: str,
+    data: StageSkipRequest,
+    current_user: AuthenticatedUser = Depends(require_permission("production:stages:manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تخطي مرحلة إنتاجية لعدم انطباقها على هذا الموديل (TIME-DEC-03)."""
+    actor_name = current_user.email or "المدير العام"
+    event = await skip_production_stage(
+        db,
+        order_id=order_id,
+        stage_name=stage_name,
+        skip_reason=data.skip_reason,
+        actor_id=current_user.id,
+        actor_name=actor_name,
+    )
+    return _map_stage_event(event)
+
+
+@router.put("/orders/{order_id}/stages/{stage_name}/duration", response_model=ProductionStageEventRead)
+async def adjust_stage_duration_endpoint(
+    order_id: str,
+    stage_name: str,
+    data: StageDurationAdjustRequest,
+    current_user: AuthenticatedUser = Depends(require_permission("production:stages:manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تعديل المدة المعيارية المتوقعة لمرحلة في أمر التشغيل وتحديث اللقطة المحفوظة (TIME-DEC-01)."""
+    actor_name = current_user.email or "المدير العام"
+    event = await adjust_stage_expected_duration(
+        db,
+        order_id=order_id,
+        stage_name=stage_name,
+        expected_duration_minutes=data.expected_duration_minutes,
+        actor_id=current_user.id,
+        actor_name=actor_name,
+    )
+    return _map_stage_event(event)
+
+
+@router.get("/calendar", response_model=FactoryCalendarConfigRead)
+async def get_factory_calendar(
+    current_user: AuthenticatedUser = Depends(require_any_permission("production:orders:view", "production:stages:manage", "reports:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """جلب إعدادات تقويم ورديات العمل وأيام العطلات الأسبوعية (TIME-DEC-02)."""
+    calendar = await get_or_create_active_calendar(db)
+    return calendar
+
+
+@router.put("/calendar", response_model=FactoryCalendarConfigRead)
+async def update_factory_calendar(
+    data: FactoryCalendarConfigUpdate,
+    current_user: AuthenticatedUser = Depends(require_permission("production:stages:manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تحديث أو اعتماد تقويم ورديات المصنع وساعات العمل (TIME-DEC-02)."""
+    calendar = await update_calendar_config(db, data)
+    return calendar
+
+
+@router.get("/bottleneck-analysis", response_model=BottleneckAnalysisResponse)
+async def get_bottlenecks_endpoint(
+    current_user: AuthenticatedUser = Depends(require_any_permission("production:orders:view", "production:stages:manage", "reports:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تحليل اختناقات مراحل الإنتاج، وأزمنة الورديات، وأسباب التأخير (TIME-DEC-04)."""
+    return await get_bottleneck_analysis(db)
 
 
 # ─── 7. فحص وتحليل النواقص ─────────────────────────────────────────────────
@@ -1287,6 +1639,42 @@ async def check_order_shortages(
     )
 
 
+# ─── 7.1. تدقيق عجز الخامات وتوليد أوامر الشراء (T5 - Shortage Procurement) ───
+
+@router.get("/orders/{order_id}/material-shortages", response_model=ProductionOrderShortageReport)
+async def get_order_material_shortages(
+    order_id: str,
+    current_user: AuthenticatedUser = Depends(require_permission("production:orders:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    حساب عجز خامات أمر التشغيل الفعلي من واقع دفتر أستاذ المخزون العام (main_raw_materials).
+    يستبعد خامات العملاء في تشغيل الغير (CMT) ويُجمّع على مستوى الصنف لمنع الازدواجية،
+    ويعرض كميات التوريد المعلقة بأوامر الشراء المعتمدة.
+    """
+    user_roles = await get_user_roles(current_user, db=db)
+    return await get_production_order_shortages(db, order_id=order_id, user_roles=user_roles)
+
+
+@router.post("/orders/{order_id}/generate-purchase-orders", response_model=List[PurchaseOrderRead], status_code=status.HTTP_201_CREATED)
+async def generate_order_purchase_orders(
+    order_id: str,
+    request_data: GeneratePurchaseOrdersRequest,
+    current_user: AuthenticatedUser = Depends(require_permission("purchase_orders:create")),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    توليد أوامر شراء مسودة مجمعة حسب الموردين المحددين لتغطية عجز خامات أمر التشغيل.
+    يعيد فحص الرصيد اللحظي ويضمن عدم التكرار.
+    """
+    user_roles = await get_user_roles(current_user, db=db)
+    return await generate_purchase_orders_from_shortage(
+        db, order_id=order_id, request_data=request_data, current_user_id=current_user.id, user_roles=user_roles, idempotency_key=idempotency_key
+    )
+
+
+
 # ─── 8. استلام وتأكيد المنتج التام بمخزن المنتج التام ───────────────────────
 
 @router.post("/orders/{order_id}/finished-receipt", response_model=FinishedGoodsReceiptRead, status_code=status.HTTP_201_CREATED)
@@ -1304,6 +1692,7 @@ async def receive_finished_goods(
             .options(
                 selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.variant),
                 selectinload(ProductionOrder.stage_events),
+                selectinload(ProductionOrder.demands),
             )
             .where(ProductionOrder.id == order_id)
             .with_for_update(of=ProductionOrder)
@@ -1350,6 +1739,9 @@ async def receive_finished_goods(
         total_fg_cost = Decimal("0.00")
         total_accepted = 0.0
         total_rejected = 0.0
+        # فحص ما إذا كان أمر التشغيل مرتبطاً بمطالبات عملاء مجمعة (Demand Aggregation - Phase 4)
+        demands = list(getattr(order, "demands", []) or [])
+
         line_reads: list[FinishedGoodsReceiptLineRead] = []
         for order_item_id, accepted, rejected in sorted(requested, key=lambda entry: entry[0]):
             item = items_by_id.get(order_item_id)
@@ -1362,27 +1754,71 @@ async def receive_finished_goods(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"الكمية المستلمة للبند ({label}) = {already + accepted:g} تتجاوز الكمية المستهدفة له ({item.target_quantity:g}).",
                 )
-            bucket_ref = finished_goods_bucket(item.product_type, item.customer_id)
             if accepted > 0:
                 catalog_item = await get_or_create_finished_goods_item(db, item.product_id, item.variant_id)
                 await lock_stock_balance(db, catalog_item.id, fg_wh.id)
-                line_cost = (Decimal(str(accepted)) * unit_mfg_cost).quantize(Decimal("0.01"))
-                total_fg_cost += line_cost
-                db.add(StockLedgerEntry(
-                    id=str(uuid.uuid4()),
-                    item_id=catalog_item.id,
-                    unit_id=catalog_item.unit_id,
-                    warehouse_id=fg_wh.id,
-                    location_type="warehouse",
-                    bucket_reference=bucket_ref,
-                    quantity=accepted,
-                    reference_doc_type="production_order_finished_receipt",
-                    reference_doc_id=order.id,
-                    entry_type="finished_goods_receipt",
-                    created_by=current_user.id,
-                    unit_cost=unit_mfg_cost,
-                    total_cost=line_cost,
-                ))
+
+                if demands:
+                    # تفكيك كمية المنتج التام المستلمة وتوزيعها تلقائياً على سلات تسليم العملاء (Phase 4)
+                    unfulfilled_demands = [d for d in demands if d.fulfilled_quantity < d.allocated_quantity]
+                    pool = unfulfilled_demands if unfulfilled_demands else demands
+                    total_unfulfilled = sum(d.allocated_quantity - d.fulfilled_quantity for d in pool) or sum(d.allocated_quantity for d in pool)
+
+                    rem_to_alloc = accepted
+                    for idx, d in enumerate(pool):
+                        if rem_to_alloc <= 0:
+                            break
+                        rem_d = max(0.0, d.allocated_quantity - d.fulfilled_quantity)
+                        if idx == len(pool) - 1:
+                            share = rem_to_alloc
+                        elif total_unfulfilled > 0:
+                            share = round(min(rem_to_alloc, (rem_d / total_unfulfilled) * accepted), 4)
+                        else:
+                            share = min(rem_to_alloc, rem_d)
+
+                        if share > 0:
+                            cust_bucket = f"private_label:{d.customer_id}"
+                            share_cost = (Decimal(str(share)) * unit_mfg_cost).quantize(Decimal("0.01"))
+                            total_fg_cost += share_cost
+                            db.add(StockLedgerEntry(
+                                id=str(uuid.uuid4()),
+                                item_id=catalog_item.id,
+                                unit_id=catalog_item.unit_id,
+                                warehouse_id=fg_wh.id,
+                                location_type="warehouse",
+                                bucket_reference=cust_bucket,
+                                quantity=share,
+                                reference_doc_type="production_order_finished_receipt",
+                                reference_doc_id=order.id,
+                                entry_type="finished_goods_receipt",
+                                created_by=current_user.id,
+                                unit_cost=unit_mfg_cost,
+                                total_cost=share_cost,
+                            ))
+                            d.fulfilled_quantity = round(d.fulfilled_quantity + share, 4)
+                            rem_to_alloc = round(rem_to_alloc - share, 4)
+                    bucket_ref = f"aggregated:{len(demands)}_customers"
+                else:
+                    bucket_ref = finished_goods_bucket(item.product_type, item.customer_id)
+                    line_cost = (Decimal(str(accepted)) * unit_mfg_cost).quantize(Decimal("0.01"))
+                    total_fg_cost += line_cost
+                    db.add(StockLedgerEntry(
+                        id=str(uuid.uuid4()),
+                        item_id=catalog_item.id,
+                        unit_id=catalog_item.unit_id,
+                        warehouse_id=fg_wh.id,
+                        location_type="warehouse",
+                        bucket_reference=bucket_ref,
+                        quantity=accepted,
+                        reference_doc_type="production_order_finished_receipt",
+                        reference_doc_id=order.id,
+                        entry_type="finished_goods_receipt",
+                        created_by=current_user.id,
+                        unit_cost=unit_mfg_cost,
+                        total_cost=line_cost,
+                    ))
+            else:
+                bucket_ref = finished_goods_bucket(item.product_type, item.customer_id)
             item.received_quantity = round(already + accepted, 6)
             item.rejected_quantity = round(float(item.rejected_quantity or 0.0) + rejected, 6)
             total_accepted += accepted
@@ -1616,6 +2052,38 @@ async def reconcile_order_materials(
             if line.returned_quantity > 0:
                 # المرتجع لا يدخل مخزن الخامات مباشرة: يخرج من الورشة إلى "بالطريق" بانتظار فحص أمين المخزن
                 returned_lines.append((mat, line.returned_quantity, line.return_condition, line.notes))
+
+            c_qty = Decimal(str(line.consumed_quantity))
+            s_qty = Decimal(str(line.scrapped_quantity))
+            r_qty = Decimal(str(line.returned_quantity))
+            mat.actual_consumed_quantity = (mat.actual_consumed_quantity or Decimal("0.000")) + c_qty
+            mat.actual_waste_quantity = (mat.actual_waste_quantity or Decimal("0.000")) + s_qty
+            mat.actual_returned_quantity = (mat.actual_returned_quantity or Decimal("0.000")) + r_qty
+
+            if getattr(mat, "supplied_by", "factory") == "customer" and order.customer_id:
+                c_line_stmt = (
+                    select(CustomerMaterialReceiptLine)
+                    .join(CustomerMaterialReceipt, CustomerMaterialReceipt.id == CustomerMaterialReceiptLine.receipt_id)
+                    .where(
+                        CustomerMaterialReceipt.customer_id == order.customer_id,
+                        CustomerMaterialReceiptLine.item_id == mat.item_id,
+                    )
+                )
+                c_lines = (await db.execute(c_line_stmt)).scalars().all()
+                qty_to_c = c_qty
+                qty_to_w = s_qty
+                for cl in c_lines:
+                    avail = cl.quantity_remaining
+                    if avail > Decimal("0.000") and (qty_to_c > 0 or qty_to_w > 0):
+                        take_c = min(avail, qty_to_c)
+                        cl.quantity_consumed += take_c
+                        qty_to_c -= take_c
+
+                        avail_w = cl.quantity_remaining
+                        take_w = min(avail_w, qty_to_w)
+                        cl.quantity_wasted += take_w
+                        qty_to_w -= take_w
+
             db.add(ProductionMaterialReconciliationLine(
                 id=str(uuid.uuid4()), reconciliation_id=recon.id, item_id=line.item_id, unit_id=mat.unit_id,
                 consumed_quantity=line.consumed_quantity, returned_quantity=line.returned_quantity,
@@ -1626,6 +2094,27 @@ async def reconcile_order_materials(
                 consumed_quantity=line.consumed_quantity, returned_quantity=line.returned_quantity,
                 scrapped_quantity=line.scrapped_quantity, remaining_wip_balance=round(balance - total, 6),
             ))
+
+        # احتساب إحصاءات وانحراف الهالك على مستوى الأمر (MFG-DEC-05)
+        total_consumed = sum(m.actual_consumed_quantity or Decimal("0.000") for m in order.materials)
+        total_waste = sum(m.actual_waste_quantity or Decimal("0.000") for m in order.materials)
+        allowed_pct = order.allowed_waste_pct or Decimal("1.50")
+        allowed_waste_qty = (total_consumed * (allowed_pct / Decimal("100"))).quantize(Decimal("0.001"))
+
+        if total_consumed > Decimal("0.000"):
+            order.actual_waste_pct = ((total_waste / total_consumed) * Decimal("100")).quantize(Decimal("0.01"))
+        else:
+            order.actual_waste_pct = Decimal("0.00")
+
+        if total_waste > allowed_waste_qty:
+            excess_qty = (total_waste - allowed_waste_qty).quantize(Decimal("0.001"))
+            order.excess_waste_qty = excess_qty
+            priced_mats = [m for m in order.materials if (m.unit_cost or Decimal("0")) > 0]
+            avg_cost = sum(m.unit_cost for m in priced_mats) / Decimal(len(priced_mats)) if priced_mats else Decimal("0.0000")
+            order.excess_waste_cost = (excess_qty * avg_cost).quantize(Decimal("0.01"))
+        else:
+            order.excess_waste_qty = Decimal("0.000")
+            order.excess_waste_cost = Decimal("0.00")
 
         return_transfer = None
         if returned_lines:
@@ -1759,6 +2248,7 @@ async def get_order_wip_summary(
             selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.item),
             selectinload(ProductionOrder.materials).selectinload(ProductionOrderMaterial.unit),
             selectinload(ProductionOrder.stage_events),
+            selectinload(ProductionOrder.discrepancy_claims),
         )
         .where(ProductionOrder.id == order_id)
     )
@@ -1766,13 +2256,13 @@ async def get_order_wip_summary(
     if not order:
         raise HTTPException(status_code=404, detail="أمر التشغيل غير موجود.")
 
-    # 1. حالة مراحل الإنتاج
+    # 1. حالة مراحل الإنتاج (اكتمال كافة المراحل أو تخطيها رسمياً - TIME-DEC-03)
     stages_completed = (
         len(order.stage_events) == 5
-        and all(e.status == "completed" for e in order.stage_events)
+        and all((e.status == "completed" or e.is_skipped) for e in order.stage_events)
     )
 
-    # 2. مستندات التحويل والفروقات
+    # 2. مستندات التحويل والفروقات ومطالبات عجز الورشة (Phase 3)
     transfers = (await db.execute(
         select(WarehouseTransfer)
         .options(
@@ -1784,13 +2274,22 @@ async def get_order_wip_summary(
     )).scalars().all()
 
     pending_transfers_count = sum(1 for t in transfers if t.status == "in_transit")
-    unresolved_discrepancies_count = 0
-    for t in transfers:
-        if not transfer_is_dispatch(t):
-            continue  # فروقات مرتجعات الورشة تُسوّى بقرار مستقل ولا تُعتمد بالإقرار العام
-        for line in t.lines:
-            if line.discrepancy_quantity != 0.0:
-                unresolved_discrepancies_count += 1
+
+    # عدد مطالبات عجز استلام الخامات بالورشة التي لا تزال قيد التحقيق وبانتظار حسم أمين المخزن
+    claims = getattr(order, "discrepancy_claims", None) or []
+    pending_claims_count = sum(1 for c in claims if c.status == "pending_investigation")
+    total_claims_count = len(claims)
+
+    legacy_unresolved_lines = 0
+    if total_claims_count == 0:
+        for t in transfers:
+            if not transfer_is_dispatch(t):
+                continue  # فروقات مرتجعات الورشة تُسوّى بقرار مستقل ولا تُعتمد بالإقرار العام
+            for line in t.lines:
+                if line.discrepancy_quantity != 0.0:
+                    legacy_unresolved_lines += 1
+
+    unresolved_discrepancies_count = pending_claims_count if total_claims_count > 0 else legacy_unresolved_lines
     returns_pending_resolution = sum(
         1 for t in transfers
         if transfer_is_return(t) and t.status == RETURN_STATUS_PENDING_RESOLUTION
@@ -1884,8 +2383,10 @@ async def get_order_wip_summary(
             blocking_reasons.append(f"يوجد {pending_transfers_count} مستند تحويل خامات لا يزال بالطريق (صرف أو مرتجع لم يؤكد استلامه).")
         if returns_pending_resolution > 0:
             blocking_reasons.append(f"يوجد {returns_pending_resolution} مرتجع ورشة به عجز أو كميات مرفوضة بانتظار التسوية المعتمدة.")
-        if unresolved_discrepancies_count > 0:
-            blocking_reasons.append(f"يوجد {unresolved_discrepancies_count} فروقات استلام بالورشة يلزم اعتماد إقرارها.")
+        if pending_claims_count > 0:
+            blocking_reasons.append(f"يوجد {pending_claims_count} طلب مراجعة عجز استلام خامات بالورشة بانتظار حسم أمين المخزن.")
+        elif legacy_unresolved_lines > 0:
+            blocking_reasons.append(f"يوجد {legacy_unresolved_lines} فروقات استلام بالورشة يلزم اعتماد إقرارها.")
         if goods_receipt_status != "complete":
             blocking_reasons.append(f"الكمية المستلمة ({total_received_goods}) أقل من المستهدفة ({order.target_quantity}).")
         if net_wip_balance != 0.0:
@@ -1925,6 +2426,7 @@ async def close_production_order(
             .options(
                 selectinload(ProductionOrder.materials),
                 selectinload(ProductionOrder.stage_events),
+                selectinload(ProductionOrder.discrepancy_claims),
             )
             .where(ProductionOrder.id == order_id)
             .with_for_update()
@@ -1936,15 +2438,15 @@ async def close_production_order(
         if order.status == "closed":
             raise HTTPException(status_code=409, detail="أمر التشغيل مغلق نهائياً مسبقاً.")
 
-        # 1. التحقق من مراحل الإنتاج
+        # 1. التحقق من مراحل الإنتاج (اكتمال كافة المراحل أو تخطيها رسمياً - TIME-DEC-03)
         stages_completed = (
             len(order.stage_events) == 5
-            and all(e.status == "completed" for e in order.stage_events)
+            and all((e.status == "completed" or e.is_skipped) for e in order.stage_events)
         )
         if not stages_completed:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="لا يمكن إغلاق أمر التشغيل قبل اكتمال كافة مراحل الإنتاج الفنية الخمس.",
+                detail="لا يمكن إغلاق أمر التشغيل قبل اكتمال كافة مراحل الإنتاج الفنية الخمس (أو تخطيها رسمياً).",
             )
 
         # 2. التحقق من التحويلات المعلقة بالطريق
@@ -1976,12 +2478,24 @@ async def close_production_order(
                 detail="لا يمكن إغلاق الأمر لوجود مستندات تحويل خامات لا تزال قيد النقل بالطريق (in_transit).",
             )
 
-        # 3. فروقات استلام الصرف بالورشة واعتمادها (فروقات المرتجعات سُوّيت بقرار مستقل أعلاه)
+        # 3. فروقات استلام الصرف بالورشة ومطالبات العجز (Phase 3)
+        # التحقق من عدم وجود مطالبات عجز استلام خامات بالورشة قيد التحقيق وبانتظار حسم أمين المخزن
+        claims = getattr(order, "discrepancy_claims", None) or []
+        pending_claims_count = sum(1 for c in claims if c.status == "pending_investigation")
+        total_claims_count = len(claims)
+
+        if pending_claims_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"لا يمكن إغلاق أمر التشغيل لوجود ({pending_claims_count}) طلبات مراجعة عجز استلام خامات بالورشة قيد التحقيق. يلزم حسمها واعتمادها بواسطة أمين المخزن أولاً.",
+            )
+
         discrepancy_lines = [
             line for t in transfers if transfer_is_dispatch(t)
             for line in t.lines if line.discrepancy_quantity != 0.0
         ]
-        if discrepancy_lines and not data.discrepancy_signoff:
+        # إذا كانت هناك فروقات قديمة (Legacy) بدون مطالبات، يُشترط إقرار الفروقات
+        if total_claims_count == 0 and discrepancy_lines and not data.discrepancy_signoff:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"يوجد عدد ({len(discrepancy_lines)}) فروقات استلام بالورشة غير معتمدة. يلزم تفعيل إقرار الفروقات (discrepancy_signoff) مع بيان الأسباب.",
@@ -2027,15 +2541,16 @@ async def close_production_order(
         residual_wip_cost = (order.wip_balance or Decimal("0.00")).quantize(Decimal("0.01"))
         if residual_wip_cost != Decimal("0.00"):
             amount = abs(residual_wip_cost)
+            var_acc = await resolve_expense_code(db, "5220", "5200")
             if residual_wip_cost > 0:
                 variance_lines = [
-                    {"account_code": "5200", "debit": amount, "credit": 0, "description": f"هالك وفروقات تشغيل أمر {order.order_number}"},
+                    {"account_code": var_acc, "debit": amount, "credit": 0, "description": f"هالك وفروقات تشغيل أمر {order.order_number}"},
                     {"account_code": "1220", "debit": 0, "credit": amount, "description": "تصفير حساب إنتاج تحت التشغيل"},
                 ]
             else:
                 variance_lines = [
                     {"account_code": "1220", "debit": amount, "credit": 0, "description": "تصفير حساب إنتاج تحت التشغيل"},
-                    {"account_code": "5200", "debit": 0, "credit": amount, "description": f"فرق تقريب تكلفة أمر {order.order_number}"},
+                    {"account_code": var_acc, "debit": 0, "credit": amount, "description": f"فرق تقريب تكلفة أمر {order.order_number}"},
                 ]
             await post_journal_entry(
                 db,
@@ -2052,7 +2567,9 @@ async def close_production_order(
             closure_log += f" | مصير الخامات: {data.wip_disposition}"
             if data.wip_disposition_notes:
                 closure_log += f" ({data.wip_disposition_notes})"
-        if data.discrepancy_signoff:
+        if total_claims_count > 0:
+            closure_log += f" | تم حسم جميع مطالبات عجز استلام الخامات بالورشة ({total_claims_count} مطالبات)"
+        elif data.discrepancy_signoff:
             closure_log += " | تم اعتماد فروقات الاستلام"
             if data.discrepancy_notes:
                 closure_log += f": {data.discrepancy_notes}"
@@ -2064,6 +2581,8 @@ async def close_production_order(
         order.notes = (order.notes or "") + closure_log
         await db.flush()
 
+        discrepancy_count = total_claims_count if total_claims_count > 0 else len(discrepancy_lines)
+
         return OrderCloseResponse(
             order_id=order.id,
             order_number=order.order_number,
@@ -2073,7 +2592,7 @@ async def close_production_order(
             target_quantity=order.target_quantity,
             total_received_goods=total_received_goods,
             remaining_wip_balance=round(remaining_wip, 4),
-            discrepancy_count=len(discrepancy_lines),
+            discrepancy_count=discrepancy_count,
             wip_disposition=data.wip_disposition,
             notes=data.notes,
         )
@@ -2087,4 +2606,239 @@ async def close_production_order(
         payload={"order_id": order_id, "data": data.model_dump()},
         execute_fn=_execute,
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# خامات العملاء والتكلفة (Customer Materials & Costing - Phase 6)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _receipt_to_read(r: CustomerMaterialReceipt) -> CustomerMaterialReceiptRead:
+    lines = [
+        CustomerMaterialReceiptLineRead(
+            id=l.id,
+            receipt_id=l.receipt_id,
+            item_id=l.item_id,
+            item_code=l.item.code if getattr(l, "item", None) else "",
+            item_name_ar=l.item.name_ar if getattr(l, "item", None) else "",
+            unit_id=l.unit_id,
+            unit_name=l.unit.name_ar if getattr(l, "unit", None) else "",
+            quantity_received=l.quantity_received,
+            quantity_consumed=l.quantity_consumed,
+            quantity_wasted=l.quantity_wasted,
+            quantity_returned=l.quantity_returned,
+            quantity_remaining=l.quantity_remaining,
+            unit_cost_estimate=l.unit_cost_estimate,
+            order_id=l.order_id,
+            notes=l.notes or "",
+        )
+        for l in r.lines
+    ]
+    return CustomerMaterialReceiptRead(
+        id=r.id,
+        receipt_number=r.receipt_number,
+        customer_id=r.customer_id,
+        customer_name=r.customer.name if getattr(r, "customer", None) else "",
+        received_date=r.received_date,
+        received_by=r.received_by,
+        status=r.status,
+        notes=r.notes or "",
+        created_at=r.created_at,
+        lines=lines,
+    )
+
+
+def _return_to_read(ret: CustomerMaterialReturn) -> CustomerMaterialReturnRead:
+    item_name = ""
+    if getattr(ret, "receipt_line", None) and getattr(ret.receipt_line, "item", None):
+        item_name = ret.receipt_line.item.name_ar
+    return CustomerMaterialReturnRead(
+        id=ret.id,
+        return_number=ret.return_number,
+        customer_id=ret.customer_id,
+        customer_name=ret.customer.name if getattr(ret, "customer", None) else "",
+        receipt_line_id=ret.receipt_line_id,
+        item_name_ar=item_name,
+        quantity=ret.quantity,
+        returned_date=ret.returned_date,
+        returned_by=ret.returned_by,
+        notes=ret.notes or "",
+    )
+
+
+@router.post(
+    "/customer-materials/receipts",
+    response_model=CustomerMaterialReceiptRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_customer_receipt_endpoint(
+    data: CustomerMaterialReceiptCreate,
+    current_user: AuthenticatedUser = Depends(
+        require_any_permission("suppliers:receive", "warehouse:dispatch", "production:orders:manage")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    تسجيل سند استلام خامات عميل أمانة في المخزن (MFG-DEC-02).
+    - لا يولد قيود مشتريات أو إدراج في أصول مخزون المصنع.
+    - يربط الخامات بحساب العميل وأمر التشغيل المحدد إن وجد.
+    """
+    receipt = await create_customer_material_receipt(db, data, current_user.id)
+    receipts = await list_customer_material_receipts(db, customer_id=data.customer_id)
+    match = next((r for r in receipts if r.id == receipt.id), receipt)
+    return _receipt_to_read(match)
+
+
+@router.get(
+    "/customer-materials/receipts",
+    response_model=List[CustomerMaterialReceiptRead],
+)
+async def list_customer_receipts_endpoint(
+    customer_id: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(
+        require_any_permission("inventory:view", "production:orders:view", "suppliers:view")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """استعراض سندات استلام خامات العملاء مع بنودها وأرصدتها المتبقية."""
+    receipts = await list_customer_material_receipts(db, customer_id=customer_id)
+    return [_receipt_to_read(r) for r in receipts]
+
+
+@router.get(
+    "/customer-materials/balance",
+    response_model=List[CustomerMaterialBalanceItem],
+)
+async def get_customer_material_balances_endpoint(
+    customer_id: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(
+        require_any_permission("inventory:view", "production:orders:view", "suppliers:view", "finance:reports:view", "reports:view")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """تقرير أرصدة خامات العملاء المتاحة والمستهلكة والمرتجعة (MFG-DEC-02)."""
+    return await get_customer_material_balances(db, customer_id=customer_id)
+
+
+@router.post(
+    "/customer-materials/returns",
+    response_model=CustomerMaterialReturnRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_customer_material_return_endpoint(
+    data: CustomerMaterialReturnCreate,
+    current_user: AuthenticatedUser = Depends(
+        require_any_permission("suppliers:receive", "warehouse:dispatch", "customers:deliveries:manage", "production:orders:manage")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """سند إرجاع خامات متبقية للعميل وتحديث الرصيد المتبقي (MFG-DEC-02)."""
+    ret = await create_customer_material_return(db, data, current_user.id)
+    # إعادة تحميل البيانات للعرض
+    stmt = (
+        select(CustomerMaterialReturn)
+        .options(
+            selectinload(CustomerMaterialReturn.customer),
+            selectinload(CustomerMaterialReturn.receipt_line).selectinload(CustomerMaterialReceiptLine.item),
+        )
+        .where(CustomerMaterialReturn.id == ret.id)
+    )
+    loaded = (await db.execute(stmt)).scalar_one_or_none()
+    return _return_to_read(loaded or ret)
+
+
+@router.post(
+    "/orders/{order_id}/material-consumption",
+    response_model=OrderRead,
+)
+async def log_material_consumption_endpoint(
+    order_id: str,
+    data: OrderMaterialConsumptionLogRequest,
+    current_user: AuthenticatedUser = Depends(require_permission("production:orders:manage")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    تسجيل الاستهلاك الفعلي والهالك والمرتجع لخامات أمر التشغيل (MFG-DEC-05).
+    - يخصم خامات العميل من سند الاستلام الأمانة تلقائياً.
+    - يحسب نسبة الهالك الفعلية مقارنة بالنسبة المعتمدة (1.5%).
+    - يحسب كمية وقيمة انحراف الهالك الزائد دون غرامة تلقائية.
+    """
+    await log_order_material_consumption(db, order_id, data, current_user.id)
+    return await get_order_details(order_id=order_id, current_user=current_user, db=db)
+
+
+def _can_view_production_financials(user_roles: set[str] | None) -> bool:
+    if user_roles is None:
+        return True
+    if "warehouse_manager" in user_roles and not user_roles.intersection({"general_manager", "finance_manager", "production_manager"}):
+        return False
+    return True
+
+
+@router.post(
+    "/orders/{order_id}/calculate-costs",
+    response_model=OrderRead,
+)
+@router.put(
+    "/orders/{order_id}/costs",
+    response_model=OrderRead,
+)
+async def calculate_order_costs_endpoint(
+    order_id: str,
+    params: OrderCostCalculationRequest,
+    current_user: AuthenticatedUser = Depends(
+        require_any_permission("production:orders:manage", "finance:reports:view", "reports:view")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    احتساب تكلفة العمالة وتوزيع التكاليف غير المباشرة وتكلفة القطعة التامة (MFG-DEC-04 & 06).
+    - يدعم احتساب العمالة بالقطعة أو بالساعة.
+    - يوزع التكاليف الصناعية غير المباشرة حسب الأساس المختار.
+    - في التشغيل للغير: يستبعد خامات العميل من التكلفة ويحتسب فقط مستلزمات المصنع.
+    - يدعم تسجيل سعر مصنعية التشغيل المتفق عليه (agreed_service_price).
+    """
+    await calculate_order_costs(db, order_id, params, actor_id=current_user.id)
+    return await get_order_details(order_id=order_id, current_user=current_user, db=db)
+
+
+@router.get(
+    "/orders/{order_id}/cost-sheet",
+    response_model=JobCostSheetRead,
+)
+async def get_order_cost_sheet_endpoint(
+    order_id: str,
+    current_user: AuthenticatedUser = Depends(
+        require_any_permission("production:orders:view", "production:orders:manage", "finance:reports:view", "reports:view")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    استعراض بطاقة تكلفة أمر التشغيل (Job Cost Sheet - Phase 6 / T6):
+    - فصل كامل بين خامات المصنع وخامات العميل المعزولة (0 تكلفة دفترية).
+    - تفاصيل أجور العمالة وتوزيع التكاليف الصناعية غير المباشرة.
+    - تحليل الهالك وسقف 1.5% ومطالبات التجاوز.
+    - حجب الأسعار والتكاليف تلقائياً لأمين المخزن (ROLE_WAREHOUSE_MANAGER).
+    """
+    user_roles = await get_user_roles(current_user, db=db)
+    can_view = _can_view_production_financials(user_roles)
+    return await get_job_cost_sheet(db, order_id=order_id, can_view_prices=can_view)
+
+
+@router.post(
+    "/orders/{order_id}/waste-settlement",
+    response_model=OrderRead,
+)
+async def update_waste_settlement_endpoint(
+    order_id: str,
+    data: WasteSettlementUpdateRequest,
+    current_user: AuthenticatedUser = Depends(
+        require_any_permission("production:orders:manage", "finance:reports:view")
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """تسجيل قرار تسوية ومراجعة الهالك الزائد لأمر التشغيل دون غرامات تلقائية."""
+    await update_waste_settlement(db, order_id=order_id, decision=data.decision, notes=data.notes, actor_id=current_user.id)
+    return await get_order_details(order_id=order_id, current_user=current_user, db=db)
+
+
 

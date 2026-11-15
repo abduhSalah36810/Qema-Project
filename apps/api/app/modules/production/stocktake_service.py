@@ -40,7 +40,7 @@ from app.modules.production.schemas import (
     StocktakeReviewRequest,
 )
 from app.modules.production.service import lock_stock_balance
-from app.modules.finance.ledger_service import get_weighted_average_cost, post_journal_entry
+from app.modules.finance.ledger_service import get_weighted_average_cost, post_journal_entry, resolve_expense_code
 
 
 async def generate_stocktake_session_number(session: AsyncSession) -> str:
@@ -160,12 +160,34 @@ async def create_stocktake_session(
     session_number = await generate_stocktake_session_number(session)
     now = utc_now()
     counting_date = data.counting_date or now
+    is_opening = bool(getattr(data, "is_opening", False))
+
+    if is_opening:
+        from app.modules.finance.ledger_service import is_opening_balances_locked
+        if await is_opening_balances_locked(session):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="تم قفل الأرصدة الافتتاحية ولا يمكن إنشاء جلسة جرد افتتاحي جديدة.",
+            )
+        existing_opening = await session.scalar(
+            select(StocktakeSession.id).where(
+                StocktakeSession.warehouse_id == wh.id,
+                StocktakeSession.is_opening.is_(True),
+                StocktakeSession.status != "cancelled",
+            )
+        )
+        if existing_opening:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="يوجد بالفعل جلسة جرد افتتاحي مسجلة لهذا المخزن.",
+            )
 
     stocktake = StocktakeSession(
         id=str(uuid.uuid4()),
         session_number=session_number,
         warehouse_id=wh.id,
         scope_type=data.scope_type,
+        is_opening=is_opening,
         status="draft",
         description=data.description or "",
         counting_date=counting_date,
@@ -293,6 +315,8 @@ async def record_counts(
         prev_qty = line.counted_quantity
         line.counted_quantity = counted_val
         line.variance = round(counted_val - line.book_quantity, 4)
+        if getattr(item, "unit_cost", None) is not None:
+            line.unit_cost = Decimal(str(item.unit_cost))
         line.status = "counted"
         line.counter_id = counter_id
         line.counted_at = now
@@ -593,8 +617,23 @@ async def post_stocktake_adjustments(
 
     for line in sorted_lines:
         var = round(line.variance, 4)
-        unit_cost = await get_weighted_average_cost(session, line.item_id, stocktake.warehouse_id)
-        line_cost = (Decimal(str(abs(var))) * unit_cost).quantize(Decimal("0.01"))
+        if stocktake.is_opening:
+            is_cust_bucket = bool(line.bucket_reference and line.bucket_reference.startswith("customer:"))
+            if is_cust_bucket:
+                unit_cost = Decimal("0.0000")
+                line_cost = Decimal("0.00")
+            else:
+                if line.unit_cost is None or Decimal(str(line.unit_cost)) <= Decimal("0.00"):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"تكلفة الوحدة unit_cost إلزامية لجميع بنود الجرد الافتتاحي (الصنف {line.item_id}).",
+                    )
+                unit_cost = Decimal(str(line.unit_cost)).quantize(Decimal("0.0001"))
+                line_cost = (Decimal(str(abs(var))) * unit_cost).quantize(Decimal("0.01"))
+        else:
+            unit_cost = await get_weighted_average_cost(session, line.item_id, stocktake.warehouse_id)
+            line_cost = (Decimal(str(abs(var))) * unit_cost).quantize(Decimal("0.01"))
+
         if var < 0:
             shortage_cost += line_cost
         elif var > 0:
@@ -642,31 +681,59 @@ async def post_stocktake_adjustments(
             session.add(entry)
             created_entries.append(entry.id)
 
-    # قيود اليومية لتسويات الجرد بمتوسط التكلفة (في نفس المعاملة)
-    if shortage_cost > Decimal("0.00"):
-        await post_journal_entry(
-            session,
-            source_doc_type="stocktake_shortage",
-            source_doc_id=stocktake.id,
-            description=f"عجز جرد {stocktake.session_number}",
-            lines=[
-                {"account_code": "5200", "debit": shortage_cost, "credit": 0, "description": "عجز مخزون بالجرد"},
-                {"account_code": inventory_account, "debit": 0, "credit": shortage_cost, "description": "تخفيض المخزون بالعجز"},
-            ],
-            user_id=poster_id,
-        )
-    if surplus_cost > Decimal("0.00"):
-        await post_journal_entry(
-            session,
-            source_doc_type="stocktake_surplus",
-            source_doc_id=stocktake.id,
-            description=f"زيادة جرد {stocktake.session_number}",
-            lines=[
-                {"account_code": inventory_account, "debit": surplus_cost, "credit": 0, "description": "زيادة المخزون بالجرد"},
-                {"account_code": "5200", "debit": 0, "credit": surplus_cost, "description": "زيادة مخزون بالجرد"},
-            ],
-            user_id=poster_id,
-        )
+    # قيود اليومية لتسويات الجرد
+    if stocktake.is_opening:
+        # الجرد الافتتاحي: ترحيل مباشر لحساب الأرصدة الافتتاحية 3900 بدون أي أثر على 5220 أو قائمة الدخل
+        if surplus_cost > Decimal("0.00"):
+            await post_journal_entry(
+                session,
+                source_doc_type="stocktake_opening",
+                source_doc_id=stocktake.id,
+                description=f"إثبات رصيد مخزون افتتاحي لجلسة جرد {stocktake.session_number}",
+                lines=[
+                    {"account_code": inventory_account, "debit": surplus_cost, "credit": 0, "description": "إثبات رصيد المخزون الافتتاحي"},
+                    {"account_code": "3900", "debit": 0, "credit": surplus_cost, "description": "مقابل الأرصدة الافتتاحية للمخزون"},
+                ],
+                user_id=poster_id,
+            )
+        if shortage_cost > Decimal("0.00"):
+            await post_journal_entry(
+                session,
+                source_doc_type="stocktake_opening",
+                source_doc_id=stocktake.id,
+                description=f"تسوية عجز رصيد مخزون افتتاحي لجلسة جرد {stocktake.session_number}",
+                lines=[
+                    {"account_code": "3900", "debit": shortage_cost, "credit": 0, "description": "مقابل الأرصدة الافتتاحية للمخزون"},
+                    {"account_code": inventory_account, "debit": 0, "credit": shortage_cost, "description": "تخفيض المخزون الافتتاحي بالعجز"},
+                ],
+                user_id=poster_id,
+            )
+    else:
+        var_acc = await resolve_expense_code(session, "5220", "5200")
+        if shortage_cost > Decimal("0.00"):
+            await post_journal_entry(
+                session,
+                source_doc_type="stocktake_shortage",
+                source_doc_id=stocktake.id,
+                description=f"عجز جرد {stocktake.session_number}",
+                lines=[
+                    {"account_code": var_acc, "debit": shortage_cost, "credit": 0, "description": "عجز مخزون بالجرد"},
+                    {"account_code": inventory_account, "debit": 0, "credit": shortage_cost, "description": "تخفيض المخزون بالعجز"},
+                ],
+                user_id=poster_id,
+            )
+        if surplus_cost > Decimal("0.00"):
+            await post_journal_entry(
+                session,
+                source_doc_type="stocktake_surplus",
+                source_doc_id=stocktake.id,
+                description=f"زيادة جرد {stocktake.session_number}",
+                lines=[
+                    {"account_code": inventory_account, "debit": surplus_cost, "credit": 0, "description": "زيادة المخزون بالجرد"},
+                    {"account_code": var_acc, "debit": 0, "credit": surplus_cost, "description": "زيادة مخزون بالجرد"},
+                ],
+                user_id=poster_id,
+            )
 
     # تحديث حالة الجلسة إلى مرحلة
     stocktake.status = "posted"

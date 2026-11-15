@@ -26,7 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.modules.finance.ledger_service import get_weighted_average_cost, post_journal_entry
+from app.modules.finance.ledger_service import get_weighted_average_cost, post_journal_entry, resolve_expense_code
 from app.modules.production.models import (
     CatalogItem,
     ProductionOrder,
@@ -367,7 +367,8 @@ async def receive_extra_issue(
         if received_cost > Decimal("0.00"):
             journal_lines.append({"account_code": "1220", "debit": received_cost, "credit": 0, "description": f"خامات إضافية مستلمة بالورشة لأمر {order.order_number}"})
         if transit_loss_cost > Decimal("0.00"):
-            journal_lines.append({"account_code": "5200", "debit": transit_loss_cost, "credit": 0, "description": f"عجز خامات إضافية أثناء النقل لأمر {order.order_number}"})
+            loss_acc = await resolve_expense_code(db, "5220", "5200")
+            journal_lines.append({"account_code": loss_acc, "debit": transit_loss_cost, "credit": 0, "description": f"عجز خامات إضافية أثناء النقل لأمر {order.order_number}"})
         journal_lines.append({"account_code": "1210", "debit": 0, "credit": dispatched_cost, "description": "صرف خامات إضافية من مخزن الخامات"})
         await post_journal_entry(
             db,

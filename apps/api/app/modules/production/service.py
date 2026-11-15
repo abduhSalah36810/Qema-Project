@@ -34,6 +34,7 @@ from app.modules.production.models import (
     Warehouse,
     WarehouseTransfer,
     WarehouseTransferLine,
+    TransferDiscrepancyClaim,
     StockLedgerEntry,
     utc_now,
 )
@@ -44,7 +45,12 @@ from app.modules.production.schemas import (
     StageUpdate,
     TemplateCreate,
 )
-from app.modules.finance.ledger_service import post_journal_entry, get_weighted_average_cost
+from app.modules.finance.ledger_service import post_journal_entry, get_weighted_average_cost, resolve_expense_code
+from app.modules.production.stage_timing import (
+    DEFAULT_STAGE_DURATIONS,
+    calculate_stage_working_time,
+    get_or_create_active_calendar,
+)
 
 
 ORDER_STAGES_SEQUENCE = [
@@ -119,6 +125,14 @@ async def create_production_order(
     """
     إنشاء أمر تشغيل جديد وحفظ لقطة خامات مجمدة والمراحل التتابعية الخمس.
     """
+    if customer_order_line_id:
+        from app.modules.customers.models import CustomerOrderLine, CustomerOrder
+        col = await session.get(CustomerOrderLine, customer_order_line_id)
+        if col:
+            cord = await session.get(CustomerOrder, col.order_id)
+            if cord and getattr(cord, "is_opening", False):
+                raise HTTPException(status_code=422, detail="لا يمكن ربط أمر تشغيل بطلب رصيد افتتاحي.")
+
     requested_items = data.items or [ProductionOrderItemCreate(
         product_id=data.product_id or "", variant_id=data.variant_id or "",
         target_quantity=data.target_quantity or 0, season=data.season or "",
@@ -178,6 +192,29 @@ async def create_production_order(
     # لاحقة عشوائية قصيرة تمنع تصادم الأرقام عند الإنشاء المتزامن (القيد فريد في القاعدة)
     order_number = f"PO-{now_year}-{order_count:04d}-{uuid.uuid4().hex[:4].upper()}"
 
+    # نمط التصنيع والعميل (MFG-DEC-01)
+    mfg_type = getattr(data, "manufacturing_type", "internal") or ("external" if any(entry[0].product_type == "private_label" for entry in item_details) else "internal")
+    cust_id = getattr(data, "customer_id", None) or (item_details[0][3].id if item_details[0][3] else None)
+
+    # احتساب تكلفة العمالة الأولية (MFG-DEC-04)
+    l_method = getattr(data, "labor_costing_method", "piece_based") or "piece_based"
+    l_rate = getattr(data, "labor_rate", Decimal("0.00")) or Decimal("0.00")
+    l_hours = getattr(data, "labor_hours", Decimal("0.00")) or Decimal("0.00")
+    initial_labor_cost = Decimal("0.00")
+    if l_method == "piece_based" and l_rate > 0:
+        initial_labor_cost = (Decimal(str(total_target)) * l_rate).quantize(Decimal("0.01"))
+    elif l_method == "time_based" and l_rate > 0 and l_hours > 0:
+        initial_labor_cost = (l_hours * l_rate).quantize(Decimal("0.01"))
+
+    # التكاليف غير المباشرة الموزعة (MFG-DEC-06)
+    oh_basis = getattr(data, "overhead_allocation_basis", None)
+    oh_rate = getattr(data, "allocated_overhead_rate", Decimal("0.00")) or Decimal("0.00")
+    initial_overhead_cost = Decimal("0.00")
+    if oh_basis == "produced_pieces" and oh_rate > 0:
+        initial_overhead_cost = (Decimal(str(total_target)) * oh_rate).quantize(Decimal("0.01"))
+    elif oh_basis == "labor_hours" and oh_rate > 0 and l_hours > 0:
+        initial_overhead_cost = (l_hours * oh_rate).quantize(Decimal("0.01"))
+
     order = ProductionOrder(
         id=str(uuid.uuid4()),
         order_number=order_number,
@@ -192,6 +229,17 @@ async def create_production_order(
         assigned_to=data.assigned_to,
         notes=data.notes,
         created_at=utc_now(),
+        manufacturing_type=mfg_type,
+        customer_id=cust_id,
+        labor_costing_method=l_method,
+        labor_rate=l_rate,
+        labor_hours=l_hours,
+        allowed_waste_pct=getattr(data, "allowed_waste_pct", Decimal("1.50")) or Decimal("1.50"),
+        actual_labor_cost=initial_labor_cost,
+        actual_overhead_cost=initial_overhead_cost,
+        overhead_allocation_basis=oh_basis,
+        allocated_overhead_rate=oh_rate,
+        total_actual_cost=initial_labor_cost + initial_overhead_cost,
     )
     session.add(order)
 
@@ -238,7 +286,12 @@ async def create_production_order(
             if current and current["unit_id"] != line["unit_id"]:
                 raise HTTPException(status_code=422, detail="وحدات الصنف تختلف بين قوالب بنود أمر التشغيل.")
             if not current:
-                material_totals[line["item_id"]] = {**line, "notes": line["notes"], "name_ar": catalog_item.name_ar if catalog_item else ""}
+                material_totals[line["item_id"]] = {
+                    **line,
+                    "notes": line["notes"],
+                    "name_ar": catalog_item.name_ar if catalog_item else "",
+                    "catalog_item": catalog_item,
+                }
             else:
                 current["planned_quantity"] = round(current["planned_quantity"] + line["planned_quantity"], 4)
                 if line["notes"]:
@@ -259,22 +312,26 @@ async def create_production_order(
                 "item_id": mat.item_id, "unit_id": mat.unit_id,
                 "planned_quantity": mat.planned_quantity, "notes": mat.notes,
                 "name_ar": catalog_item.name_ar if catalog_item else "",
+                "catalog_item": catalog_item,
             }
 
     for line in material_totals.values():
-        name_ar = line.get("name_ar")
-        if not name_ar:
+        mat_item = line.get("catalog_item")
+        if not mat_item:
             mat_item = await session.get(CatalogItem, line["item_id"])
-            name_ar = mat_item.name_ar if mat_item else ""
+        name_ar = line.get("name_ar") or (mat_item.name_ar if mat_item else "")
+        supplied = "customer" if mfg_type == "external" and mat_item and mat_item.item_type == "raw_material" else "factory"
         session.add(ProductionOrderMaterial(
             id=str(uuid.uuid4()), order_id=order.id, item_id=line["item_id"],
             unit_id=line["unit_id"], planned_quantity=line["planned_quantity"],
             dispatched_quantity=0.0, received_quantity=0.0, discrepancy_quantity=0.0,
             status="pending", notes=line["notes"],
             item_name_snapshot=name_ar,
+            supplied_by=supplied,
+            commercial_treatment="included_in_service_fee",
         ))
 
-    # 2. إنشاء أحداث المراحل الخمس في حالة not_started
+    # 2. إنشاء أحداث المراحل الخمس في حالة not_started مع تجميد المدة المعيارية المتوقعة (TIME-DEC-01)
     for stage_name in ORDER_STAGES_SEQUENCE:
         stage_event = ProductionStageEvent(
             id=str(uuid.uuid4()),
@@ -285,6 +342,10 @@ async def create_production_order(
             actor_name="النظام",
             timestamp=utc_now(),
             notes=f"مرحلة {STAGE_NAMES_AR.get(stage_name, stage_name)} بانتظار البدء.",
+            expected_duration_minutes=DEFAULT_STAGE_DURATIONS.get(stage_name, 60),
+            is_working_time_provisional=True,
+            is_skipped=False,
+            is_bottleneck=False,
         )
         session.add(stage_event)
 
@@ -325,11 +386,14 @@ async def add_material_to_draft_order(
     if planned_quantity <= 0:
         raise HTTPException(status_code=400, detail="الكمية يجب أن تكون أكبر من صفر.")
 
+    supplied = "customer" if getattr(order, "manufacturing_type", "internal") == "external" and item and item.item_type == "raw_material" else "factory"
     line = ProductionOrderMaterial(
         id=str(uuid.uuid4()), order_id=order_id, item_id=item_id, unit_id=unit_id,
         planned_quantity=planned_quantity, dispatched_quantity=0, received_quantity=0,
         discrepancy_quantity=0, status="pending", notes=notes,
         item_name_snapshot=item.name_ar,
+        supplied_by=supplied,
+        commercial_treatment="included_in_service_fee",
     )
     session.add(line)
     await session.commit()
@@ -423,18 +487,41 @@ async def dispatch_order_materials(
 
     shortages = []
     for mat in sorted_materials:
-        available = await session.scalar(
-            select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0)).where(
-                StockLedgerEntry.item_id == mat.item_id,
-                StockLedgerEntry.warehouse_id == raw_wh.id,
-                StockLedgerEntry.location_type == "warehouse",
+        is_customer_mat = (getattr(mat, "supplied_by", "factory") == "customer")
+        if is_customer_mat:
+            if not order.customer_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="لا يمكن صرف خامات عميل لأمر تشغيل غير مرتبط بعميل.",
+                )
+            cust_bucket = f"customer_deposit:{order.customer_id}"
+            available = await session.scalar(
+                select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0)).where(
+                    StockLedgerEntry.item_id == mat.item_id,
+                    StockLedgerEntry.warehouse_id == raw_wh.id,
+                    StockLedgerEntry.location_type == "warehouse",
+                    StockLedgerEntry.bucket_reference == cust_bucket,
+                )
             )
-        )
-        if float(available or 0.0) + 1e-9 < mat.planned_quantity:
-            item = await session.get(CatalogItem, mat.item_id)
-            shortages.append(
-                f"{item.name_ar if item else mat.item_id}: المتاح {float(available or 0):g} والمطلوب {mat.planned_quantity:g}"
+            if float(available or 0.0) + 1e-9 < mat.planned_quantity:
+                item = await session.get(CatalogItem, mat.item_id)
+                shortages.append(
+                    f"{item.name_ar if item else mat.item_id} (أمانة العميل): المتاح {float(available or 0):g} والمطلوب {mat.planned_quantity:g}"
+                )
+        else:
+            available = await session.scalar(
+                select(func.coalesce(func.sum(StockLedgerEntry.quantity), 0.0)).where(
+                    StockLedgerEntry.item_id == mat.item_id,
+                    StockLedgerEntry.warehouse_id == raw_wh.id,
+                    StockLedgerEntry.location_type == "warehouse",
+                    StockLedgerEntry.bucket_reference.is_(None),
+                )
             )
+            if float(available or 0.0) + 1e-9 < mat.planned_quantity:
+                item = await session.get(CatalogItem, mat.item_id)
+                shortages.append(
+                    f"{item.name_ar if item else mat.item_id} (مخزون المصنع): المتاح {float(available or 0):g} والمطلوب {mat.planned_quantity:g}"
+                )
     if shortages:
         raise HTTPException(
             status_code=409,
@@ -461,10 +548,15 @@ async def dispatch_order_materials(
     for mat in order.materials:
         mat.dispatched_quantity = mat.planned_quantity
         mat.status = "dispatched"
-        # احتساب متوسط التكلفة المرجح للخامة وتجميد التكلفة بالأمر
-        mat_wac = await get_weighted_average_cost(session, mat.item_id, raw_wh.id)
-        mat.unit_cost = mat_wac
-        mat.total_cost = (Decimal(str(mat.planned_quantity)) * mat_wac).quantize(Decimal("0.01"))
+        is_customer_mat = (getattr(mat, "supplied_by", "factory") == "customer")
+        if is_customer_mat:
+            mat.unit_cost = Decimal("0.0000")
+            mat.total_cost = Decimal("0.00")
+        else:
+            # احتساب متوسط التكلفة المرجح للخامة وتجميد التكلفة بالأمر
+            mat_wac = await get_weighted_average_cost(session, mat.item_id, raw_wh.id)
+            mat.unit_cost = mat_wac
+            mat.total_cost = (Decimal(str(mat.planned_quantity)) * mat_wac).quantize(Decimal("0.01"))
         line = WarehouseTransferLine(
             id=str(uuid.uuid4()),
             transfer_id=transfer.id,
@@ -482,9 +574,13 @@ async def dispatch_order_materials(
     await session.flush()
 
     for line, mat in lines:
+        is_customer_mat = (getattr(mat, "supplied_by", "factory") == "customer")
+        source_bucket = f"customer_deposit:{order.customer_id}" if is_customer_mat else None
+
         session.add(StockLedgerEntry(
             id=str(uuid.uuid4()), item_id=mat.item_id, unit_id=mat.unit_id,
-            warehouse_id=raw_wh.id, location_type="warehouse", quantity=-mat.planned_quantity,
+            warehouse_id=raw_wh.id, location_type="warehouse", bucket_reference=source_bucket,
+            quantity=-mat.planned_quantity,
             reference_doc_type="warehouse_transfer", reference_doc_id=transfer.id,
             transfer_line_id=line.id, entry_type="dispatch_source", created_by=dispatcher_id,
             unit_cost=mat.unit_cost, total_cost=-mat.total_cost,
@@ -627,6 +723,29 @@ async def confirm_warehouse_receipt(
                 entry_type="receipt_discrepancy", created_by=receiver_id,
                 unit_cost=unit_cost, total_cost=(disp_cost - rec_cost),
             ))
+            # Phase 3: إنشاء طلب مراجعة وحسم عجز استلام الورشة تلقائياً
+            shortage_amount = round(abs(disc_qty), 6)
+            claim_number = f"CLM-{datetime.now(timezone.utc).year}-{uuid.uuid4().hex[:6].upper()}"
+            session.add(TransferDiscrepancyClaim(
+                id=str(uuid.uuid4()),
+                claim_number=claim_number,
+                transfer_id=transfer.id,
+                transfer_line_id=line.id,
+                order_id=order.id,
+                item_id=line.item_id,
+                unit_id=line.unit_id,
+                dispatched_quantity=line.dispatched_quantity,
+                received_quantity=rec_qty,
+                discrepancy_quantity=shortage_amount,
+                unit_cost=unit_cost,
+                total_cost=(disp_cost - rec_cost),
+                status="pending_investigation",
+                claimed_by=receiver_id,
+                claimed_at=utc_now(),
+                claim_notes=notes_map.get(line.item_id) or data.notes or "عجز عند استلام الورشة",
+                resolution_notes="",
+                created_at=utc_now(),
+            ))
         if notes_map.get(line.item_id):
             line.notes = f"{line.notes} | {notes_map[line.item_id]}".strip(" |")
 
@@ -657,7 +776,8 @@ async def confirm_warehouse_receipt(
         if received_cost > Decimal("0.00"):
             journal_lines.append({"account_code": "1220", "debit": received_cost, "credit": 0, "description": f"خامات مستلمة بالورشة لأمر {order.order_number}"})
         if transit_loss_cost > Decimal("0.00"):
-            journal_lines.append({"account_code": "5200", "debit": transit_loss_cost, "credit": 0, "description": f"عجز خامات أثناء النقل لأمر {order.order_number}"})
+            loss_acc = await resolve_expense_code(session, "5220", "5200")
+            journal_lines.append({"account_code": loss_acc, "debit": transit_loss_cost, "credit": 0, "description": f"عجز خامات أثناء النقل لأمر {order.order_number}"})
         journal_lines.append({"account_code": "1210", "debit": 0, "credit": dispatched_cost, "description": "صرف خامات من مخزن الخامات"})
         await post_journal_entry(
             session,
@@ -676,6 +796,88 @@ async def confirm_warehouse_receipt(
         await session.flush()
         await session.refresh(transfer)
     return transfer
+
+
+async def resolve_discrepancy_claim(
+    session: AsyncSession,
+    *,
+    claim_id: str,
+    decision: str,
+    resolution_notes: str,
+    resolver_id: str,
+) -> TransferDiscrepancyClaim:
+    """
+    حسم طلب عجز استلام خامات الورشة بواسطة أمين المخزن أو المدير العام (Phase 3).
+    - Maker-Checker: لا يجوز لمن أثبت العجز بالورشة أن يفصل فيه أو يعتمده بنفسه.
+    - تسوية رصيد العجز في موقع discrepancy وتوثيق القرار رسمياً.
+    """
+    stmt = (
+        select(TransferDiscrepancyClaim)
+        .options(
+            selectinload(TransferDiscrepancyClaim.transfer),
+            selectinload(TransferDiscrepancyClaim.transfer_line),
+            selectinload(TransferDiscrepancyClaim.order),
+            selectinload(TransferDiscrepancyClaim.item),
+            selectinload(TransferDiscrepancyClaim.unit),
+        )
+        .where(TransferDiscrepancyClaim.id == claim_id)
+        .with_for_update()
+    )
+    claim = (await session.execute(stmt)).scalar_one_or_none()
+    if not claim:
+        raise HTTPException(status_code=404, detail="طلب مراجعة عجز الاستلام غير موجود.")
+
+    if claim.status != "pending_investigation":
+        raise HTTPException(status_code=409, detail="تم البت في هذا الطلب مسبقاً ولا يمكن تعديله.")
+
+    if claim.claimed_by == resolver_id:
+        raise HTTPException(
+            status_code=409,
+            detail="فصل المسؤوليات: لا يجوز لمن أثبت العجز بالورشة أن يفصل فيه بنفسه. يتولى الحسم أمين المخزن أو المدير العام.",
+        )
+
+    valid_decisions = ("accepted_transit_loss", "accepted_measurement_error", "rejected_under_carrier_liability")
+    if decision not in valid_decisions:
+        raise HTTPException(status_code=422, detail="قرار الحسم غير صالح.")
+
+    if not resolution_notes or not resolution_notes.strip():
+        raise HTTPException(status_code=422, detail="يلزم تسجيل بيان وأسباب قرار الحسم كتابياً.")
+
+    # تسوية رصيد العجز المفتوح في سجل الحركات المخزنية (إغلاق حاوية discrepancy للتحويل)
+    session.add(StockLedgerEntry(
+        id=str(uuid.uuid4()),
+        item_id=claim.item_id,
+        unit_id=claim.unit_id,
+        warehouse_id=None,
+        location_type="discrepancy",
+        bucket_reference=claim.transfer_id,
+        quantity=-claim.discrepancy_quantity,
+        reference_doc_type="transfer_discrepancy_claim",
+        reference_doc_id=claim.id,
+        transfer_line_id=claim.transfer_line_id,
+        entry_type="claim_settlement",
+        created_by=resolver_id,
+        unit_cost=claim.unit_cost,
+        total_cost=-claim.total_cost,
+    ))
+
+    claim.status = decision
+    claim.resolved_by = resolver_id
+    claim.resolved_at = utc_now()
+    claim.resolution_notes = resolution_notes.strip()
+
+    decision_labels = {
+        "accepted_transit_loss": "عجز نقل وفقد مبرر",
+        "accepted_measurement_error": "خطأ كيل وقياس عند الصرف",
+        "rejected_under_carrier_liability": "مسؤولية الناقل/المسؤول الميداني",
+    }
+    label = decision_labels.get(decision, decision)
+    if claim.transfer_line:
+        claim.transfer_line.notes = f"{claim.transfer_line.notes} | حسم العجز ({claim.discrepancy_quantity:g}): {label} بواسطة {resolver_id} — {claim.resolution_notes}".strip(" |")
+
+    await session.commit()
+    await session.refresh(claim)
+    return claim
 
 
 async def update_production_stage(
@@ -712,20 +914,21 @@ async def update_production_stage(
             detail="لا يمكن تحديث مراحل الإنتاج إلا بعد صرف الخامات وتأكيد استلامها بالورشة (حالة الأمر: قيد الإنتاج).",
         )
 
-    # ترتيب المراحل والتحقق من التتابع
+    # ترتيب المراحل والتحقق من التتابع مع مراعاة المراحل المتخطاة (TIME-DEC-03)
     stage_index = ORDER_STAGES_SEQUENCE.index(stage_name)
     events_by_stage = {ev.stage_name: ev for ev in order.stage_events}
 
-    # إذا أراد وضعها in_progress أو completed، يجب أن تكون المرحلة السابقة completed
+    # إذا أراد وضعها in_progress أو completed، يجب أن تكون جميع المراحل السابقة النشطة completed
     if data.status in ("in_progress", "completed") and stage_index > 0:
-        prev_stage = ORDER_STAGES_SEQUENCE[stage_index - 1]
-        prev_event = events_by_stage.get(prev_stage)
-        if not prev_event or prev_event.status != "completed":
-            prev_name_ar = STAGE_NAMES_AR.get(prev_stage, prev_stage)
-            raise HTTPException(
-                status_code=400,
-                detail=f"لا يمكن بدء أو إكمال مرحلة ({STAGE_NAMES_AR.get(stage_name)}) قبل إكمال المرحلة السابقة ({prev_name_ar}).",
-            )
+        for idx in range(stage_index):
+            prev_stage = ORDER_STAGES_SEQUENCE[idx]
+            prev_event = events_by_stage.get(prev_stage)
+            if prev_event and not (prev_event.is_skipped or False) and prev_event.status != "completed":
+                prev_name_ar = STAGE_NAMES_AR.get(prev_stage, prev_stage)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"لا يمكن بدء أو إكمال مرحلة ({STAGE_NAMES_AR.get(stage_name)}) قبل إكمال المرحلة السابقة ({prev_name_ar}).",
+                )
 
     target_event = events_by_stage.get(stage_name)
     previous_status = target_event.status if target_event else "not_started"
@@ -743,6 +946,8 @@ async def update_production_stage(
         else:
             detail = "حالة المرحلة تغيرت؛ حدّث الصفحة قبل تنفيذ الإجراء."
         raise HTTPException(status_code=409, detail=detail)
+
+    now = utc_now()
     if not target_event:
         target_event = ProductionStageEvent(
             id=str(uuid.uuid4()),
@@ -751,17 +956,46 @@ async def update_production_stage(
             status=data.status,
             actor_id=actor_id,
             actor_name=actor_name,
-            timestamp=utc_now(),
+            timestamp=now,
             notes=data.notes,
+            expected_duration_minutes=DEFAULT_STAGE_DURATIONS.get(stage_name, 60),
+            started_at=now if data.status == "in_progress" else None,
         )
         session.add(target_event)
     else:
         target_event.status = data.status
         target_event.actor_id = actor_id
         target_event.actor_name = actor_name or target_event.actor_name
-        target_event.timestamp = utc_now()
+        target_event.timestamp = now
         if data.notes:
             target_event.notes = data.notes
+
+        # تسجيل وقت البدء الفعلي
+        if data.status == "in_progress" and not target_event.started_at:
+            target_event.started_at = now
+
+        # تسجيل الإكمال واحتساب المدة التقويمية وزمن الوردية (TIME-DEC-02 & TIME-DEC-04)
+        if data.status == "completed":
+            target_event.completed_at = now
+            calendar = await get_or_create_active_calendar(session)
+            elapsed_m, working_m, is_prov = calculate_stage_working_time(
+                target_event.started_at or target_event.timestamp,
+                target_event.completed_at,
+                calendar,
+            )
+            target_event.elapsed_minutes = elapsed_m
+            target_event.working_minutes = working_m
+            target_event.is_working_time_provisional = is_prov
+            if data.delay_reason:
+                target_event.delay_reason = data.delay_reason
+            if data.delay_notes:
+                target_event.delay_notes = data.delay_notes
+            exp_dur = target_event.expected_duration_minutes or 0
+            if exp_dur > 0:
+                work_m = target_event.working_minutes or 0
+                elap_m = target_event.elapsed_minutes or 0
+                effective_duration = work_m if work_m > 0 else elap_m
+                target_event.is_bottleneck = effective_duration > exp_dur
 
     if previous_status != data.status:
         session.add(ProductionStageHistory(
@@ -769,12 +1003,17 @@ async def update_production_stage(
             from_status=previous_status, to_status=data.status, actor_id=actor_id,
             actor_name=actor_name or "", previous_notes=target_event.notes if target_event else "",
             reason=data.notes.strip() or "تحديث حالة المرحلة",
-            timestamp=utc_now(),
+            timestamp=now,
         ))
 
-    # إذا اكتملت مرحلة التعبئة والتغليف (المرحلة الأخيرة)، ينتهي التصنيع الميداني بانتظار استلام المنتج التام
-    if stage_name == "packing" and data.status == "completed":
-        order.status = "manufacturing_completed"
+    # إذا اكتملت جميع المراحل النشطة (غير المتخطاة)، ينتهي التصنيع الميداني بانتظار استلام المنتج التام
+    if data.status == "completed":
+        all_active_done = all(
+            (ev.is_skipped or False) or ev.status == "completed" or ev.stage_name == stage_name
+            for ev in order.stage_events
+        )
+        if all_active_done:
+            order.status = "manufacturing_completed"
 
     await session.commit()
     await session.refresh(target_event)
@@ -815,7 +1054,7 @@ async def reopen_last_completed_stage(
 
     index = ORDER_STAGES_SEQUENCE.index(stage_name)
     later_events = [event_by_stage.get(name) for name in ORDER_STAGES_SEQUENCE[index + 1:]]
-    if any(later and later.status != "not_started" for later in later_events):
+    if any(later and not later.is_skipped and later.status != "not_started" for later in later_events):
         raise HTTPException(status_code=409, detail="لا يمكن التراجع لأن مرحلة لاحقة بدأت أو اكتملت.")
 
     now = utc_now()
@@ -830,7 +1069,9 @@ async def reopen_last_completed_stage(
     event.actor_name = actor_name or event.actor_name
     event.timestamp = now
     event.notes = clean_reason
-    if stage_name == "packing":
+    event.completed_at = None
+    event.is_bottleneck = False
+    if order.status == "manufacturing_completed":
         order.status = "in_production"
     await session.commit()
     await session.refresh(event)

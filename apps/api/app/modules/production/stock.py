@@ -8,7 +8,8 @@
 - private_label:{customer_id}        : إنتاج خاص لعميل محدد؛ لا يُسلم إلا له.
 - return_pending_inspection:{cid}    : مرتجع عميل تحت الفحص؛ غير متاح للبيع.
 - order:{production_order_id}        : خامات أمر تشغيل داخل مخزن تحت التشغيل.
-- NULL                               : مخزن الخامات (لا يحتاج حاويات).
+- customer_deposit:{customer_id}    : خامات عميل موردة لحسابه بأمانة في مخزن الخامات؛ مفصولة عن مخزون المصنع.
+- NULL                               : مخزن الخامات (رصيد المصنع العام).
 """
 from __future__ import annotations
 
@@ -20,7 +21,12 @@ from app.modules.production.models import StockLedgerEntry
 ANY_BUCKET = object()
 FACTORY_BRAND_BUCKET = "factory_brand"
 RETURN_PENDING_PREFIX = "return_pending_inspection:"
+CUSTOMER_DEPOSIT_PREFIX = "customer_deposit:"
 SELLABLE_PREFIXES = (FACTORY_BRAND_BUCKET, "private_label:")
+
+
+def customer_deposit_bucket(customer_id: str) -> str:
+    return f"customer_deposit:{customer_id}"
 
 
 def finished_goods_bucket(product_type: str | None, customer_id: str | None) -> str:

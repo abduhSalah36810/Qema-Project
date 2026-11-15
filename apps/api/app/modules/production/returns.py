@@ -329,6 +329,8 @@ async def receive_return(db: AsyncSession, *, order_id: str, transfer_id: str, d
         await lock_stock_balance(db, item_id, raw_wh.id)
         mat = materials.get(item_id)
         unit_cost = Decimal(str(mat.unit_cost if mat and mat.unit_cost is not None else 0))
+        is_customer_mat = bool(mat and getattr(mat, "supplied_by", "factory") == "customer" and order.customer_id)
+        dest_bucket = f"customer_deposit:{order.customer_id}" if is_customer_mat else None
 
         def entry_for(location: str, warehouse_id, bucket, qty: float, entry_type: str) -> None:
             db.add(StockLedgerEntry(
@@ -341,7 +343,7 @@ async def receive_return(db: AsyncSession, *, order_id: str, transfer_id: str, d
 
         entry_for("in_transit", None, transfer.id, -line.dispatched_quantity, "return_receipt_transit")
         if accepted > 1e-9:
-            entry_for("warehouse", raw_wh.id, None, accepted, "return_receipt")
+            entry_for("warehouse", raw_wh.id, dest_bucket, accepted, "return_receipt")
             accepted_cost += (Decimal(str(accepted)) * unit_cost).quantize(Decimal("0.01"))
         if rejected > 1e-9:
             entry_for("discrepancy", None, rejected_bucket(transfer.id), rejected, "return_rejected")

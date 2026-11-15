@@ -267,6 +267,10 @@ class ProductionOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     notes: Mapped[str] = mapped_column(Text, default="")
 
+    # ── نمط التصنيع والعميل (MFG-DEC-01) ──
+    manufacturing_type: Mapped[str] = mapped_column(String(32), default="internal", nullable=False, server_default="internal")
+    customer_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("customers.id"), nullable=True, index=True)
+
     # ── تكلفة التصنيع (Manufacturing Costing) ──
     planned_material_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
     actual_material_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
@@ -275,6 +279,29 @@ class ProductionOrder(Base):
     total_actual_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
     wip_balance: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
     unit_manufacturing_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0")
+
+    # ── احتساب تكلفة العمالة (MFG-DEC-04) ──
+    labor_costing_method: Mapped[str] = mapped_column(String(32), default="piece_based", nullable=False, server_default="piece_based")
+    labor_rate: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    labor_hours: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+
+    # ── الهالك القياسي والفعلي وانحراف الهالك (MFG-DEC-05) ──
+    allowed_waste_pct: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("1.50"), nullable=False, server_default="1.50")
+    actual_waste_pct: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+    excess_waste_qty: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0.000"), nullable=False, server_default="0")
+    excess_waste_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+
+    # ── توزيع التكاليف الصناعية غير المباشرة (MFG-DEC-06) ──
+    overhead_allocation_basis: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    allocated_overhead_rate: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+
+    # ── تسوية التكاليف وتدقيق الهالك وسعر مصنعية التشغيل (T6) ──
+    agreed_service_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0.00")
+    excess_waste_settlement_status: Mapped[str] = mapped_column(String(32), default="pending_review", nullable=False, server_default="pending_review")
+    cost_calculated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cost_calculated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    customer: Mapped["Customer | None"] = relationship("Customer")
 
     product: Mapped["Product"] = relationship("Product")
     variant: Mapped["ProductVariant"] = relationship("ProductVariant")
@@ -285,6 +312,8 @@ class ProductionOrder(Base):
     stage_history: Mapped[list["ProductionStageHistory"]] = relationship("ProductionStageHistory", back_populates="order", cascade="all, delete-orphan")
     defects: Mapped[list["ProductionDefect"]] = relationship("ProductionDefect", back_populates="order")
     order_items: Mapped[list["ProductionOrderItem"]] = relationship("ProductionOrderItem", back_populates="order", cascade="all, delete-orphan")
+    discrepancy_claims: Mapped[list["TransferDiscrepancyClaim"]] = relationship("TransferDiscrepancyClaim", back_populates="order", cascade="all, delete-orphan")
+    demands: Mapped[list["ProductionOrderDemand"]] = relationship("ProductionOrderDemand", back_populates="production_order", cascade="all, delete-orphan")
 
 
 class ProductionOrderItem(Base):
@@ -376,6 +405,13 @@ class ProductionOrderMaterial(Base):
     unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0")
     total_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
 
+    # ── ملكية الخامة والمعالجة التجارية وتتبع الاستهلاك (MFG-DEC-03) ──
+    supplied_by: Mapped[str] = mapped_column(String(32), default="factory", nullable=False, server_default="factory")  # factory, customer
+    commercial_treatment: Mapped[str] = mapped_column(String(32), default="included_in_service_fee", nullable=False, server_default="included_in_service_fee")  # included_in_service_fee, billed_separately
+    actual_consumed_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0.000"), nullable=False, server_default="0")
+    actual_waste_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0.000"), nullable=False, server_default="0")
+    actual_returned_quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0.000"), nullable=False, server_default="0")
+
     order: Mapped["ProductionOrder"] = relationship("ProductionOrder", back_populates="materials")
     item: Mapped["CatalogItem"] = relationship("CatalogItem")
     unit: Mapped["Unit"] = relationship("Unit")
@@ -450,11 +486,24 @@ class ProductionStageEvent(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     order_id: Mapped[str] = mapped_column(String(36), ForeignKey("production_orders.id", ondelete="CASCADE"), nullable=False)
     stage_name: Mapped[str] = mapped_column(String(32), nullable=False)  # cutting, finishing, snap_installation, ironing, packing
-    status: Mapped[str] = mapped_column(String(32), nullable=False)  # not_started, in_progress, completed
+    status: Mapped[str] = mapped_column(String(32), nullable=False)  # not_started, in_progress, completed, skipped
     actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
     actor_name: Mapped[str] = mapped_column(String(128), default="")
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     notes: Mapped[str] = mapped_column(Text, default="")
+
+    # Phase 7 — Timing, Calendar, Stage Skipping & Bottlenecks
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expected_duration_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    elapsed_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    working_minutes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_working_time_provisional: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_skipped: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delay_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    delay_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_bottleneck: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     order: Mapped["ProductionOrder"] = relationship("ProductionOrder", back_populates="stage_events")
 
@@ -474,6 +523,21 @@ class ProductionStageHistory(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     order: Mapped["ProductionOrder"] = relationship("ProductionOrder", back_populates="stage_history")
+
+
+class FactoryCalendarConfig(Base):
+    __tablename__ = "factory_calendar_configs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    shift_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    shift_start_time: Mapped[str] = mapped_column(String(8), default="08:00", nullable=False)
+    shift_end_time: Mapped[str] = mapped_column(String(8), default="17:00", nullable=False)
+    working_days: Mapped[str] = mapped_column(String(255), default="saturday,sunday,monday,tuesday,wednesday,thursday", nullable=False)
+    weekly_holidays: Mapped[str] = mapped_column(String(255), default="friday", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
 # ─── الجداول التأسيسية للهيكل العام ──────────────────────────────────────────
@@ -655,6 +719,7 @@ class StocktakeSession(Base):
     session_number: Mapped[str] = mapped_column(String(64), nullable=False)
     warehouse_id: Mapped[str] = mapped_column(String(36), ForeignKey("warehouses.id"), nullable=False)
     scope_type: Mapped[str] = mapped_column(String(32), default="full_warehouse", nullable=False)  # full_warehouse, specific_items
+    is_opening: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)  # draft, counting, submitted, under_review, approved, posted, cancelled
     description: Mapped[str] = mapped_column(String(255), default="")
     counting_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
@@ -684,7 +749,13 @@ class StocktakeSession(Base):
 class StocktakeLine(Base):
     __tablename__ = "stocktake_lines"
     __table_args__ = (
-        Index("uq_stocktake_lines_session_item", "stocktake_id", "item_id", unique=True),
+        Index(
+            "uq_stocktake_lines_session_item_bucket",
+            "stocktake_id",
+            "item_id",
+            text("COALESCE(bucket_reference, '')"),
+            unique=True,
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -692,6 +763,7 @@ class StocktakeLine(Base):
     item_id: Mapped[str] = mapped_column(String(36), ForeignKey("catalog_items.id"), nullable=False, index=True)
     unit_id: Mapped[str] = mapped_column(String(36), ForeignKey("units.id"), nullable=False)
     bucket_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(14, 4), nullable=True)
     book_quantity: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     counted_quantity: Mapped[float | None] = mapped_column(Float, nullable=True)  # None = not counted, 0.0 = zero count!
     variance: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -777,3 +849,166 @@ class ProductionMaterialReconciliationLine(Base):
     reconciliation: Mapped["ProductionMaterialReconciliation"] = relationship(
         "ProductionMaterialReconciliation", back_populates="lines"
     )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# سندات خامات العملاء (Customer-Owned Materials Tracking - MFG-DEC-02)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class CustomerMaterialReceipt(Base):
+    """سند استلام خامات موردة من العميل لحسابه (تشغيل للغير / أمانة)."""
+    __tablename__ = "customer_material_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    receipt_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), nullable=False, index=True)
+    received_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    received_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="received")  # received, partially_consumed, fully_consumed, returned
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    customer: Mapped["Customer"] = relationship("Customer")
+    lines: Mapped[list["CustomerMaterialReceiptLine"]] = relationship(
+        "CustomerMaterialReceiptLine", back_populates="receipt", cascade="all, delete-orphan"
+    )
+
+
+class CustomerMaterialReceiptLine(Base):
+    """بند استلام خامة عميل وتتبع حركاتها من استهلاك وهالك ومرتجع."""
+    __tablename__ = "customer_material_receipt_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    receipt_id: Mapped[str] = mapped_column(String(36), ForeignKey("customer_material_receipts.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id: Mapped[str] = mapped_column(String(36), ForeignKey("catalog_items.id"), nullable=False, index=True)
+    unit_id: Mapped[str] = mapped_column(String(36), ForeignKey("units.id"), nullable=False)
+    quantity_received: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    quantity_consumed: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0.000"), nullable=False, server_default="0")
+    quantity_wasted: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0.000"), nullable=False, server_default="0")
+    quantity_returned: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0.000"), nullable=False, server_default="0")
+    order_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("production_orders.id", ondelete="SET NULL"), nullable=True, index=True)
+    unit_cost_estimate: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0")
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+    receipt: Mapped["CustomerMaterialReceipt"] = relationship("CustomerMaterialReceipt", back_populates="lines")
+    item: Mapped["CatalogItem"] = relationship("CatalogItem")
+    unit: Mapped["Unit"] = relationship("Unit")
+    order: Mapped["ProductionOrder | None"] = relationship("ProductionOrder")
+
+    @property
+    def quantity_remaining(self) -> Decimal:
+        return self.quantity_received - (self.quantity_consumed + self.quantity_wasted + self.quantity_returned)
+
+
+class CustomerMaterialReturn(Base):
+    """سند إرجاع خامات متبقية للعميل معتمد وموثق."""
+    __tablename__ = "customer_material_returns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    return_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), nullable=False, index=True)
+    receipt_line_id: Mapped[str] = mapped_column(String(36), ForeignKey("customer_material_receipt_lines.id"), nullable=False, index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
+    returned_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    returned_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    customer: Mapped["Customer"] = relationship("Customer")
+    receipt_line: Mapped["CustomerMaterialReceiptLine"] = relationship("CustomerMaterialReceiptLine")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# طلبات حسم عجز استلام الورشة بين الإنتاج والمخزن (Phase 3)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TransferDiscrepancyClaim(Base):
+    """
+    طلب مراجعة وحسم عجز استلام خامات الورشة بين مدير الإنتاج وأمين المخزن (Phase 3).
+    - ينشأ تلقائياً عند وجود فرق استلام في الورشة (استلام أقل من المصروف).
+    - Maker-Checker: لا يجوز لمن أثبت العجز بالورشة أن يفصل فيه بنفسه.
+    - أمين المخزن يبت في الطلب ميدانياً: قبول كعجز نقل/فقد، أو خطأ قياس/كيل، أو رفض وتكليف المسؤول.
+    - إغلاق أمر التشغيل محظور قطعياً طالما وُجد طلب عجز استلام معلق بانتظار حسم أمين المخزن.
+    """
+    __tablename__ = "transfer_discrepancy_claims"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('pending_investigation', 'accepted_transit_loss', 'accepted_measurement_error', 'rejected_under_carrier_liability')",
+            name="ck_transfer_discrepancy_claim_status",
+        ),
+        Index("ix_transfer_discrepancy_claims_order_status", "order_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    claim_number: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    transfer_id: Mapped[str] = mapped_column(String(36), ForeignKey("warehouse_transfers.id", ondelete="CASCADE"), nullable=False, index=True)
+    transfer_line_id: Mapped[str] = mapped_column(String(36), ForeignKey("warehouse_transfer_lines.id", ondelete="CASCADE"), nullable=False, index=True)
+    order_id: Mapped[str] = mapped_column(String(36), ForeignKey("production_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id: Mapped[str] = mapped_column(String(36), ForeignKey("catalog_items.id"), nullable=False, index=True)
+    unit_id: Mapped[str] = mapped_column(String(36), ForeignKey("units.id"), nullable=False)
+
+    dispatched_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    received_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    discrepancy_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    unit_cost: Mapped[Decimal] = mapped_column(Numeric(14, 4), default=Decimal("0.0000"), nullable=False, server_default="0")
+    total_cost: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"), nullable=False, server_default="0")
+
+    status: Mapped[str] = mapped_column(String(32), default="pending_investigation", nullable=False, index=True)
+    claimed_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    claim_notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    resolved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    transfer: Mapped["WarehouseTransfer"] = relationship("WarehouseTransfer")
+    transfer_line: Mapped["WarehouseTransferLine"] = relationship("WarehouseTransferLine")
+    order: Mapped["ProductionOrder"] = relationship("ProductionOrder", back_populates="discrepancy_claims")
+    item: Mapped["CatalogItem"] = relationship("CatalogItem")
+    unit: Mapped["Unit"] = relationship("Unit")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ربط وتجميع طلبات العملاء بأوامر التشغيل (Demand Aggregation & Traceability - Phase 4)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class ProductionOrderDemand(Base):
+    """
+    تخصيص وربط بنود طلبات العملاء بأمر التشغيل (Demand Aggregation & Traceability - Phase 4).
+    - يربط أمر التشغيل بأكثر من طلب عميل لنفس الموديل والمقاس.
+    - يحفظ الكمية المخصصة لكل عميل (allocated_quantity).
+    - يتابع الكمية المستلمة والمفككة لحساب كل عميل (fulfilled_quantity).
+    - يضمن تفكيك الإنتاج التام تلقائياً إلى سلة التسليم الخاصة بكل عميل (private_label:{customer_id}).
+    """
+    __tablename__ = "production_order_demands"
+    __table_args__ = (
+        CheckConstraint("allocated_quantity > 0", name="ck_production_order_demand_allocated_positive"),
+        CheckConstraint("fulfilled_quantity >= 0", name="ck_production_order_demand_fulfilled_nonnegative"),
+        Index("ix_production_order_demands_order_line", "production_order_id", "customer_order_line_id", unique=True),
+        Index("ix_production_order_demands_customer", "customer_id", "customer_order_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    production_order_id: Mapped[str] = mapped_column(String(36), ForeignKey("production_orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    customer_order_line_id: Mapped[str] = mapped_column(String(36), ForeignKey("customer_order_lines.id", ondelete="RESTRICT"), nullable=False, index=True)
+    customer_order_id: Mapped[str] = mapped_column(String(36), ForeignKey("customer_orders.id", ondelete="RESTRICT"), nullable=False, index=True)
+    customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id", ondelete="RESTRICT"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(String(36), ForeignKey("products.id"), nullable=False, index=True)
+    variant_id: Mapped[str] = mapped_column(String(36), ForeignKey("product_variants.id"), nullable=False, index=True)
+
+    allocated_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    fulfilled_quantity: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, server_default="0")
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False, server_default="")
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    production_order: Mapped["ProductionOrder"] = relationship("ProductionOrder", back_populates="demands")
+    customer_order_line: Mapped["CustomerOrderLine"] = relationship("CustomerOrderLine", back_populates="demands")
+    customer_order: Mapped["CustomerOrder"] = relationship("CustomerOrder")
+    customer: Mapped["Customer"] = relationship("Customer")
+    product: Mapped["Product"] = relationship("Product")
+    variant: Mapped["ProductVariant"] = relationship("ProductVariant")
+

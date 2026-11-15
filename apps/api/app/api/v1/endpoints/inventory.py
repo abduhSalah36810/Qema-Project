@@ -140,6 +140,7 @@ def serialize_stocktake_session(st: StocktakeSession, include_lines: bool = Fals
         warehouse_code=st.warehouse.code if st.warehouse else "",
         warehouse_name_ar=st.warehouse.name_ar if st.warehouse else "",
         scope_type=st.scope_type,
+        is_opening=getattr(st, "is_opening", False),
         status=st.status,
         description=st.description or "",
         counting_date=st.counting_date,

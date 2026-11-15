@@ -150,6 +150,7 @@ class CatalogItemRead(BaseModel):
     submitted_by: Optional[str] = None
     approved_at: Optional[datetime] = None
     approved_by: Optional[str] = None
+    created_at: Optional[datetime] = None
     has_pending_revision: bool = False
 
 
@@ -459,6 +460,13 @@ class OrderMaterialSnapshotRead(BaseModel):
     discrepancy_quantity: float = 0.0
     status: str
     notes: str = ""
+    supplied_by: str = "factory"
+    commercial_treatment: str = "included_in_service_fee"
+    actual_consumed_quantity: float = 0.0
+    actual_waste_quantity: float = 0.0
+    actual_returned_quantity: float = 0.0
+    unit_cost: Decimal = Decimal("0.0000")
+    total_cost: Decimal = Decimal("0.00")
 
 
 class ProductionStageEventRead(BaseModel):
@@ -469,6 +477,17 @@ class ProductionStageEventRead(BaseModel):
     actor_name: str = ""
     timestamp: datetime
     notes: str = ""
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    expected_duration_minutes: int = 0
+    elapsed_minutes: int = 0
+    working_minutes: int = 0
+    is_working_time_provisional: bool = True
+    is_skipped: bool = False
+    skip_reason: Optional[str] = None
+    delay_reason: Optional[str] = None
+    delay_notes: Optional[str] = None
+    is_bottleneck: bool = False
 
 
 class ProductionStageHistoryRead(BaseModel):
@@ -520,6 +539,15 @@ class OrderCreate(BaseModel):
     custom_materials: Optional[List[OrderMaterialCreate]] = Field(default=None, description="خامات مخصصة عند الإنشاء من الصفر")
     assigned_to: str = ""
     notes: str = ""
+    # ── نمط التصنيع والتكاليف (Phase 6 / MFG-DEC-01..06) ──
+    manufacturing_type: Literal["internal", "external"] = "internal"
+    customer_id: Optional[str] = None
+    labor_costing_method: Literal["piece_based", "time_based"] = "piece_based"
+    labor_rate: Decimal = Field(default=Decimal("0.00"), ge=0)
+    labor_hours: Decimal = Field(default=Decimal("0.00"), ge=0)
+    allowed_waste_pct: Decimal = Field(default=Decimal("1.50"), ge=0)
+    overhead_allocation_basis: Optional[Literal["produced_pieces", "labor_hours", "machine_hours"]] = None
+    allocated_overhead_rate: Decimal = Field(default=Decimal("0.00"), ge=0)
 
     @model_validator(mode="after")
     def validate_legacy_or_items(self):
@@ -658,6 +686,100 @@ class RequirementsRead(BaseModel):
     has_shortage: bool
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# تجميع طلبات العملاء وتخطيط الاحتياجات (Demand Aggregation & Planning - Phase 4)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class DemandPoolItemRead(BaseModel):
+    customer_order_line_id: str
+    customer_order_id: str
+    customer_order_number: str
+    customer_id: str
+    customer_name: str
+    product_id: str
+    product_name: str
+    variant_id: str
+    numeric_size: Optional[int] = None
+    letter_size: Optional[str] = None
+    season: str
+    variant_label: str
+    ordered_quantity: float
+    planned_quantity: float
+    unplanned_quantity: float
+    order_date: datetime
+    expected_delivery_at: Optional[datetime] = None
+
+
+class DemandAllocationItem(BaseModel):
+    customer_order_line_id: str
+    allocated_quantity: float = Field(..., gt=0, description="الكمية المراد تخصيصها من هذا الطلب")
+
+
+class DemandPoolPreviewRequest(BaseModel):
+    items: List[DemandAllocationItem] = Field(..., min_length=1)
+
+
+class DemandCustomerShareItem(BaseModel):
+    customer_id: str
+    customer_name: str
+    customer_order_id: str
+    customer_order_number: str
+    customer_order_line_id: str
+    allocated_quantity: float
+    percentage: float
+
+
+class DemandMaterialRequirementItem(BaseModel):
+    item_id: str
+    item_code: str
+    item_name_ar: str
+    unit_id: str
+    unit_name_ar: str
+    quantity_per_piece: float
+    required_quantity: float
+    available_quantity: float
+    shortage_quantity: float
+    is_sufficient: bool
+
+
+class DemandMaterialsPreviewResponse(BaseModel):
+    product_id: str
+    product_name: str
+    variant_id: str
+    variant_label: str
+    total_target_quantity: float
+    template_version_id: Optional[str] = None
+    customer_shares: List[DemandCustomerShareItem]
+    materials: List[DemandMaterialRequirementItem]
+    all_materials_available: bool
+
+
+class OrderAggregateCreate(BaseModel):
+    items: List[DemandAllocationItem] = Field(..., min_length=1, description="بنود طلبات العملاء والكمية المخصصة من كل منها")
+    template_version_id: Optional[str] = Field(None, description="إصدار BOM محدد، أو يتم أخذ النشط تلقائياً")
+    season: Optional[str] = None
+    assigned_to: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class ProductionOrderDemandRead(BaseModel):
+    id: str
+    production_order_id: str
+    customer_order_line_id: str
+    customer_order_id: str
+    customer_order_number: str = ""
+    customer_id: str
+    customer_name: str = ""
+    product_id: str
+    variant_id: str
+    allocated_quantity: float
+    fulfilled_quantity: float
+    remaining_quantity: float
+    fulfillment_pct: float
+    notes: str = ""
+    created_at: datetime
+
+
 class OrderRead(BaseModel):
     id: str
     order_number: str
@@ -672,6 +794,30 @@ class OrderRead(BaseModel):
     assigned_to: str
     created_at: datetime
     notes: str
+    # ── نمط التصنيع والتكاليف (Phase 6 / MFG-DEC-01..06) ──
+    manufacturing_type: str = "internal"
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    labor_costing_method: str = "piece_based"
+    labor_rate: Decimal = Decimal("0.00")
+    labor_hours: Decimal = Decimal("0.00")
+    allowed_waste_pct: Decimal = Decimal("1.50")
+    actual_waste_pct: Decimal = Decimal("0.00")
+    excess_waste_qty: Decimal = Decimal("0.000")
+    excess_waste_cost: Decimal = Decimal("0.00")
+    overhead_allocation_basis: Optional[str] = None
+    allocated_overhead_rate: Decimal = Decimal("0.00")
+    planned_material_cost: Decimal = Decimal("0.00")
+    actual_material_cost: Decimal = Decimal("0.00")
+    actual_labor_cost: Decimal = Decimal("0.00")
+    actual_overhead_cost: Decimal = Decimal("0.00")
+    total_actual_cost: Decimal = Decimal("0.00")
+    unit_manufacturing_cost: Decimal = Decimal("0.0000")
+    # ── تسوية التكاليف وتدقيق الهالك وسعر مصنعية التشغيل (T6) ──
+    agreed_service_price: Decimal = Decimal("0.00")
+    excess_waste_settlement_status: str = "pending_review"
+    cost_calculated_at: Optional[datetime] = None
+    cost_calculated_by: Optional[str] = None
     # من صرف خامات التحويل المعلق (بالطريق) إن وجد؛ لا يؤكد هذا المستخدم استلامه بنفسه
     pending_transfer_dispatched_by: Optional[str] = None
     # صرف خامات إضافي بالطريق بانتظار تأكيد مسؤول الإنتاج: من صرفه (لا يؤكد استلامه بنفسه)
@@ -686,6 +832,7 @@ class OrderRead(BaseModel):
     stage_events: List[ProductionStageEventRead] = []
     stage_history: List[ProductionStageHistoryRead] = []
     defects: List["ProductionDefectRead"] = []
+    demands: List["ProductionOrderDemandRead"] = []
 
 
 class ProductionDefectCreate(BaseModel):
@@ -786,8 +933,64 @@ class WarehouseTransferRead(BaseModel):
 # ─── مراحل التشغيل ────────────────────────────────────────────────────────
 
 class StageUpdate(BaseModel):
-    status: str = Field(..., description="حالة المرحلة: not_started, in_progress, completed")
+    status: str = Field(..., description="حالة المرحلة: not_started, in_progress, completed, skipped")
     notes: str = ""
+    is_skipped: Optional[bool] = None
+    skip_reason: Optional[str] = None
+    delay_reason: Optional[str] = None
+    delay_notes: Optional[str] = None
+
+
+class StageSkipRequest(BaseModel):
+    skip_reason: str = Field(..., min_length=1, max_length=500, description="سبب تخطي المرحلة (مثلاً: موديل بدون كبسول)")
+
+
+class StageDurationAdjustRequest(BaseModel):
+    expected_duration_minutes: int = Field(..., ge=0, description="المدة المعيارية المتوقعة بالدقائق")
+
+
+class FactoryCalendarConfigRead(BaseModel):
+    id: str
+    shift_name: str
+    shift_start_time: str
+    shift_end_time: str
+    working_days: str
+    weekly_holidays: str
+    is_active: bool
+    is_approved: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class FactoryCalendarConfigUpdate(BaseModel):
+    shift_name: Optional[str] = None
+    shift_start_time: Optional[str] = None
+    shift_end_time: Optional[str] = None
+    working_days: Optional[str] = None
+    weekly_holidays: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_approved: Optional[bool] = None
+
+
+class BottleneckStageMetric(BaseModel):
+    stage_name: str
+    stage_name_ar: str
+    total_completed_orders: int
+    avg_expected_minutes: float
+    avg_working_minutes: float
+    avg_elapsed_minutes: float
+    variance_minutes: float
+    bottleneck_count: int
+    bottleneck_percentage: float
+
+
+class BottleneckAnalysisResponse(BaseModel):
+    stages: list[BottleneckStageMetric]
+    top_delay_reasons: list[dict[str, Any]]
+    active_bottlenecks_count: int
+    active_bottlenecks: list[dict[str, Any]]
+    calendar_configured: bool
+    calendar_approved: bool
 
 
 # ─── فحص وتحليل النواقص ───────────────────────────────────────────────────
@@ -1085,6 +1288,7 @@ class OrderCloseResponse(BaseModel):
 class StocktakeCreateRequest(BaseModel):
     warehouse_id: str = Field(..., description="المخزن المستهدف للجرد")
     scope_type: str = Field("full_warehouse", pattern="^(full_warehouse|specific_items)$")
+    is_opening: bool = Field(False, description="جلسة جرد افتتاحي للمصنع")
     item_ids: Optional[List[str]] = Field(default=None, description="قائمة الأصناف المستهدفة في حال الجرد الجزئي")
     description: str = Field("", max_length=255)
     counting_date: Optional[datetime] = None
@@ -1093,6 +1297,7 @@ class StocktakeCreateRequest(BaseModel):
 class StocktakeCountItem(BaseModel):
     line_id: str
     counted_quantity: float = Field(..., ge=0.0, description="الكمية المعدودة فعلياً (الصفر قيمة معتمدة)")
+    unit_cost: Optional[float] = Field(default=None, ge=0.0, description="تكلفة الوحدة للجرد الافتتاحي")
     notes: Optional[str] = Field(default=None, max_length=1000)
 
 
@@ -1181,6 +1386,7 @@ class StocktakeSessionRead(BaseModel):
     warehouse_code: str = ""
     warehouse_name_ar: str = ""
     scope_type: str
+    is_opening: bool = False
     status: str
     description: str
     counting_date: datetime
@@ -1212,4 +1418,308 @@ class StocktakeSessionRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     lines: Optional[List[StocktakeLineRead]] = None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# خامات العملاء والتكلفة (Customer Materials & Costing - Phase 6)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class CustomerMaterialReceiptLineCreate(BaseModel):
+    item_id: str
+    unit_id: str
+    quantity_received: Decimal = Field(..., gt=0)
+    unit_cost_estimate: Decimal = Field(default=Decimal("0.0000"), ge=0)
+    order_id: Optional[str] = None
+    notes: str = ""
+
+
+class CustomerMaterialReceiptCreate(BaseModel):
+    customer_id: str
+    received_date: Optional[datetime] = None
+    lines: List[CustomerMaterialReceiptLineCreate] = Field(..., min_length=1)
+    notes: str = ""
+
+
+class CustomerMaterialReceiptLineRead(BaseModel):
+    id: str
+    receipt_id: str
+    item_id: str
+    item_code: str = ""
+    item_name_ar: str = ""
+    unit_id: str
+    unit_name: str = ""
+    quantity_received: Decimal
+    quantity_consumed: Decimal
+    quantity_wasted: Decimal
+    quantity_returned: Decimal
+    quantity_remaining: Decimal
+    unit_cost_estimate: Decimal
+    order_id: Optional[str] = None
+    notes: str = ""
+
+
+class CustomerMaterialReceiptRead(BaseModel):
+    id: str
+    receipt_number: str
+    customer_id: str
+    customer_name: str = ""
+    received_date: datetime
+    received_by: str
+    status: str
+    notes: str
+    created_at: datetime
+    lines: List[CustomerMaterialReceiptLineRead] = []
+
+
+class CustomerMaterialReturnCreate(BaseModel):
+    customer_id: str
+    receipt_line_id: str
+    quantity: Decimal = Field(..., gt=0)
+    notes: str = ""
+
+
+class CustomerMaterialReturnRead(BaseModel):
+    id: str
+    return_number: str
+    customer_id: str
+    customer_name: str = ""
+    receipt_line_id: str
+    item_name_ar: str = ""
+    quantity: Decimal
+    returned_date: datetime
+    returned_by: str
+    notes: str
+
+
+class CustomerMaterialBalanceItem(BaseModel):
+    customer_id: str
+    customer_name: str
+    item_id: str
+    item_code: str
+    item_name_ar: str
+    unit_name: str
+    total_received: Decimal
+    total_consumed: Decimal
+    total_wasted: Decimal
+    total_returned: Decimal
+    current_balance: Decimal
+    active_receipt_lines_count: int
+
+
+class OrderMaterialConsumptionItem(BaseModel):
+    material_line_id: str
+    consumed_quantity: Decimal = Field(default=Decimal("0.000"), ge=0)
+    waste_quantity: Decimal = Field(default=Decimal("0.000"), ge=0)
+    returned_quantity: Decimal = Field(default=Decimal("0.000"), ge=0)
+    notes: str = ""
+
+
+class OrderMaterialConsumptionLogRequest(BaseModel):
+    items: List[OrderMaterialConsumptionItem] = Field(..., min_length=1)
+    notes: str = ""
+
+
+class OrderCostCalculationRequest(BaseModel):
+    labor_costing_method: Optional[Literal["piece_based", "time_based"]] = None
+    labor_rate: Optional[Decimal] = Field(default=None, ge=0)
+    labor_hours: Optional[Decimal] = Field(default=None, ge=0)
+    overhead_allocation_basis: Optional[Literal["produced_pieces", "labor_hours", "machine_hours"]] = None
+    allocated_overhead_rate: Optional[Decimal] = Field(default=None, ge=0)
+    agreed_service_price: Optional[Decimal] = Field(default=None, ge=0)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 14. طلبات حسم عجز استلام الورشة (Transfer Discrepancy Claims - Phase 3)
+# ═════════════════════════════════════════════════════════════════════════════
+
+DISCREPANCY_CLAIM_STATUS_AR = {
+    "pending_investigation": "معلق · بانتظار مراجعة وحسم أمين المخزن",
+    "accepted_transit_loss": "معتمد · عجز نقل وفقد مبرر",
+    "accepted_measurement_error": "معتمد · خطأ كيل وقياس عند الصرف",
+    "rejected_under_carrier_liability": "مرفوض · مسؤولية الناقل/المسؤول الميداني",
+}
+
+
+class TransferDiscrepancyClaimRead(BaseModel):
+    id: str
+    claim_number: str
+    transfer_id: str
+    transfer_number: str = ""
+    transfer_line_id: str
+    order_id: str
+    order_number: str = ""
+    item_id: str
+    item_name_ar: str = ""
+    item_code: str = ""
+    unit_id: str
+    unit_name_ar: str = ""
+    dispatched_quantity: float
+    received_quantity: float
+    discrepancy_quantity: float
+    unit_cost: Decimal
+    total_cost: Decimal
+    status: str
+    status_ar: str = ""
+    claimed_by: str
+    claimed_at: datetime
+    claim_notes: str
+    resolved_by: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    resolution_notes: str = ""
+    created_at: datetime
+
+
+class TransferDiscrepancyClaimResolveRequest(BaseModel):
+    decision: Literal["accepted_transit_loss", "accepted_measurement_error", "rejected_under_carrier_liability"]
+    resolution_notes: str = Field(..., min_length=3, description="بيان وأسباب قرار الحسم كتابياً")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 15. بطاقة تكلفة أمر التشغيل والربحية (Job Cost Sheet & Profitability - Phase 6 / T6)
+# ═════════════════════════════════════════════════════════════════════════════
+
+WASTE_SETTLEMENT_STATUS_AR = {
+    "pending_review": "قيد المراجعة والتدقيق",
+    "approved_by_factory": "معتمد ومقبول كفاقد تشغيل",
+    "claimed_from_customer": "مطالبة محملة على العميل",
+    "waived": "مُعفى بقرار الإدارة",
+}
+
+
+class WasteSettlementUpdateRequest(BaseModel):
+    decision: Literal["approved_by_factory", "claimed_from_customer", "waived"]
+    notes: str = Field(..., min_length=3, description="أسباب ومبررات قرار تسوية الهالك الزائد")
+
+
+class JobCostSheetMaterialLine(BaseModel):
+    item_id: str
+    item_code: str
+    item_name_ar: str
+    unit_name_ar: str
+    ownership: Literal["factory", "customer"]
+    commercial_treatment: str
+    planned_quantity: float
+    dispatched_quantity: float
+    received_quantity: float
+    actual_consumed_quantity: float
+    actual_waste_quantity: float
+    actual_returned_quantity: float
+    unit_cost: Decimal
+    total_cost: Decimal
+    unit_cost_estimate: Decimal = Decimal("0.0000")
+
+
+class JobCostSheetLaborDetail(BaseModel):
+    method: Literal["piece_based", "time_based"]
+    method_label_ar: str
+    rate: Decimal
+    quantity_basis: float
+    total_cost: Decimal
+
+
+class JobCostSheetOverheadDetail(BaseModel):
+    basis: Optional[str] = None
+    basis_label_ar: str
+    rate: Decimal
+    base_quantity: float
+    total_cost: Decimal
+
+
+class JobCostSheetWasteAnalysis(BaseModel):
+    allowed_waste_pct: Decimal
+    allowed_waste_qty: Decimal
+    actual_waste_qty: Decimal
+    actual_waste_pct: Decimal
+    excess_waste_qty: Decimal
+    excess_waste_cost: Decimal
+    is_excess: bool
+    settlement_status: str
+    settlement_status_ar: str
+
+
+class JobCostSheetRead(BaseModel):
+    order_id: str
+    order_number: str
+    manufacturing_type: Literal["internal", "external"]
+    manufacturing_type_label_ar: str
+    status: str
+    status_label_ar: str
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    product_name_ar: str
+    product_code: str
+    target_quantity: float
+    completed_quantity: float
+
+    # تكاليف المصنع
+    factory_materials_cost: Decimal
+    direct_labor_cost: Decimal
+    allocated_overhead_cost: Decimal
+    total_factory_manufacturing_cost: Decimal
+    unit_factory_cost: Decimal
+
+    # الإيرادات والربحية (للتشغيل الداخلي أو للغير)
+    agreed_service_price: Decimal = Decimal("0.00")
+    expected_revenue: Decimal = Decimal("0.00")
+    gross_margin_amount: Decimal = Decimal("0.00")
+    gross_margin_pct: Decimal = Decimal("0.00")
+
+    # إحصاءات خامات العميل المعزولة (CMT Zero Factory Cost)
+    customer_materials_count: int = 0
+    customer_materials_total_consumed: float = 0.0
+    customer_materials_total_wasted: float = 0.0
+    customer_materials_total_returned: float = 0.0
+
+    # التفاصيل التفصيلية
+    factory_materials: List[JobCostSheetMaterialLine] = []
+    customer_materials: List[JobCostSheetMaterialLine] = []
+    labor_detail: JobCostSheetLaborDetail
+    overhead_detail: JobCostSheetOverheadDetail
+    waste_analysis: JobCostSheetWasteAnalysis
+
+    # توثيق الحساب
+    calculated_at: Optional[datetime] = None
+    calculated_by: Optional[str] = None
+
+
+class ManufacturingProfitabilityItem(BaseModel):
+    order_id: str
+    order_number: str
+    manufacturing_type: Literal["internal", "external"]
+    customer_name: Optional[str] = None
+    product_name: str
+    target_quantity: float
+    status: str
+    status_label_ar: str
+    factory_material_cost: Decimal
+    labor_cost: Decimal
+    overhead_cost: Decimal
+    total_cost: Decimal
+    unit_cost: Decimal
+    revenue: Decimal
+    gross_profit: Decimal
+    margin_pct: Decimal
+    waste_pct: Decimal
+    excess_waste_qty: Decimal
+
+
+class ManufacturingProfitabilityReportRead(BaseModel):
+    total_orders_count: int
+    internal_orders_count: int
+    external_orders_count: int
+    total_factory_cost: Decimal
+    total_revenue: Decimal
+    total_gross_profit: Decimal
+    overall_margin_pct: Decimal
+
+    # ملخص التصنيع الداخلي
+    internal_summary: dict
+    # ملخص التشغيل للغير (CMT)
+    external_summary: dict
+
+    orders: List[ManufacturingProfitabilityItem]
+
+
+
+
 

@@ -139,6 +139,7 @@ def serialize_catalog_item(item: CatalogItem, has_pending_revision: bool = False
         submitted_by=item.submitted_by,
         approved_at=item.approved_at,
         approved_by=item.approved_by,
+        created_at=item.created_at,
         has_pending_revision=has_pending_revision,
     )
 
@@ -416,8 +417,8 @@ async def list_catalog_items(
     application_line_id: Optional[str] = Query(default=None, description="تصفية الأصناف حسب خط التطبيق"),
     limit: int = Query(default=50, ge=1, le=250),
     offset: int = Query(default=0, ge=0),
-    sort_by: str = Query(default="code", pattern="^(code|name_ar|created_at|reorder_level)$"),
-    sort_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
+    sort_by: str = Query(default="created_at", pattern="^(code|name_ar|created_at|reorder_level)$"),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
 ):
     """عرض قائمة الأصناف مع الفلترة والبحث والترتيب ودورة الاعتماد والـ Pagination."""
     del current_user
