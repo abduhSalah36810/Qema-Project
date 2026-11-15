@@ -1,14 +1,17 @@
 import { FormEvent, useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
 import { userLabel } from '@/lib/userLabel';
+import { Customer, fetchCustomers } from '@/features/customers/customersApi';
 import {
   CashAccount,
   CashDocument,
+  Supplier,
   cashSourceLabel,
   cashStatusLabel,
   errorMessage,
   financeApi,
   formatMoney,
+  toNumber,
 } from './financeApi';
 
 type OperationTab = 'expense' | 'income' | 'transfer' | 'log';
@@ -19,6 +22,8 @@ export function ReceiptsDisbursementsView() {
 
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [documents, setDocuments] = useState<CashDocument[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -33,15 +38,25 @@ export function ReceiptsDisbursementsView() {
   const [classification, setClassification] = useState('operating_expense');
   const [description, setDescription] = useState('');
 
+  // حقول تخصيص الأطراف (مورد / عميل)
+  const [expenseTargetType, setExpenseTargetType] = useState<'general' | 'supplier'>('general');
+  const [selectedSupplierId, setSelectedSupplierId] = useState('');
+  const [incomeSourceType, setIncomeSourceType] = useState<'general' | 'customer'>('general');
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+
   const load = async () => {
     setLoading(true);
     try {
-      const [accRows, docRows] = await Promise.all([
+      const [accRows, docRows, suppRows, custRows] = await Promise.all([
         financeApi.getAccounts(),
         financeApi.getCashDocuments(),
+        financeApi.getSuppliers().catch(() => []),
+        fetchCustomers().catch(() => []),
       ]);
       setAccounts(accRows);
       setDocuments(docRows);
+      setSuppliers(suppRows.filter((s) => s.is_active));
+      setCustomers(custRows.filter((c) => c.status === 'active'));
 
       const canonicalTreasury = accRows.find(
         (a) => a.id === '00000000-0000-0000-0000-000000000001' || a.account_number === 'TREASURY-MAIN'
@@ -67,6 +82,10 @@ export function ReceiptsDisbursementsView() {
     setAmount('');
     setDescription('');
     setClassification(activeTab === 'expense' ? 'operating_expense' : 'direct_sales');
+    setSelectedSupplierId('');
+    setSelectedCustomerId('');
+    setExpenseTargetType('general');
+    setIncomeSourceType('general');
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -82,6 +101,23 @@ export function ReceiptsDisbursementsView() {
     if (!description.trim()) {
       setError('يرجى إدخال بيان وسبب العملية بوضوح.');
       return;
+    }
+
+    let supplierId: string | null = null;
+    let customerId: string | null = null;
+
+    if (activeTab === 'expense' && expenseTargetType === 'supplier') {
+      if (!selectedSupplierId) {
+        setError('يرجى اختيار المورد المستفيد من الصرف.');
+        return;
+      }
+      supplierId = selectedSupplierId;
+    } else if (activeTab === 'income' && incomeSourceType === 'customer') {
+      if (!selectedCustomerId) {
+        setError('يرجى اختيار العميل المسدد للنقدية.');
+        return;
+      }
+      customerId = selectedCustomerId;
     }
 
     setBusy(true);
@@ -110,7 +146,15 @@ export function ReceiptsDisbursementsView() {
       }
 
       // توثيق التصنيف داخل البيان لمنع الازدواجية وتسهيل المراجعة
-      const fullDescription = `[${classificationLabel(classification)}] ${description.trim()}`;
+      let prefix = `[${classificationLabel(classification)}]`;
+      if (supplierId) {
+        const supp = suppliers.find((s) => s.id === supplierId);
+        prefix = `[دفعة مورد: ${supp ? supp.name : 'مورد'}]`;
+      } else if (customerId) {
+        const cust = customers.find((c) => c.id === customerId);
+        prefix = `[تحصيل عميل: ${cust ? cust.name : 'عميل'}]`;
+      }
+      const fullDescription = `${prefix} ${description.trim()}`;
 
       const res: CashDocument = await financeApi.createCashDocument({
         document_type: docType,
@@ -118,6 +162,9 @@ export function ReceiptsDisbursementsView() {
         to_account_id: toAcc,
         amount: numAmount.toFixed(2),
         description: fullDescription,
+        supplier_id: supplierId,
+        customer_id: customerId,
+        expense_category: activeTab === 'expense' && !supplierId ? classification : undefined,
         occurred_at: new Date().toISOString(),
       });
 
@@ -140,11 +187,15 @@ export function ReceiptsDisbursementsView() {
   const classificationLabel = (c: string) => {
     switch (c) {
       case 'operating_expense':
-        return 'مصروفات تشغيلية وإنتاجية';
+        return 'مصروفات تشغيلية ومستلزمات مكان';
       case 'maintenance':
-        return 'صيانة ومستلزمات تشغيل';
+        return 'صيانة ماكينات وتشغيل ورش';
       case 'administrative':
-        return 'مصروفات إدارية ونثرية';
+        return 'مصروفات إدارية وعمومية';
+      case 'admin_salary':
+        return 'مرتبات ومكافآت الإدارة والخدمات';
+      case 'direct_wages':
+        return 'أجور عمال التشغيل المباشرة';
       case 'direct_sales':
         return 'إيراد مبيعات نقدية مباشرة';
       case 'other_income':
@@ -267,10 +318,35 @@ export function ReceiptsDisbursementsView() {
         <section className="warehouse-card" style={{ maxWidth: '780px' }}>
           <h3 style={{ margin: '0 0 0.5rem 0', color: '#991b1b' }}>تسجيل مستند صرف نقدي جديد</h3>
           <p style={{ color: '#64748b', fontSize: '0.85rem', margin: '0 0 1.25rem 0' }}>
-            لصرف المصروفات التشغيلية من الخزنة الرئيسية. لا يُخصم المبلغ إلا بعد الاعتماد من شاشة الخزينة. مصروفات العهد تُسجل من شاشة العهد.
+            لصرف المصروفات التشغيلية أو سداد دفعات للموردين من الخزنة الرئيسية أو البنك. لا يُخصم المبلغ إلا بعد الاعتماد من شاشة الخزينة.
           </p>
 
           <form onSubmit={(e) => void handleSubmit(e)}>
+            {/* جهة الصرف */}
+            <div style={{ marginBottom: '1.25rem', padding: '0.75rem', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#334155' }}>جهة الصرف المستفيدة:</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="expenseTargetType"
+                  value="general"
+                  checked={expenseTargetType === 'general'}
+                  onChange={() => setExpenseTargetType('general')}
+                />
+                مصروف عام / تشغيلي
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="expenseTargetType"
+                  value="supplier"
+                  checked={expenseTargetType === 'supplier'}
+                  onChange={() => setExpenseTargetType('supplier')}
+                />
+                دفعة لمورد خامات (حساب المورد 2100)
+              </label>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
               <div>
                 <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
@@ -283,29 +359,55 @@ export function ReceiptsDisbursementsView() {
                   style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
                 >
                   {accounts
-                    .filter((a) => a.is_active && a.account_type === 'treasury')
+                    .filter((a) => a.is_active && (a.account_type === 'treasury' || a.account_type === 'bank'))
                     .map((acc) => (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} — رصيد معتمد: {formatMoney(acc.balance)}
+                        {acc.name} ({acc.account_type === 'bank' ? 'بنك' : 'خزنة'}) — رصيد معتمد: {formatMoney(acc.balance)}
                       </option>
                     ))}
                 </select>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
-                  تبويب / تصنيف المصروف <span style={{ color: '#dc2626' }}>*</span>
-                </label>
-                <select
-                  value={classification}
-                  onChange={(e) => setClassification(e.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
-                >
-                  <option value="operating_expense">مصروفات تشغيلية وإنتاجية (حساب 5300)</option>
-                  <option value="maintenance">صيانة ماكينات وقطع غيار (حساب 5300)</option>
-                  <option value="administrative">مصروفات إدارية ونثرية (حساب 5400)</option>
-                </select>
-              </div>
+              {expenseTargetType === 'general' ? (
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                    تبويب / تصنيف المصروف <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <select
+                    value={classification}
+                    onChange={(e) => setClassification(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  >
+                    <option value="operating_expense">مصروفات تشغيلية ومستلزمات مكان (حساب 5300)</option>
+                    <option value="maintenance">صيانة ماكينات وتشغيل ورش (حساب 5300)</option>
+                    <option value="administrative">مصروفات إدارية وعمومية ونثرية (حساب 5400)</option>
+                    <option value="admin_salary">مرتبات ومكافآت الإدارة والخدمات (حساب 5410)</option>
+                    <option value="direct_wages">أجور عمال التشغيل المباشرة الإضافية (حساب 5210)</option>
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                    اختر المورد المستفيد <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <select
+                    required
+                    value={selectedSupplierId}
+                    onChange={(e) => setSelectedSupplierId(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  >
+                    <option value="">— اختر المورد —</option>
+                    {suppliers.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.code})
+                      </option>
+                    ))}
+                  </select>
+                  <small style={{ color: '#64748b', fontSize: '0.78rem' }}>
+                    تُقيد بحساب المورد (2100) وتظل كدفعة معلقة لتخصيصها على فواتيره لاحقاً.
+                  </small>
+                </div>
+              )}
 
               <div>
                 <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
@@ -338,8 +440,16 @@ export function ReceiptsDisbursementsView() {
               />
             </div>
 
-            <div style={{ padding: '0.75rem 1rem', backgroundColor: '#fef2f2', borderRadius: '6px', marginBottom: '1.25rem', fontSize: '0.82rem', color: '#991b1b' }}>
-              💡 <strong>تنبيه لمنع الازدواجية:</strong> لسداد فواتير الموردين، يرجى استخدام شاشة <strong>الموردون ومستحقاتهم</strong> ليتم ربط الدفعة بالفاتورة وتخفيض مديونية المورد آلياً.
+            <div style={{ padding: '0.75rem 1rem', backgroundColor: expenseTargetType === 'supplier' ? '#eff6ff' : '#fef2f2', borderRadius: '6px', marginBottom: '1.25rem', fontSize: '0.82rem', color: expenseTargetType === 'supplier' ? '#1e40af' : '#991b1b' }}>
+              {expenseTargetType === 'supplier' ? (
+                <span>
+                  ℹ️ <strong>تسوية دفعات الموردين:</strong> سيتم تسجيل هذه الدفعة كدفعة نقدية معلقة للمورد في حسابه فور اعتماد الخزينة، ويمكنك تخصيصها على أي فاتورة شراء مفتوحة له من شاشة <strong>الموردون ومستحقاتهم</strong> دون تكرار أي صرف نقدي.
+                </span>
+              ) : (
+                <span>
+                  💡 <strong>تنبيه:</strong> إذا كان هذا الصرف مخصصاً لمورد خامات، اختر «دفعة لمورد خامات» أعلاه لتوجيهه لحساب المورد بدقة.
+                </span>
+              )}
             </div>
 
             <button type="submit" className="btn btn--primary" disabled={busy || loading || !canCreate} style={{ backgroundColor: '#dc2626', borderColor: '#dc2626' }}>
@@ -354,10 +464,35 @@ export function ReceiptsDisbursementsView() {
         <section className="warehouse-card" style={{ maxWidth: '780px' }}>
           <h3 style={{ margin: '0 0 0.5rem 0', color: '#166534' }}>تسجيل مستند قبض نقدي جديد</h3>
           <p style={{ color: '#64748b', fontSize: '0.85rem', margin: '0 0 1.25rem 0' }}>
-            يوثق توريد النقدية إلى الخزينة المركزية لإيرادات المبيعات أو الإيرادات المتنوعة.
+            يوثق توريد النقدية إلى الخزينة المركزية لإيرادات المبيعات أو تحصيل دفعات من العملاء.
           </p>
 
           <form onSubmit={(e) => void handleSubmit(e)}>
+            {/* مصدر القبض */}
+            <div style={{ marginBottom: '1.25rem', padding: '0.75rem', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#334155' }}>مصدر المقبوضات:</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="incomeSourceType"
+                  value="general"
+                  checked={incomeSourceType === 'general'}
+                  onChange={() => setIncomeSourceType('general')}
+                />
+                إيراد مبيعات مباشرة / متنوعة
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.88rem' }}>
+                <input
+                  type="radio"
+                  name="incomeSourceType"
+                  value="customer"
+                  checked={incomeSourceType === 'customer'}
+                  onChange={() => setIncomeSourceType('customer')}
+                />
+                تحصيل دفعة من عميل (حساب العملاء 1100)
+              </label>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
               <div>
                 <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
@@ -370,28 +505,52 @@ export function ReceiptsDisbursementsView() {
                   style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
                 >
                   {accounts
-                    .filter((a) => a.account_type === 'treasury' && a.is_active)
+                    .filter((a) => (a.account_type === 'treasury' || a.account_type === 'bank') && a.is_active)
                     .map((acc) => (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} — رصيد معتمد: {formatMoney(acc.balance)}
+                        {acc.name} ({acc.account_type === 'bank' ? 'بنك' : 'خزنة'}) — رصيد معتمد: {formatMoney(acc.balance)}
                       </option>
                     ))}
                 </select>
               </div>
 
-              <div>
-                <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
-                  تصنيف المقبوض <span style={{ color: '#dc2626' }}>*</span>
-                </label>
-                <select
-                  value={classification}
-                  onChange={(e) => setClassification(e.target.value)}
-                  style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
-                >
-                  <option value="direct_sales">إيراد مبيعات نقدية مباشرة (حساب 4100)</option>
-                  <option value="other_income">إيرادات تشغيلية أخرى / بيع مخلفات (حساب 4200)</option>
-                </select>
-              </div>
+              {incomeSourceType === 'general' ? (
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                    تصنيف المقبوض <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <select
+                    value={classification}
+                    onChange={(e) => setClassification(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  >
+                    <option value="direct_sales">إيراد مبيعات نقدية مباشرة (حساب 4100)</option>
+                    <option value="other_income">إيرادات تشغيلية أخرى / بيع مخلفات (حساب 4200)</option>
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                    اختر العميل المسدد <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <select
+                    required
+                    value={selectedCustomerId}
+                    onChange={(e) => setSelectedCustomerId(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  >
+                    <option value="">— اختر العميل —</option>
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.code})
+                      </option>
+                    ))}
+                  </select>
+                  <small style={{ color: '#64748b', fontSize: '0.78rem' }}>
+                    تُقيد بحساب العميل (1100) وتظل كدفعة معلقة لتخصيصها على طلباته لاحقاً.
+                  </small>
+                </div>
+              )}
 
               <div>
                 <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
@@ -424,8 +583,16 @@ export function ReceiptsDisbursementsView() {
               />
             </div>
 
-            <div style={{ padding: '0.75rem 1rem', backgroundColor: '#f0fdf4', borderRadius: '6px', marginBottom: '1.25rem', fontSize: '0.82rem', color: '#166534' }}>
-              💡 <strong>تنبيه لمنع الازدواجية:</strong> لتحصيل دفعات العملاء على الطلبات القائمة، يرجى استخدام شاشة <strong>العملاء والتحصيلات</strong> لربط الدفعة بالطلب وتخفيض مديونية العميل آلياً.
+            <div style={{ padding: '0.75rem 1rem', backgroundColor: incomeSourceType === 'customer' ? '#f0fdf4' : '#f8fafc', borderRadius: '6px', marginBottom: '1.25rem', fontSize: '0.82rem', color: incomeSourceType === 'customer' ? '#166534' : '#334155' }}>
+              {incomeSourceType === 'customer' ? (
+                <span>
+                  ℹ️ <strong>تحصيلات العملاء:</strong> سيتم تسجيل هذا السند كرصيد تحصيل معلق للعميل فور اعتماد الخزينة، ويمكن تخصيصه على أي طلب مفتوح له من شاشة <strong>العملاء والطلبات</strong> دون تكرار أي قيد نقدي.
+                </span>
+              ) : (
+                <span>
+                  💡 <strong>تنبيه:</strong> لتحصيل دفعات مخصصة لعميل محدد، اختر «تحصيل دفعة من عميل» أعلاه لربطها بملفه المحاسبي.
+                </span>
+              )}
             </div>
 
             <button type="submit" className="btn btn--primary" disabled={busy || loading || !canCreate} style={{ backgroundColor: '#16a34a', borderColor: '#16a34a' }}>
@@ -459,7 +626,7 @@ export function ReceiptsDisbursementsView() {
                     .filter((a) => a.is_active)
                     .map((acc) => (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} ({acc.account_type === 'treasury' ? 'خزنة' : 'عهدة'}) — رصيد معتمد: {formatMoney(acc.balance)}
+                        {acc.name} ({acc.account_type === 'treasury' ? 'خزنة' : acc.account_type === 'bank' ? 'بنك' : 'عهدة'}) — رصيد معتمد: {formatMoney(acc.balance)}
                       </option>
                     ))}
                 </select>
@@ -479,7 +646,7 @@ export function ReceiptsDisbursementsView() {
                     .filter((a) => a.is_active)
                     .map((acc) => (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} ({acc.account_type === 'treasury' ? 'خزنة' : 'عهدة'}) — رصيد معتمد: {formatMoney(acc.balance)}
+                        {acc.name} ({acc.account_type === 'treasury' ? 'خزنة' : acc.account_type === 'bank' ? 'بنك' : 'عهدة'}) — رصيد معتمد: {formatMoney(acc.balance)}
                       </option>
                     ))}
                 </select>
@@ -584,6 +751,21 @@ export function ReceiptsDisbursementsView() {
                           {formatMoney(doc.amount)}
                         </td>
                         <td className="cell-wrap" style={{ fontSize: '0.85rem' }}>
+                          {doc.supplier_name && (
+                            <span className="cell-tag" style={{ backgroundColor: '#e0f2fe', color: '#0369a1', marginLeft: '0.35rem' }}>
+                              المورد: {doc.supplier_name}
+                            </span>
+                          )}
+                          {doc.customer_name && (
+                            <span className="cell-tag" style={{ backgroundColor: '#fef3c7', color: '#92400e', marginLeft: '0.35rem' }}>
+                              العميل: {doc.customer_name}
+                            </span>
+                          )}
+                          {doc.unallocated_amount != null && toNumber(doc.unallocated_amount) > 0 && (
+                            <span className="cell-tag" style={{ backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #86efac', marginLeft: '0.35rem' }}>
+                              غير مخصص: {formatMoney(doc.unallocated_amount)}
+                            </span>
+                          )}
                           {(() => {
                             // البيان محفوظ بصيغة «[التصنيف] النص»: نعرض التصنيف كوسم والنص يلتف داخل العمود
                             const m = /^\[([^\]]+)\]\s*(.*)$/s.exec(doc.description || '');

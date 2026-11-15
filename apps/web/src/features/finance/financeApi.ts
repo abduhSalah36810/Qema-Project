@@ -61,7 +61,7 @@ export type CashAccount = {
   id: string;
   account_number: string;
   name: string;
-  account_type: 'treasury' | 'petty_cash';
+  account_type: 'treasury' | 'petty_cash' | 'bank';
   parent_account_id: string | null;
   is_active: boolean;
   balance: string;
@@ -85,6 +85,43 @@ export type CashDocument = {
   rejected_by?: string | null;
   rejected_at?: string | null;
   rejection_reason: string | null;
+  supplier_id?: string | null;
+  customer_id?: string | null;
+  supplier_name?: string | null;
+  customer_name?: string | null;
+  unallocated_amount?: string | number | null;
+};
+
+export type UnallocatedPayment = {
+  cash_document_id: string;
+  document_number: string;
+  document_type: string;
+  occurred_at: string;
+  total_amount: number | string;
+  allocated_amount: number | string;
+  unallocated_amount: number | string;
+  description: string;
+};
+
+export type PaymentAllocationCreate = {
+  cash_document_id: string;
+  amount: number | string;
+  notes?: string;
+};
+
+export type PaymentAllocationRead = {
+  id: string;
+  allocation_number: string;
+  cash_document_id: string;
+  cash_document_number?: string | null;
+  supplier_id?: string | null;
+  customer_id?: string | null;
+  supplier_invoice_id?: string | null;
+  customer_order_id?: string | null;
+  allocated_amount: number | string;
+  allocated_at: string;
+  allocated_by: string;
+  notes: string;
 };
 
 export type Supplier = {
@@ -404,6 +441,134 @@ export type CogsReport = {
   }>;
 };
 
+export type ProfitAndLossReport = {
+  period_days?: number | null;
+  period?: { date_from: string; date_to: string } | null;
+  revenues: {
+    items: Array<{ code: string; name_ar: string; debit: number; credit: number; net_amount: number }>;
+    total_revenue: number;
+  };
+  cost_of_goods_sold: {
+    items: Array<{ code: string; name_ar: string; debit: number; credit: number; net_amount: number }>;
+    total_cogs: number;
+  };
+  gross_profit: number;
+  gross_profit_margin_pct: number;
+  operating_expenses: {
+    items: Array<{ code: string; name_ar: string; debit: number; credit: number; net_amount: number }>;
+    total_expenses: number;
+  };
+  net_income: number;
+  net_profit_margin_pct: number;
+};
+
+export type ProfitAndLossDrilldownReport = {
+  account: {
+    id: string;
+    code: string;
+    name_ar: string;
+    account_type: string;
+    nature: string;
+  };
+  period?: { date_from: string; date_to: string } | null;
+  summary: {
+    total_debit: number;
+    total_credit: number;
+    net_amount: number;
+    lines_count: number;
+  };
+  lines: Array<{
+    line_id: string;
+    entry_number: string;
+    entry_date: string;
+    description: string;
+    source_doc_type?: string | null;
+    source_doc_id?: string | null;
+    debit: number;
+    credit: number;
+    net_effect: number;
+  }>;
+};
+
+export type BalanceSheetReport = {
+  assets: {
+    current_assets: Array<{ code: string; name_ar: string; amount: number }>;
+    total_assets: number;
+  };
+  liabilities: {
+    current_liabilities: Array<{ code: string; name_ar: string; amount: number }>;
+    total_liabilities: number;
+  };
+  equity: {
+    equity_items: Array<{ code: string; name_ar: string; amount: number }>;
+    total_equity: number;
+  };
+  total_liabilities_and_equity: number;
+  difference: number;
+  is_balanced: boolean;
+  opening_balance: {
+    is_set: boolean;
+    accounting_start_date?: string | null;
+    journal_entry_number?: string | null;
+  };
+};
+
+export type OpeningBalancesPayload = {
+  accounting_start_date: string;
+  treasury_balance?: number | string;
+  bank_balance?: number | string;
+  custody_balance?: number | string;
+  accounts_receivable?: number | string;
+  raw_materials_inventory?: number | string;
+  wip_inventory?: number | string;
+  finished_goods_inventory?: number | string;
+  accounts_payable?: number | string;
+  paid_in_capital?: number | string;
+  notes?: string;
+};
+
+export type PurchasedItemRow = {
+  line_id: string;
+  invoice_line_id?: string;
+  invoice_id: string;
+  invoice_number: string;
+  internal_number: string;
+  invoice_date: string;
+  invoice_status: string;
+  supplier_id: string;
+  supplier_code: string;
+  supplier_name: string;
+  item_id: string;
+  item_code: string;
+  item_name_ar: string;
+  item_type: string;
+  category_id?: string | null;
+  category_name_ar?: string | null;
+  category_name?: string | null;
+  unit_id: string;
+  unit_name_ar: string;
+  invoiced_quantity: number;
+  received_quantity: number;
+  remaining_quantity: number;
+  unit_price?: number | null;
+  discount_amount?: number | null;
+  net_unit_cost?: number | null;
+  line_total?: number | null;
+  notes?: string;
+};
+
+export type PurchasedItemsResponse = {
+  summary: {
+    lines_count: number;
+    distinct_items_count: number;
+    total_invoiced_quantity: number;
+    total_received_quantity: number;
+    total_amount?: number | null;
+    prices_visible: boolean;
+  };
+  items: PurchasedItemRow[];
+};
+
 const jsonPost = (body: unknown): RequestInit => ({
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -427,6 +592,9 @@ export const financeApi = {
     amount: string;
     description: string;
     occurred_at: string;
+    supplier_id?: string | null;
+    customer_id?: string | null;
+    expense_category?: string | null;
   }) => apiClient.request<CashDocument>('/api/v1/finance/cash-documents', jsonPost(payload)),
   /** مصروف يومي من صندوق عهدة — يُنشأ معلقاً بانتظار اعتماد الخزينة */
   createDailyExpense: (payload: {
@@ -499,6 +667,28 @@ export const financeApi = {
       `/api/v1/finance/supplier-invoices/${encodeURIComponent(invoiceId)}/payments`,
       jsonPost(payload)
     ),
+  /** الدفعات والمقبوضات المعلقة غير المخصصة لمورد */
+  getSupplierUnallocatedPayments: (supplierId: string) =>
+    apiClient.request<UnallocatedPayment[]>(
+      `/api/v1/finance/suppliers/${encodeURIComponent(supplierId)}/unallocated-payments`
+    ),
+  /** تخصيص دفعة نقدية معلقة لسداد فاتورة مورد */
+  allocateSupplierPayment: (invoiceId: string, payload: PaymentAllocationCreate) =>
+    apiClient.request<PaymentAllocationRead>(
+      `/api/v1/finance/supplier-invoices/${encodeURIComponent(invoiceId)}/allocate-payment`,
+      jsonPost(payload)
+    ),
+  /** المقبوضات المعلقة غير المخصصة لعميل */
+  getCustomerUnallocatedPayments: (customerId: string) =>
+    apiClient.request<UnallocatedPayment[]>(
+      `/api/v1/customers/${encodeURIComponent(customerId)}/unallocated-payments`
+    ),
+  /** تخصيص دفعة نقدية معلقة لسداد طلب عميل */
+  allocateCustomerPayment: (customerId: string, orderId: string, payload: PaymentAllocationCreate) =>
+    apiClient.request<PaymentAllocationRead>(
+      `/api/v1/customers/${encodeURIComponent(customerId)}/orders/${encodeURIComponent(orderId)}/allocate-payment`,
+      jsonPost(payload)
+    ),
   getCashFlowReport: (sinceDays = 30) =>
     apiClient.request<CashFlowReport>(`/api/v1/reports/cash-flow?since_days=${sinceDays}`, REPORT_OPTIONS),
   getCustodyReconciliationReport: () =>
@@ -521,4 +711,47 @@ export const financeApi = {
     apiClient.request<CogsReport>(`/api/v1/reports/cogs?since_days=${sinceDays}`, REPORT_OPTIONS),
   getExpenseAnalysisReport: (sinceDays = 30) =>
     apiClient.request<ExpenseAnalysisReport>(`/api/v1/reports/expense-analysis?since_days=${sinceDays}`, REPORT_OPTIONS),
+  getProfitAndLossReport: (period?: { from?: string; to?: string }, sinceDays?: number) => {
+    const params = new URLSearchParams();
+    if (period?.from) params.set('date_from', period.from);
+    if (period?.to) params.set('date_to', period.to);
+    if (sinceDays) params.set('since_days', String(sinceDays));
+    const qs = params.toString();
+    return apiClient.request<ProfitAndLossReport>(`/api/v1/reports/profit-and-loss${qs ? `?${qs}` : ''}`, REPORT_OPTIONS);
+  },
+  getProfitAndLossDrilldown: (accountCode: string, period?: { from?: string; to?: string }) => {
+    const params = new URLSearchParams({ account_code: accountCode });
+    if (period?.from) params.set('date_from', period.from);
+    if (period?.to) params.set('date_to', period.to);
+    return apiClient.request<ProfitAndLossDrilldownReport>(`/api/v1/reports/profit-and-loss/drilldown?${params.toString()}`, REPORT_OPTIONS);
+  },
+  getBalanceSheet: () =>
+    apiClient.request<BalanceSheetReport>('/api/v1/reports/balance-sheet', REPORT_OPTIONS),
+  createOpeningBalances: (payload: OpeningBalancesPayload) =>
+    apiClient.request<{
+      is_set: boolean;
+      accounting_start_date: string;
+      total_assets: number;
+      total_liabilities_and_equity: number;
+      is_balanced: boolean;
+      details: Record<string, unknown>;
+      message: string;
+    }>('/api/v1/finance/opening-balances', jsonPost(payload)),
+  getCashAccountStatement: (accountId: string, period?: { from?: string; to?: string }) => {
+    const params = new URLSearchParams();
+    if (period?.from) params.set('date_from', period.from);
+    if (period?.to) params.set('date_to', period.to);
+    const qs = params.toString();
+    return apiClient.request<any>(`/api/v1/reports/cash-account-statement/${encodeURIComponent(accountId)}${qs ? `?${qs}` : ''}`, REPORT_OPTIONS);
+  },
+  getPurchasedItems: (params?: Record<string, unknown>) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== '') query.set(k, String(v));
+      });
+    }
+    const qs = query.toString();
+    return apiClient.request<PurchasedItemsResponse>(`/api/v1/finance/purchased-items${qs ? `?${qs}` : ''}`);
+  },
 };

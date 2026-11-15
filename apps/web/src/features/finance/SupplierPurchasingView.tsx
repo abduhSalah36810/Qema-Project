@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
 import { apiClient, ApiError } from '@/lib/api';
 import { CatalogItem, fetchCatalogItems } from '@/features/production/productionApi';
+import { financeApi, UnallocatedPayment } from './financeApi';
 
 /**
  * المشتريات: فاتورة مورد ← استلام فعلي بالمخزن (كامل أو على دفعات) ← طلب سداد يُعتمد في الخزينة.
@@ -101,6 +102,7 @@ export function SupplierPurchasingView() {
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [receiving, setReceiving] = useState<Record<string, Record<string, string>>>({});
   const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
+  const [allocatingInvoice, setAllocatingInvoice] = useState<Invoice | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -438,12 +440,23 @@ export function SupplierPurchasingView() {
                 </>
               )}
               {canRequestPayment && payable > 0.001 && (
-                <div className="purchasing__pay">
-                  <label>مبلغ السداد
-                    <input type="number" min="0.01" step="0.01" max={payable.toFixed(2)} placeholder={`حتى ${payable.toFixed(2)}`}
-                      value={paymentAmounts[inv.id] ?? ''} onChange={(e) => setPaymentAmounts({ ...paymentAmounts, [inv.id]: e.target.value })} />
-                  </label>
-                  <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => void requestPayment(inv)}>طلب سداد (يُعتمد في الخزينة)</button>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '0.75rem' }}>
+                  <div className="purchasing__pay">
+                    <label>مبلغ السداد
+                      <input type="number" min="0.01" step="0.01" max={payable.toFixed(2)} placeholder={`حتى ${payable.toFixed(2)}`}
+                        value={paymentAmounts[inv.id] ?? ''} onChange={(e) => setPaymentAmounts({ ...paymentAmounts, [inv.id]: e.target.value })} />
+                    </label>
+                    <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => void requestPayment(inv)}>طلب سداد (يُعتمد في الخزينة)</button>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn--secondary"
+                    style={{ borderColor: '#2563eb', color: '#1d4ed8', fontWeight: 600, padding: '0.45rem 0.85rem' }}
+                    disabled={busy}
+                    onClick={() => setAllocatingInvoice(inv)}
+                  >
+                    🔗 تخصيص من دفعة معلقة
+                  </button>
                 </div>
               )}
               {canRequestFullBalance && inv.can_request_full_balance && (
@@ -474,6 +487,275 @@ export function SupplierPurchasingView() {
           </article>
         );
       })}
+
+      {allocatingInvoice && (
+        <AllocateSupplierPaymentModal
+          invoice={allocatingInvoice}
+          onClose={() => setAllocatingInvoice(null)}
+          onSuccess={(allocatedAmt, docNum) => {
+            const inv = allocatingInvoice;
+            setAllocatingInvoice(null);
+            flash(`تم تخصيص ${money(allocatedAmt)} من الدفعة ${docNum} لسداد فاتورة ${inv.internal_number} بنجاح ودون تكرار الصرف النقدى.`);
+            void load();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+interface AllocateSupplierPaymentModalProps {
+  invoice: Invoice;
+  onClose: () => void;
+  onSuccess: (amount: number, docNum: string) => void;
+}
+
+function AllocateSupplierPaymentModal({ invoice, onClose, onSuccess }: AllocateSupplierPaymentModalProps) {
+  const [unallocated, setUnallocated] = useState<UnallocatedPayment[]>([]);
+  const [selectedDocId, setSelectedDocId] = useState('');
+  const [amount, setAmount] = useState('');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const payable = Math.max(0, Number(invoice.payable_balance || 0));
+
+  useEffect(() => {
+    let active = true;
+    void financeApi.getSupplierUnallocatedPayments(invoice.supplier_id)
+      .then((rows) => {
+        if (!active) return;
+        setUnallocated(rows);
+        if (rows.length > 0) {
+          setSelectedDocId(rows[0].cash_document_id);
+          const maxForThis = Math.min(Number(rows[0].unallocated_amount), payable);
+          setAmount(maxForThis > 0 ? maxForThis.toFixed(2) : '');
+        }
+      })
+      .catch((err) => {
+        if (!active) return;
+        setError(errText(err, 'تعذر تحميل الدفعات المعلقة للمورد.'));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [invoice.supplier_id, payable]);
+
+  const handleSelectDoc = (docId: string) => {
+    setSelectedDocId(docId);
+    const doc = unallocated.find((d) => d.cash_document_id === docId);
+    if (doc) {
+      const maxForThis = Math.min(Number(doc.unallocated_amount), payable);
+      setAmount(maxForThis > 0 ? maxForThis.toFixed(2) : '');
+    }
+  };
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedDocId) {
+      setError('يرجى اختيار الدفعة المعلقة للتخصيص.');
+      return;
+    }
+    const numAmount = Number(amount);
+    if (!Number.isFinite(numAmount) || numAmount <= 0) {
+      setError('يرجى إدخال مبلغ صحيح أكبر من الصفر.');
+      return;
+    }
+    const selectedDoc = unallocated.find((d) => d.cash_document_id === selectedDocId);
+    if (selectedDoc && numAmount > Number(selectedDoc.unallocated_amount) + 0.001) {
+      setError(`المبلغ المطلوب تخصيصه (${money(numAmount)}) أكبر من الرصيد المتاح في الدفعة (${money(selectedDoc.unallocated_amount)}).`);
+      return;
+    }
+    if (numAmount > payable + 0.001) {
+      setError(`المبلغ المطلوب تخصيصه (${money(numAmount)}) أكبر من رصيد الفاتورة المستحق (${money(payable)}).`);
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+    try {
+      await financeApi.allocateSupplierPayment(invoice.id, {
+        cash_document_id: selectedDocId,
+        amount: numAmount.toFixed(2),
+        notes: notes.trim(),
+      });
+      onSuccess(numAmount, selectedDoc?.document_number || '');
+    } catch (err) {
+      setError(errText(err, 'تعذر تخصيص الدفعة للفاتورة.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(15, 23, 42, 0.65)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        padding: '1rem',
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="alloc-title"
+      dir="rtl"
+    >
+      <div
+        style={{
+          backgroundColor: '#ffffff',
+          borderRadius: '12px',
+          maxWidth: '580px',
+          width: '100%',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
+          overflow: 'hidden',
+        }}
+      >
+        <header
+          style={{
+            padding: '1.25rem 1.5rem',
+            borderBottom: '1px solid #e2e8f0',
+            backgroundColor: '#f8fafc',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <div>
+            <h3 id="alloc-title" style={{ margin: 0, fontSize: '1.1rem', color: '#0f172a' }}>
+              تخصيص دفعة معلقة لسداد الفاتورة
+            </h3>
+            <small style={{ color: '#64748b' }}>
+              المورد: {invoice.supplier_name} · فاتورة: {invoice.invoice_number} ({invoice.internal_number})
+            </small>
+          </div>
+          <button
+            onClick={onClose}
+            className="btn btn--secondary"
+            style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }}
+            disabled={busy}
+          >
+            ✕
+          </button>
+        </header>
+
+        <form onSubmit={(e) => void handleSubmit(e)} style={{ padding: '1.5rem' }}>
+          {error && (
+            <div className="purchasing__alert purchasing__alert--error" style={{ marginBottom: '1rem' }} role="alert">
+              ⚠️ {error}
+            </div>
+          )}
+
+          <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '0.85rem', marginBottom: '1.25rem', fontSize: '0.88rem', color: '#166534' }}>
+            <span>المستحق القائم على هذه الفاتورة: </span>
+            <strong style={{ fontSize: '1.05rem' }}>{money(payable)}</strong>
+            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.78rem', color: '#15803d' }}>
+              التخصيص يخفض مديونية الفاتورة مباشرة دون سحب نقدي جديد من الخزينة.
+            </p>
+          </div>
+
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>جاري فحص الدفعات المعلقة للمورد…</div>
+          ) : unallocated.length === 0 ? (
+            <div style={{ padding: '1.5rem', textAlign: 'center', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1', marginBottom: '1rem' }}>
+              <p style={{ margin: '0 0 0.5rem 0', fontWeight: 600, color: '#334155' }}>لا توجد دفعات أو مقبوضات نقدية معلقة لهذا المورد.</p>
+              <small style={{ color: '#64748b', display: 'block', lineHeight: 1.5 }}>
+                يمكنك تسجيل سند صرف نقدي للمورد من شاشة «القبض والصرف»، أو استخدام زر «طلب سداد» العادي لإصدار إذن صرف جديد يُعتمد في الخزينة.
+              </small>
+            </div>
+          ) : (
+            <>
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.5rem' }}>
+                  اختر الدفعة المعلقة للتخصيص: <span style={{ color: '#dc2626' }}>*</span>
+                </label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '180px', overflowY: 'auto' }}>
+                  {unallocated.map((d) => (
+                    <label
+                      key={d.cash_document_id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.65rem 0.85rem',
+                        border: selectedDocId === d.cash_document_id ? '2px solid #2563eb' : '1px solid #cbd5e1',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        backgroundColor: selectedDocId === d.cash_document_id ? '#eff6ff' : '#ffffff',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                        <input
+                          type="radio"
+                          name="unallocated_doc"
+                          value={d.cash_document_id}
+                          checked={selectedDocId === d.cash_document_id}
+                          onChange={() => handleSelectDoc(d.cash_document_id)}
+                        />
+                        <div>
+                          <strong><code>{d.document_number}</code></strong>
+                          <span style={{ fontSize: '0.78rem', color: '#64748b', display: 'block' }}>
+                            {new Date(d.occurred_at).toLocaleDateString('ar-EG')} · إجمالي: {money(d.total_amount)}
+                          </span>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'left' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'block' }}>المتبقي غير المخصص</span>
+                        <strong style={{ color: '#16a34a', fontSize: '0.95rem' }}>{money(d.unallocated_amount)}</strong>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                    المبلغ المخصص (ج.م) <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    required
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem', marginBottom: '0.35rem' }}>
+                    ملاحظات التخصيص
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="اختياري (مثال: تسوية دفعة مقدمة)"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+            <button type="button" className="btn btn--secondary" onClick={onClose} disabled={busy}>
+              إلغاء
+            </button>
+            {unallocated.length > 0 && (
+              <button type="submit" className="btn btn--primary" disabled={busy || loading}>
+                {busy ? 'جاري التخصيص…' : 'تأكيد التخصيص للسداد'}
+              </button>
+            )}
+          </footer>
+        </form>
+      </div>
+    </div>
   );
 }

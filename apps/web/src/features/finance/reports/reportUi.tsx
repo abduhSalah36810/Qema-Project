@@ -209,7 +209,6 @@ export function DataTable<T>({ rows, columns, rowKey, exportName, searchPlacehol
 
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const current = Math.min(page, pages - 1);
-  const visible = filtered.slice(current * pageSize, current * pageSize + pageSize);
   const hasTotals = columns.some((c) => c.sum);
 
   const toggleSort = (key: string) => {
@@ -218,7 +217,7 @@ export function DataTable<T>({ rows, columns, rowKey, exportName, searchPlacehol
   };
 
   return (
-    <div className="rh-table">
+    <div className={`rh-table ${columns.length > 6 ? 'rh-table--wide' : ''}`.trim()}>
       {(searchPlaceholder || exportName) && (
         <div className="rh-table__tools no-print">
           {searchPlaceholder && (
@@ -253,20 +252,28 @@ export function DataTable<T>({ rows, columns, rowKey, exportName, searchPlacehol
             </tr>
           </thead>
           <tbody>
-            {visible.length === 0 ? (
+            {filtered.length === 0 ? (
               <tr><td colSpan={columns.length} className="rh-table__empty">{query ? 'لا توجد نتائج مطابقة للبحث.' : emptyText}</td></tr>
-            ) : visible.map((r) => (
-              <tr key={rowKey(r)} className={onRowClick ? 'is-clickable' : undefined} title={onRowClick ? rowTitle : undefined}
-                onClick={onRowClick ? () => onRowClick(r) : undefined}
-                onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter') onRowClick(r); } : undefined}
-                tabIndex={onRowClick ? 0 : undefined}>
-                {columns.map((c) => (
-                  <td key={c.key} className={[c.kind === 'money' || c.kind === 'number' || c.kind === 'pct' ? 'is-num' : '', c.wrap ? 'is-wrap' : ''].join(' ').trim() || undefined}>
-                    {c.render ? c.render(r) : formatCell(c.kind, cellValue(r, c))}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            ) : filtered.map((r, idx) => {
+              const isHiddenOnScreen = idx < current * pageSize || idx >= current * pageSize + pageSize;
+              return (
+                <tr key={rowKey(r)}
+                  className={[
+                    onRowClick ? 'is-clickable' : '',
+                    isHiddenOnScreen ? 'rh-row--page-hidden' : '',
+                  ].join(' ').trim() || undefined}
+                  title={onRowClick ? rowTitle : undefined}
+                  onClick={onRowClick ? () => onRowClick(r) : undefined}
+                  onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter') onRowClick(r); } : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}>
+                  {columns.map((c) => (
+                    <td key={c.key} className={[c.kind === 'money' || c.kind === 'number' || c.kind === 'pct' ? 'is-num' : '', c.wrap ? 'is-wrap' : ''].join(' ').trim() || undefined}>
+                      {c.render ? c.render(r) : formatCell(c.kind, cellValue(r, c))}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
           {hasTotals && filtered.length > 0 && (
             <tfoot>

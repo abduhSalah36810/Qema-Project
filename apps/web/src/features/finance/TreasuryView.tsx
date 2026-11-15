@@ -347,6 +347,7 @@ export function TreasuryView() {
   const otherTreasuries = accounts.filter(
     (a) => a.account_type === 'treasury' && a.id !== canonicalTreasury?.id
   );
+  const bankAccounts = accounts.filter((a) => a.account_type === 'bank');
   const pettyAccounts = accounts.filter((a) => a.account_type === 'petty_cash');
   const totalPettyBalance = pettyAccounts
     .filter((a) => a.is_active)
@@ -529,6 +530,44 @@ export function TreasuryView() {
           </article>
         )}
 
+        {/* حسابات البنوك المستقلة (1030) */}
+        {bankAccounts.map((acc) => (
+          <article
+            key={acc.id}
+            style={{
+              padding: '1.25rem',
+              borderRadius: '8px',
+              border: '2px solid #2563eb',
+              backgroundColor: '#eff6ff',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontWeight: 700, color: '#1e40af', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <span>🏦</span> {acc.name}
+              </span>
+              <span
+                style={{
+                  fontSize: '0.72rem',
+                  padding: '0.15rem 0.5rem',
+                  borderRadius: '4px',
+                  backgroundColor: '#dbeafe',
+                  color: '#1e40af',
+                  fontWeight: 600,
+                }}
+              >
+                حساب بنكي (1030)
+              </span>
+            </div>
+            <strong style={{ display: 'block', fontSize: '1.5rem', color: '#1d4ed8', marginBottom: '0.25rem' }}>
+              {formatMoney(acc.balance)}
+            </strong>
+            <small style={{ color: '#475569' }}>
+              رقم الحساب: <code>{acc.account_number}</code> · رصيد العمليات والتحويلات المعتمدة
+            </small>
+          </article>
+        ))}
+
         {/* الحسابات النقدية والبنوك الأخرى إن وجدت */}
         {otherTreasuries.map((acc) => (
           <article
@@ -683,9 +722,37 @@ export function TreasuryView() {
                         }}
                       >
                         <div style={{ flex: '1 1 320px' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
                             <code>{doc.document_number}</code>
                             {getDocTypeBadge(doc)}
+                            {doc.supplier_name && (
+                              <span
+                                style={{
+                                  fontSize: '0.78rem',
+                                  padding: '0.2rem 0.55rem',
+                                  borderRadius: '4px',
+                                  fontWeight: 600,
+                                  backgroundColor: '#e0f2fe',
+                                  color: '#0369a1',
+                                }}
+                              >
+                                المورد: {doc.supplier_name}
+                              </span>
+                            )}
+                            {doc.customer_name && (
+                              <span
+                                style={{
+                                  fontSize: '0.78rem',
+                                  padding: '0.2rem 0.55rem',
+                                  borderRadius: '4px',
+                                  fontWeight: 600,
+                                  backgroundColor: '#fef3c7',
+                                  color: '#92400e',
+                                }}
+                              >
+                                العميل: {doc.customer_name}
+                              </span>
+                            )}
                             <span
                               style={{
                                 fontSize: '0.78rem',
@@ -997,6 +1064,21 @@ export function TreasuryView() {
 
                                                   {/* 7. البيان / السبب */}
                                                   <td style={{ padding: '0.75rem 1rem', color: '#1e293b', lineHeight: 1.5, wordBreak: 'break-word' }}>
+                                                    {doc.supplier_name && (
+                                                      <span style={{ display: 'inline-block', fontSize: '0.75rem', padding: '0.15rem 0.45rem', borderRadius: '4px', backgroundColor: '#e0f2fe', color: '#0369a1', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                                        المورد: {doc.supplier_name}
+                                                      </span>
+                                                    )}
+                                                    {doc.customer_name && (
+                                                      <span style={{ display: 'inline-block', fontSize: '0.75rem', padding: '0.15rem 0.45rem', borderRadius: '4px', backgroundColor: '#fef3c7', color: '#92400e', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                                        العميل: {doc.customer_name}
+                                                      </span>
+                                                    )}
+                                                    {doc.unallocated_amount != null && toNumber(doc.unallocated_amount) > 0 && (
+                                                      <span style={{ display: 'inline-block', fontSize: '0.75rem', padding: '0.15rem 0.45rem', borderRadius: '4px', backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #86efac', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                                        غير مخصص: {formatMoney(doc.unallocated_amount)}
+                                                      </span>
+                                                    )}
                                                     {doc.description}
                                                   </td>
 
