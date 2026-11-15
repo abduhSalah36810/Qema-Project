@@ -51,6 +51,7 @@ from app.modules.production.stock import stock_balance
 from tests.test_operational_cycle_e2e import (
     Actor,
     _approved_item,
+    _finished_stock,
     _product_with_sizes,
     _tag,
     _uid,
@@ -523,6 +524,24 @@ async def test_day0_cutover_full_simulation(ctx):
     demands_after_c3 = (await a["pm"].get(f"{API}/production/demand-pool")).json()
     assert any(d.get("customer_id") == c3_id for d in demands_after_c3), "طلب العميل C3 الحقيقي يجب أن يظهر في Demand Pool"
 
+    # تسليم بضاعة تامة حقيقية لعميل C3 وإثبات ظهور مبيعاته في تقرير المبيعات التحليلي
+    await _finished_stock(session, prod, v56, 30, cost="100")
+    order_details = real_order_res.json()
+    c3_line_id = order_details["lines"][0]["id"]
+    c3_deliv = await a["wh"].post(f"{API}/customers/{c3_id}/orders/{real_order_id}/deliveries", json={
+        "lines": [{"order_line_id": c3_line_id, "quantity": 10}],
+        "received_by": "مندوب العميل 3",
+        "notes": "تسليم حقيقي لعميل C3",
+    })
+    assert c3_deliv.status_code == 201, c3_deliv.text
+
+    # التحقق من أن تقرير المبيعات يتضمن مبيعات عميل C3 الحقيقي مع استبعاد C1 وC2 الافتتاحيين
+    sales_rep_after = (await a["fm"].get(f"{API}/reports/analytics/sales?date_from=2026-10-01&date_to=2026-11-30")).json()
+    cust_sales_ids_after = [r["key"] for r in sales_rep_after.get("by_customer", [])]
+    assert c3_id in cust_sales_ids_after, "العميل C3 الحقيقي يجب أن يولد مبيعات ويظهر في تقرير المبيعات"
+    assert c1_id not in cust_sales_ids_after, "رصيد العميل الافتتاحي محظور في تقرير المبيعات"
+    assert c2_id not in cust_sales_ids_after, "دفعة العميل الافتتاحية محظورة في تقرير المبيعات"
+
     # ─────────────────────────────────────────────────────────────────────────
     # ٥. القيد الافتتاحي العام للنقدية ورأس المال
     # ─────────────────────────────────────────────────────────────────────────
@@ -573,9 +592,19 @@ async def test_day0_cutover_full_simulation(ctx):
         Decimal(str(acc_1100["total_debit"])) - Decimal(str(acc_1100["total_credit"]))
         if acc_1100 else Decimal("0.00")
     )
-    # أثر العملاء: عميل 1 (متبقي 5,000 مدين) + عميل 2 (متبقي 4,000 دائن سالب) = صافي 1,000.00 مدين
+    # أثر العملاء: عميل 1 (متبقي 5,000 مدين) + عميل 2 (متبقي 4,000 دائن سالب) + عميل 3 تسليم حقيقي (2,000 مدين) = صافي 3,000.00 مدين
     delta_1100 = current_1100_dr - initial_1100_dr
-    assert delta_1100 == Decimal("1000.00"), f"أثر حركة العملاء على 1100 يجب أن يكون +1000.00، الفعلي: {delta_1100}"
+    c3_stmt = (await a["fm"].get(f"{API}/reports/customer-statement/{c3_id}")).json()
+    assert c3_stmt["totals"]["balance_due"] == 2000.0, f"المتوقع 2000.00 لعميل C3 بعد التسليم، الفعلي: {c3_stmt['totals']['balance_due']}"
+    sum_cust_stmts = (
+        Decimal(str(c1_stmt_after["totals"]["balance_due"]))
+        + Decimal(str(c2_stmt["totals"]["balance_due"]))
+        + Decimal(str(c3_stmt["totals"]["balance_due"]))
+    )
+    assert sum_cust_stmts == Decimal("3000.00"), f"مجموع كشوف حسابات العملاء يجب أن يكون 3000.00، الفعلي: {sum_cust_stmts}"
+    assert delta_1100 == sum_cust_stmts, (
+        f"أثر حركة العملاء على 1100 ({delta_1100}) يجب أن يطابق مجموع كشوف حسابات العملاء ({sum_cust_stmts})"
+    )
 
     # مطابقة حساب 3900:
     # المخزون الافتتاحي = +25,000 دائن 3900
@@ -730,15 +759,55 @@ async def test_day0_cutover_full_simulation(ctx):
     # 6. فحص سجل التدقيق التاريخي: يجب أن يحتوي الأسطر الأربعة كاملة دون مسح أي أثر
     final_lock_status = (await a["fm"].get(f"{API}/finance/opening-balances/lock-status")).json()
     assert final_lock_status["is_locked"] is True
-    actions = [h["action"] for h in final_lock_status["history"]]
+    history = final_lock_status["history"]
+    actions = [h["action"] for h in history]
     assert "locked" in actions
     assert "unlock_requested" in actions
     assert "unlocked" in actions
-    assert len(final_lock_status["history"]) >= 4, "سجل التدقيق يجب أن يحتفظ بكافة حركات القفل والفتح"
+    assert len(history) >= 4, "سجل التدقيق يجب أن يحتفظ بكافة حركات القفل والفتح"
 
-    # التحقق من أن فاتورة المورد المنسية أضيفت لكشف الحساب
+    # التحقق من أن سجل accounting_locks يحتوي أسطر (طلب الفتح، اعتماد الفتح، إعادة القفل) بالمستخدمين والأسباب
+    req_row = next(h for h in history if h["action"] == "unlock_requested")
+    assert req_row["performed_by"] == a["fm"].user.id
+    assert "فاتورة مورد" in req_row["reason"]
+
+    appr_row = next(h for h in history if h["action"] == "unlocked")
+    assert appr_row["performed_by"] == a["gm"].user.id
+    assert appr_row["requested_by"] == a["fm"].user.id
+
+    relock_row = next(h for h in history if h["action"] == "locked" and "إعادة القفل" in (h.get("reason") or ""))
+    assert relock_row["performed_by"] == a["gm"].user.id
+
+    # التحقق من أن فاتورة المورد المنسية أضيفت لكشف حسابه
     s3_stmt = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup3_id}")).json()
     assert s3_stmt["totals"]["balance_due"] == 2000.0, f"المتوقع 2000.00 لمورد 3، الفعلي: {s3_stmt['totals']['balance_due']}"
+
+    # إعادة التحقق بعد إضافة الفاتورة المنسية:
+    # 1. أثر حساب 3900: كان 29,000 دائن، زاد مديناً بـ 2,000 لفاتورة مورد 3، فأصبح صافيه 27,000.00 دائن
+    tb_post_relock = (await a["fm"].get(f"{API}/finance/gl/trial-balance")).json()
+    acc_3900_relock = next((r for r in tb_post_relock["rows"] if r["code"] == "3900"), None)
+    net_3900_relock_cr = Decimal(str(acc_3900_relock["total_credit"])) - Decimal(str(acc_3900_relock["total_debit"]))
+    assert net_3900_relock_cr - initial_3900_cr == Decimal("27000.00"), (
+        f"أثر 3900 بعد إدخال الفاتورة المنسية يجب أن يكون 27,000.00 دائن، الفعلي: {net_3900_relock_cr - initial_3900_cr}"
+    )
+
+    # 2. مطابقة 2100 مع مجموع كشوف الموردين:
+    # مورد 1 (4,000 دائن) + مورد 2 (-3,000 مدين) + مورد 3 (2,000 دائن) = صافي 3,000.00 دائن
+    s1_stmt_re = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup1_id}")).json()
+    s2_stmt_re = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup2_id}")).json()
+    sum_sup_stmts = (
+        Decimal(str(s1_stmt_re["totals"]["balance_due"]))
+        + Decimal(str(s2_stmt_re["totals"]["balance_due"]))
+        + Decimal(str(s3_stmt["totals"]["balance_due"]))
+    )
+    assert sum_sup_stmts == Decimal("3000.00"), f"مجموع كشوف الموردين يجب أن يكون 3000.00، الفعلي: {sum_sup_stmts}"
+
+    acc_2100_relock = next((r for r in tb_post_relock["rows"] if r["code"] == "2100"), None)
+    net_2100_relock_cr = Decimal(str(acc_2100_relock["total_credit"])) - Decimal(str(acc_2100_relock["total_debit"]))
+    delta_2100_relock = net_2100_relock_cr - initial_2100_cr
+    assert delta_2100_relock == sum_sup_stmts, (
+        f"رصيد 2100 في الأستاذ العام ({delta_2100_relock}) يجب أن يطابق مجموع كشوف حسابات الموردين ({sum_sup_stmts})"
+    )
 
     # ─────────────────────────────────────────────────────────────────────────
     # ١٠. صرف خامات لأمر تشغيل والتأكد من تحميل التكلفة المدخلة في الجرد الافتتاحي
