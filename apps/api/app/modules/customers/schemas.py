@@ -298,4 +298,56 @@ class CustomerReturnListItemRead(CustomerDeliveryReturnRead):
     customer_code: str = ""
 
 
+class SoldItemRowRead(BaseModel):
+    delivery_line_id: str
+    delivery_id: str
+    delivery_number: str
+    delivered_at: datetime
+    order_id: str
+    order_number: str
+    order_type: str
+    order_status: str
+    customer_id: str
+    customer_code: str
+    customer_name: str
+    product_id: str
+    product_code: str
+    product_name: str
+    variant_id: str
+    variant_info: str
+    ordered_quantity: float
+    delivered_quantity: float
+    returned_quantity: float
+    net_sold_quantity: float
+    unit_price: float
+    net_unit_price: float
+    delivered_value: float
+    returned_value: float
+    net_sold_value: float
+
+
+class SoldItemsSummaryRead(BaseModel):
+    lines_count: int
+    distinct_products_count: int
+    total_delivered_quantity: float
+    total_returned_quantity: float
+    total_net_sold_quantity: float
+    total_delivered_value: float
+    total_returned_value: float
+    total_net_sold_value: float
+
+
+class SoldItemsResponse(BaseModel):
+    summary: SoldItemsSummaryRead
+    items: list[SoldItemRowRead]
+
+
+class OpeningCustomerBalanceCreate(BaseModel):
+    original_order_number: str
+    order_date: datetime
+    amount: Decimal = Field(..., gt=0, max_digits=14, decimal_places=2)
+    is_advance: bool = False
+    notes: str | None = Field(default="", max_length=1000)
+
+
 CustomerOrderRead.model_rebuild()

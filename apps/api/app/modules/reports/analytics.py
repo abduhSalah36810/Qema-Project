@@ -127,6 +127,8 @@ async def sale_events(db: AsyncSession, start: datetime | None = None, end: date
     """كل تسليم ومرتجع على مستوى السطر بقيمته الصافية (نفس نسبة الخصم المستخدمة في الأرصدة)."""
     events: list[SaleEvent] = []
     for order in await load_customer_orders(db):
+        if getattr(order, "is_opening", False):
+            continue
         gross = sum((Decimal(str(l.quantity)) * Decimal(str(l.unit_price)) for l in order.lines), Decimal("0"))
         ratio = ((gross - money(order.discount_amount)) / gross) if gross > 0 else Decimal("1")
         lines = {l.id: l for l in order.lines}
@@ -434,6 +436,8 @@ async def sales_analysis(db: AsyncSession, p: Period) -> dict:
     gross_line_value = ZERO
     discount_total = ZERO
     for order in await load_customer_orders(db):
+        if getattr(order, "is_opening", False):
+            continue
         if p.start <= order.order_date < p.end:
             gross_line_value += sum((money(Decimal(str(l.quantity)) * Decimal(str(l.unit_price))) for l in order.lines), ZERO)
             discount_total += money(order.discount_amount)

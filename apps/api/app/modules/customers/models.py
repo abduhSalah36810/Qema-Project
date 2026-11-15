@@ -1,12 +1,16 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 from app.modules.production.models import Customer
+
+if TYPE_CHECKING:
+    from app.modules.finance.models import PaymentAllocation
 
 
 def utc_now() -> datetime:
@@ -21,12 +25,18 @@ class CustomerOrder(Base):
     customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), nullable=False, index=True)
     order_type: Mapped[str] = mapped_column(String(32), nullable=False)  # ready_goods, custom_manufacturing
     status: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
+    is_opening: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_advance: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    opening_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    original_order_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
     order_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     expected_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0"), nullable=False)
     payment_terms: Mapped[str] = mapped_column(Text, default="", nullable=False)
     notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     customer: Mapped[Customer] = relationship()
@@ -34,6 +44,7 @@ class CustomerOrder(Base):
     payments: Mapped[list["CustomerPayment"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     deliveries: Mapped[list["CustomerDelivery"]] = relationship(back_populates="order", cascade="all, delete-orphan")
     returns: Mapped[list["CustomerDeliveryReturn"]] = relationship(viewonly=True)
+    allocations: Mapped[list["PaymentAllocation"]] = relationship("PaymentAllocation", foreign_keys="[PaymentAllocation.customer_order_id]", back_populates="customer_order")
 
 
 class CustomerOrderLine(Base):
@@ -51,6 +62,7 @@ class CustomerOrderLine(Base):
     product: Mapped["Product"] = relationship()
     variant: Mapped["ProductVariant"] = relationship()
     production_orders: Mapped[list["ProductionOrder"]] = relationship(back_populates="customer_order_line")
+    demands: Mapped[list["ProductionOrderDemand"]] = relationship("ProductionOrderDemand", back_populates="customer_order_line", cascade="all, delete-orphan")
 
 
 class CustomerDelivery(Base):

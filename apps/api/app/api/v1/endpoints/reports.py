@@ -1,12 +1,12 @@
 """
 تقارير ملخص النظام — مالية ومخزنية وإنتاجية.
 """
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.db.base  # noqa: F401 — تهيئة كافة نماذج SQLAlchemy
@@ -16,7 +16,7 @@ from app.core.permissions import get_permissions_for_roles, get_user_roles, requ
 from app.db.session import get_db
 from app.modules.finance.models import (
     Account, CashAccount, CashDocument, CashLedgerEntry, CustodySettlement,
-    JournalEntry, JournalEntryLine, Supplier, SupplierInvoice, SupplierInvoiceLine, SupplierPayment,
+    JournalEntry, JournalEntryLine, PaymentAllocation, Supplier, SupplierInvoice, SupplierInvoiceLine, SupplierPayment, SupplierReceipt,
 )
 from app.modules.customers.models import (
     CustomerOrder, CustomerOrderLine, CustomerPayment,
@@ -25,6 +25,9 @@ from app.modules.customers.models import (
 from app.modules.production.models import (
     CatalogItem,
     Customer,
+    Employee,
+    PayPeriod,
+    PayrollRun,
     Product,
     ProductionDefect,
     ProductionOrder,
@@ -44,6 +47,8 @@ from app.modules.finance.balances import (
 )
 
 from app.modules.reports import analytics
+from app.modules.production.customer_materials import get_manufacturing_profitability_report
+from app.modules.production.schemas import ManufacturingProfitabilityReportRead
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -55,6 +60,73 @@ def _since_bounds(since_days: int, date_from: Optional[date], date_to: Optional[
         return p.start, p.end
     now = datetime.now(timezone.utc)
     return now - timedelta(days=since_days), now + timedelta(days=1)
+
+
+def _normalize_dt(dt: datetime | None) -> datetime:
+    if dt is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _build_statement_timeline(
+    events: list[dict],
+    *,
+    credit_nature: bool,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+) -> dict:
+    """يبني كشف حركة زمني موحد برصيد افتتاحي ورصيد متحرك وإغلاق."""
+    sorted_events = sorted(
+        events,
+        key=lambda ev: (_normalize_dt(ev["occurred_at"]), ev.get("sort_order", 0), ev.get("reference", "")),
+    )
+    start_dt = analytics.resolve_period(date_from, date_from).start if date_from else None
+    end_dt = analytics.resolve_period(date_to, date_to).end if date_to else None
+
+    opening_balance = Decimal("0.00")
+    running_balance = Decimal("0.00")
+    total_debit = Decimal("0.00")
+    total_credit = Decimal("0.00")
+    transactions: list[dict] = []
+
+    for ev in sorted_events:
+        ev_dt = _normalize_dt(ev["occurred_at"])
+        dr = Decimal(str(ev.get("debit") or 0))
+        cr = Decimal(str(ev.get("credit") or 0))
+        delta = (cr - dr) if credit_nature else (dr - cr)
+
+        if start_dt and ev_dt < start_dt:
+            opening_balance += delta
+            running_balance = opening_balance
+            continue
+        if end_dt and ev_dt >= end_dt:
+            continue
+
+        running_balance += delta
+        total_debit += dr
+        total_credit += cr
+        row = {
+            "date": ev["occurred_at"].isoformat() if ev["occurred_at"] else None,
+            "type": ev["type"],
+            "reference": ev["reference"],
+            "description": ev["description"],
+            "debit": float(dr),
+            "credit": float(cr),
+            "running_balance": float(running_balance),
+        }
+        if ev.get("extra"):
+            row.update(ev["extra"])
+        transactions.append(row)
+
+    return {
+        "opening_balance": float(opening_balance),
+        "total_debit": float(total_debit),
+        "total_credit": float(total_credit),
+        "closing_balance": float(running_balance),
+        "transactions": transactions,
+    }
 
 
 async def _get_account_balance(db: AsyncSession, account_id: str) -> Decimal:
@@ -448,6 +520,8 @@ async def report_cash_flow(
 @router.get("/customer-statement/{customer_id}")
 async def report_customer_statement(
     customer_id: str,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -457,15 +531,89 @@ async def report_customer_statement(
         raise HTTPException(404, "العميل غير موجود.")
 
     orders_data = []
+    timeline_events: list[dict] = []
     totals = {"total_ordered": Decimal("0.00"), "total_delivered": Decimal("0.00"), "total_returned": Decimal("0.00"),
               "total_paid": Decimal("0.00"), "pending_payments": Decimal("0.00")}
     for o in await load_customer_orders(db, customer.id):
         fin = customer_order_financials(o)
+        is_opening = getattr(o, "is_opening", False)
+        is_advance = getattr(o, "is_advance", False)
+
         totals["total_ordered"] += fin.total_amount
-        totals["total_delivered"] += fin.delivered_value
+        if is_opening:
+            if is_advance:
+                totals["total_paid"] += fin.total_amount
+                timeline_events.append({
+                    "occurred_at": o.order_date,
+                    "sort_order": 3,
+                    "type": "دفعة مقدمة افتتاحية من عميل",
+                    "reference": getattr(o, "original_order_number", None) or o.order_number,
+                    "description": f"دفعة مقدمة افتتاحية دائنة للعميل ({getattr(o, 'original_order_number', None) or o.order_number})",
+                    "debit": Decimal("0.00"),
+                    "credit": fin.total_amount,
+                })
+            else:
+                totals["total_delivered"] += fin.delivered_value
+                timeline_events.append({
+                    "occurred_at": o.order_date,
+                    "sort_order": 1,
+                    "type": "رصيد افتتاحي عميل",
+                    "reference": getattr(o, "original_order_number", None) or o.order_number,
+                    "description": f"رصيد مدين افتتاحي سابق ({getattr(o, 'original_order_number', None) or o.order_number})",
+                    "debit": fin.delivered_value,
+                    "credit": Decimal("0.00"),
+                })
+        else:
+            totals["total_delivered"] += fin.delivered_value
         totals["total_returned"] += fin.returned_value
         totals["total_paid"] += fin.paid_approved
         totals["pending_payments"] += fin.paid_pending
+
+        price_by_line = {line.id: Decimal(str(line.unit_price)) for line in o.lines}
+        for delivery in getattr(o, "deliveries", []) or []:
+            d_val = document_net_sales_value(
+                [(dl.quantity, price_by_line.get(dl.order_line_id, Decimal("0"))) for dl in delivery.lines],
+                fin.net_ratio,
+            )
+            if d_val > 0:
+                timeline_events.append({
+                    "occurred_at": delivery.delivered_at,
+                    "sort_order": 1,
+                    "type": "تسليم بضاعة",
+                    "reference": delivery.delivery_number,
+                    "description": f"تسليم طلب {o.order_number}" + (f" — {delivery.notes}" if delivery.notes else ""),
+                    "debit": d_val,
+                    "credit": Decimal("0.00"),
+                })
+        for ret in getattr(o, "returns", []) or []:
+            r_val = document_net_sales_value(
+                [(rl.quantity, price_by_line.get(rl.order_line_id, Decimal("0"))) for rl in ret.lines],
+                fin.net_ratio,
+            )
+            if r_val > 0:
+                timeline_events.append({
+                    "occurred_at": ret.returned_at,
+                    "sort_order": 2,
+                    "type": "مرتجع عميل",
+                    "reference": ret.return_number,
+                    "description": f"مرتجع من طلب {o.order_number}" + (f" — {ret.reason}" if ret.reason else ""),
+                    "debit": Decimal("0.00"),
+                    "credit": r_val,
+                })
+        for p in getattr(o, "payments", []) or []:
+            if (getattr(p, "status", "approved") or "approved") == "approved":
+                amt = Decimal(str(p.amount or 0))
+                if amt > 0:
+                    timeline_events.append({
+                        "occurred_at": p.received_at,
+                        "sort_order": 3,
+                        "type": "سند تحصيل",
+                        "reference": p.receipt_number,
+                        "description": f"تحصيل دفعة على طلب {o.order_number}" + (f" ({p.method})" if p.method else ""),
+                        "debit": Decimal("0.00"),
+                        "credit": amt,
+                    })
+
         orders_data.append({
             "order_id": o.id,
             "order_number": o.order_number,
@@ -493,7 +641,37 @@ async def report_customer_statement(
                 for p in o.payments
             ],
         })
+
+    # المقبوضات النقدية المباشرة للعميل (سندات القبض التي لم تنشأ من طلب بيع محدد)
+    direct_cash_docs = (await db.scalars(
+        select(CashDocument).where(
+            CashDocument.customer_id == customer.id,
+            CashDocument.document_type == "income",
+            CashDocument.status == "approved",
+            or_(CashDocument.source_system.is_(None), CashDocument.source_system != "customer_payment"),
+        ).order_by(CashDocument.occurred_at.asc())
+    )).all()
+    for ddoc in direct_cash_docs:
+        amt = Decimal(str(ddoc.amount or 0))
+        if amt > 0:
+            timeline_events.append({
+                "occurred_at": ddoc.occurred_at,
+                "sort_order": 3,
+                "type": "سند قبض / تحصيل مباشر",
+                "reference": ddoc.document_number,
+                "description": ddoc.description or f"سند قبض نقدي مباشر من العميل ({ddoc.document_number})",
+                "debit": Decimal("0.00"),
+                "credit": amt,
+            })
+            allocated = await db.scalar(
+                select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+                .where(PaymentAllocation.cash_document_id == ddoc.id)
+            )
+            unallocated = max(Decimal("0.00"), amt - Decimal(str(allocated or 0)))
+            totals["total_paid"] += unallocated
+
     balance = totals["total_delivered"] - totals["total_returned"] - totals["total_paid"]
+    statement = _build_statement_timeline(timeline_events, credit_nature=False, date_from=date_from, date_to=date_to)
     return {
         "customer": {"id": customer.id, "name": customer.name, "code": customer.code, "phone": customer.phone},
         "totals": {
@@ -504,6 +682,7 @@ async def report_customer_statement(
             "pending_payments": float(totals["pending_payments"]),
             "balance_due": float(balance),
         },
+        "statement": statement,
         "orders": orders_data,
     }
 
@@ -511,6 +690,8 @@ async def report_customer_statement(
 @router.get("/supplier-statement/{supplier_id}")
 async def report_supplier_statement(
     supplier_id: str,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -523,13 +704,92 @@ async def report_supplier_statement(
     )).all()
     total_invoiced = total_received = total_paid = total_pending = Decimal("0.00")
     invoices_data = []
+    timeline_events: list[dict] = []
+
     for inv in invoices:
         fin = await supplier_invoice_financials(db, inv)
         if inv.status != "cancelled":
+            is_opening = getattr(inv, "is_opening", False)
+            is_advance = getattr(inv, "is_advance", False)
+
             total_invoiced += fin.invoice_total
-            total_received += fin.received_value
+            if is_opening:
+                if is_advance:
+                    total_paid += fin.received_value
+                    timeline_events.append({
+                        "occurred_at": inv.invoice_date,
+                        "sort_order": 2,
+                        "type": "دفعة مقدمة افتتاحية لمورد",
+                        "reference": inv.invoice_number,
+                        "description": f"دفعة مقدمة افتتاحية للمورد ({inv.invoice_number})",
+                        "debit": fin.received_value,
+                        "credit": Decimal("0.00"),
+                    })
+                else:
+                    total_received += fin.received_value
+                    timeline_events.append({
+                        "occurred_at": inv.invoice_date,
+                        "sort_order": 1,
+                        "type": "رصيد افتتاحي مورد",
+                        "reference": inv.invoice_number,
+                        "description": f"رصيد افتتاحي سابق عن فاتورة {inv.invoice_number}",
+                        "debit": Decimal("0.00"),
+                        "credit": fin.received_value,
+                    })
+            else:
+                total_received += fin.received_value
+
             total_paid += fin.paid_approved
             total_pending += fin.paid_pending
+
+            if not is_opening:
+                receipts = (await db.scalars(
+                    select(SupplierReceipt).where(SupplierReceipt.invoice_id == inv.id).order_by(SupplierReceipt.received_at.asc())
+                )).all()
+                receipts_sum = Decimal("0.00")
+                for rec in receipts:
+                    cost = Decimal(str(rec.total_cost or 0))
+                    receipts_sum += cost
+                    if cost > 0:
+                        timeline_events.append({
+                            "occurred_at": rec.received_at,
+                            "sort_order": 1,
+                            "type": "إذن استلام مورد",
+                            "reference": rec.receipt_number,
+                            "description": f"استلام بضاعة عن فاتورة {inv.invoice_number} ({inv.internal_number})",
+                            "debit": Decimal("0.00"),
+                            "credit": cost,
+                        })
+                if fin.received_value > receipts_sum:
+                    timeline_events.append({
+                        "occurred_at": inv.received_at or inv.invoice_date,
+                        "sort_order": 1,
+                        "type": "استلام فاتورة",
+                        "reference": inv.internal_number,
+                        "description": f"قيمة مستلمة عن فاتورة {inv.invoice_number}",
+                        "debit": Decimal("0.00"),
+                        "credit": fin.received_value - receipts_sum,
+                    })
+
+            payments = (await db.scalars(
+                select(SupplierPayment).where(
+                    SupplierPayment.invoice_id == inv.id,
+                    SupplierPayment.status == "approved",
+                )
+            )).all()
+            for pay in payments:
+                amt = Decimal(str(pay.amount or 0))
+                if amt > 0:
+                    timeline_events.append({
+                        "occurred_at": pay.decided_at or pay.created_at,
+                        "sort_order": 2,
+                        "type": "سداد لمورد",
+                        "reference": inv.internal_number,
+                        "description": f"سداد معتمد عن فاتورة {inv.invoice_number}",
+                        "debit": amt,
+                        "credit": Decimal("0.00"),
+                    })
+
         invoices_data.append({
             "invoice_id": inv.id,
             "internal_number": inv.internal_number,
@@ -543,6 +803,36 @@ async def report_supplier_statement(
             "balance_due": float(fin.payable_balance),
             "remaining_on_invoice": float(fin.balance_due),
         })
+
+    # الدفعات النقدية المباشرة للمورد (سندات الصرف التي لم تنشأ من فاتورة شراء محددة)
+    direct_cash_docs = (await db.scalars(
+        select(CashDocument).where(
+            CashDocument.supplier_id == supplier.id,
+            CashDocument.document_type == "expense",
+            CashDocument.status == "approved",
+            or_(CashDocument.source_system.is_(None), CashDocument.source_system != "supplier_payment"),
+        ).order_by(CashDocument.occurred_at.asc())
+    )).all()
+    for ddoc in direct_cash_docs:
+        amt = Decimal(str(ddoc.amount or 0))
+        if amt > 0:
+            timeline_events.append({
+                "occurred_at": ddoc.occurred_at,
+                "sort_order": 2,
+                "type": "سند صرف / دفعة نقدية",
+                "reference": ddoc.document_number,
+                "description": ddoc.description or f"سند صرف نقدي للمورد ({ddoc.document_number})",
+                "debit": amt,
+                "credit": Decimal("0.00"),
+            })
+            allocated = await db.scalar(
+                select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+                .where(PaymentAllocation.cash_document_id == ddoc.id)
+            )
+            unallocated = max(Decimal("0.00"), amt - Decimal(str(allocated or 0)))
+            total_paid += unallocated
+
+    statement = _build_statement_timeline(timeline_events, credit_nature=True, date_from=date_from, date_to=date_to)
     return {
         "supplier": {"id": supplier.id, "code": supplier.code, "name": supplier.name, "phone": supplier.phone},
         "totals": {
@@ -552,6 +842,7 @@ async def report_supplier_statement(
             "pending_payments": float(total_pending),
             "balance_due": float(total_received - total_paid),
         },
+        "statement": statement,
         "invoices": invoices_data,
     }
 
@@ -873,11 +1164,13 @@ async def report_profit_and_loss(
     since_days: Optional[int] = Query(default=None, ge=1, le=730),
     current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
     db: AsyncSession = Depends(get_db),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
 ):
     """
     قائمة الأرباح والخسائر (Income Statement / P&L):
     - الإيرادات (4100 مبيعات منتجات تامة، 4200 إيرادات تشغيل)
-    - تكلفة البضاعة المباعة (5100 COGS، 5200 هالك وفروق تشغيل)
+    - تكلفة البضاعة المباعة (5100 COGS، 5200 أجور ومصروفات/فروق تصنيع مباشرة)
     - إجمالي الربح التشغيلي
     - المصروفات التشغيلية والعمومية (5300، 5400)
     - صافي أرباح / خسائر الفترة
@@ -885,7 +1178,8 @@ async def report_profit_and_loss(
     accounts = (await db.scalars(select(Account).where(Account.is_active.is_(True)))).all()
     accounts_by_code = {a.code: a for a in accounts}
 
-    since_date = (datetime.now(timezone.utc) - timedelta(days=since_days)).date() if since_days else None
+    period_obj = analytics.resolve_period(date_from, date_to) if (date_from or date_to) else None
+    since_date = (datetime.now(timezone.utc) - timedelta(days=since_days)).date() if (since_days and not period_obj) else None
 
     async def get_account_net(code_prefix: str, nature: str) -> tuple[Decimal, list]:
         matched_accounts = [a for code, a in accounts_by_code.items() if code.startswith(code_prefix)]
@@ -898,7 +1192,10 @@ async def report_profit_and_loss(
             q_cr = select(func.coalesce(func.sum(JournalEntryLine.credit), 0)).join(
                 JournalEntry, JournalEntry.id == JournalEntryLine.entry_id
             ).where(JournalEntryLine.account_id == acc.id)
-            if since_date:
+            if period_obj:
+                q_dr = q_dr.where(JournalEntry.entry_date >= period_obj.start, JournalEntry.entry_date < period_obj.end)
+                q_cr = q_cr.where(JournalEntry.entry_date >= period_obj.start, JournalEntry.entry_date < period_obj.end)
+            elif since_date:
                 q_dr = q_dr.where(JournalEntry.entry_date >= since_date)
                 q_cr = q_cr.where(JournalEntry.entry_date >= since_date)
             dr = Decimal(str(await db.scalar(q_dr) or 0))
@@ -921,14 +1218,14 @@ async def report_profit_and_loss(
     revenue_items = sales_items + service_items
 
     cogs_val, cogs_items = await get_account_net("5100", "debit")
-    scrap_val, scrap_items = await get_account_net("5200", "debit")
+    scrap_val, scrap_items = await get_account_net("52", "debit")
     total_cogs = cogs_val + scrap_val
     cost_of_sales_items = cogs_items + scrap_items
 
     gross_profit = total_revenue - total_cogs
 
     ops_val, ops_items = await get_account_net("5300", "debit")
-    admin_val, admin_items = await get_account_net("5400", "debit")
+    admin_val, admin_items = await get_account_net("54", "debit")
     total_operating_expenses = ops_val + admin_val
     expense_items = ops_items + admin_items
 
@@ -936,6 +1233,11 @@ async def report_profit_and_loss(
 
     return {
         "period_days": since_days,
+        "period": (
+            {"date_from": period_obj.date_from.isoformat(), "date_to": period_obj.date_to.isoformat()}
+            if period_obj
+            else None
+        ),
         "revenues": {
             "items": revenue_items,
             "total_revenue": float(total_revenue),
@@ -952,6 +1254,83 @@ async def report_profit_and_loss(
         },
         "net_income": float(net_income),
         "net_profit_margin_pct": float(round((net_income / total_revenue * 100), 2)) if total_revenue > 0 else 0.0,
+    }
+
+
+@router.get("/profit-and-loss/drilldown")
+async def report_profit_and_loss_drilldown(
+    account_code: str = Query(..., min_length=1, max_length=32),
+    since_days: Optional[int] = Query(default=None, ge=1, le=365),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """تفاصيل الحركات والقيود اليومية المكونة لأي بند في قائمة الدخل."""
+    del current_user
+    account = await db.scalar(select(Account).where(Account.code == account_code.strip()))
+    if not account:
+        raise HTTPException(404, f"الحساب ذو الكود {account_code} غير موجود.")
+
+    period_obj = analytics.resolve_period(date_from, date_to) if (date_from or date_to) else None
+    since_date = (datetime.now(timezone.utc) - timedelta(days=since_days)).date() if (since_days and not period_obj) else None
+
+    stmt = (
+        select(JournalEntryLine, JournalEntry)
+        .join(JournalEntry, JournalEntry.id == JournalEntryLine.entry_id)
+        .where(JournalEntryLine.account_id == account.id)
+        .order_by(JournalEntry.entry_date.desc(), JournalEntry.created_at.desc())
+    )
+    if period_obj:
+        stmt = stmt.where(JournalEntry.entry_date >= period_obj.start, JournalEntry.entry_date < period_obj.end)
+    elif since_date:
+        stmt = stmt.where(JournalEntry.entry_date >= since_date)
+
+    rows = (await db.execute(stmt)).all()
+    is_credit_nature = account.account_type == "revenue"
+    total_debit = Decimal("0.00")
+    total_credit = Decimal("0.00")
+    lines_out = []
+
+    for line, je in rows:
+        dr = Decimal(str(line.debit or 0))
+        cr = Decimal(str(line.credit or 0))
+        total_debit += dr
+        total_credit += cr
+        effect = (cr - dr) if is_credit_nature else (dr - cr)
+        lines_out.append({
+            "line_id": line.id,
+            "entry_number": je.entry_number,
+            "entry_date": je.entry_date.isoformat() if je.entry_date else None,
+            "source_doc_type": je.source_doc_type,
+            "source_doc_id": je.source_doc_id,
+            "description": line.description or je.description,
+            "debit": float(dr),
+            "credit": float(cr),
+            "net_effect": float(effect),
+        })
+
+    net_amount = (total_credit - total_debit) if is_credit_nature else (total_debit - total_credit)
+    return {
+        "account": {
+            "id": account.id,
+            "code": account.code,
+            "name_ar": account.name_ar,
+            "account_type": account.account_type,
+            "nature": "credit" if is_credit_nature else "debit",
+        },
+        "period": (
+            {"date_from": period_obj.date_from.isoformat(), "date_to": period_obj.date_to.isoformat()}
+            if period_obj
+            else None
+        ),
+        "summary": {
+            "total_debit": float(total_debit),
+            "total_credit": float(total_credit),
+            "net_amount": float(net_amount),
+            "lines_count": len(lines_out),
+        },
+        "lines": lines_out,
     }
 
 
@@ -1037,6 +1416,13 @@ async def report_balance_sheet(
     total_liabilities_and_equity = total_liabilities + total_equity
     difference = round(total_assets - total_liabilities_and_equity, 2)
 
+    try:
+        ob_entry = await db.scalar(
+            select(JournalEntry).where(JournalEntry.source_doc_type == "opening_balance")
+        )
+    except (Exception, StopAsyncIteration):
+        ob_entry = None
+
     return {
         "assets": {
             "current_assets": current_assets,
@@ -1053,16 +1439,158 @@ async def report_balance_sheet(
         "total_liabilities_and_equity": round(total_liabilities_and_equity, 2),
         "difference": difference,
         "is_balanced": abs(difference) < 0.01,
+        "opening_balance": {
+            "is_set": ob_entry is not None,
+            "accounting_start_date": ob_entry.entry_date.date().isoformat() if ob_entry and ob_entry.entry_date else None,
+            "journal_entry_number": ob_entry.entry_number if ob_entry else None,
+        },
+    }
+
+
+@router.get("/gl-accounts")
+async def list_gl_accounts(
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """قائمة حسابات دفتر الأستاذ العام لاختيار كشوف الحسابات."""
+    accounts = (await db.scalars(select(Account).where(Account.is_active.is_(True)).order_by(Account.code.asc()))).all()
+    return [
+        {
+            "id": a.id,
+            "code": a.code,
+            "name_ar": a.name_ar,
+            "account_type": a.account_type,
+        }
+        for a in accounts
+    ]
+
+
+@router.get("/cash-account-statement/{account_id}")
+async def report_cash_account_statement(
+    account_id: str,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """كشف حساب الخزينة الرئيسية أو صندوق عهدة من دفتر النقدية المعتمد."""
+    account = await db.get(CashAccount, account_id)
+    if not account:
+        raise HTTPException(404, "حساب النقدية غير موجود.")
+
+    rows = (await db.execute(
+        select(CashLedgerEntry, CashDocument)
+        .join(CashDocument, CashDocument.id == CashLedgerEntry.document_id)
+        .where(CashLedgerEntry.account_id == account.id)
+        .order_by(CashDocument.occurred_at.asc(), CashLedgerEntry.created_at.asc())
+    )).all()
+
+    doc_type_ar = {"income": "سند قبض / إيراد", "expense": "سند صرف / مصروف", "transfer": "تحويل نقدي"}
+    events = []
+    for ledger, doc in rows:
+        amt = Decimal(str(ledger.amount or 0))
+        events.append({
+            "occurred_at": doc.occurred_at or ledger.created_at,
+            "sort_order": 1,
+            "type": doc_type_ar.get(doc.document_type, doc.document_type),
+            "reference": doc.document_number,
+            "description": doc.description,
+            "debit": amt if amt > 0 else Decimal("0.00"),
+            "credit": -amt if amt < 0 else Decimal("0.00"),
+        })
+
+    statement = _build_statement_timeline(events, credit_nature=False, date_from=date_from, date_to=date_to)
+    return {
+        "account": {
+            "id": account.id,
+            "account_number": account.account_number,
+            "name": account.name,
+            "account_type": account.account_type,
+            "is_active": account.is_active,
+        },
+        "statement": statement,
+    }
+
+
+@router.get("/employee-statement/{employee_id}")
+async def report_employee_statement(
+    employee_id: str,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """كشف مستحقات وصرف رواتب موظف من كشوف الرواتب المعتمدة."""
+    roles = await get_user_roles(current_user, db=db)
+    perms = await get_permissions_for_roles(db, roles)
+    if "finance:payroll:view" not in perms:
+        raise HTTPException(403, "عرض كشف حساب الموظف يتطلب صلاحية الرواتب.")
+
+    emp = await db.get(Employee, employee_id)
+    if not emp:
+        raise HTTPException(404, "الموظف غير موجود.")
+
+    runs = (await db.execute(
+        select(PayrollRun, PayPeriod)
+        .join(PayPeriod, PayPeriod.id == PayrollRun.period_id)
+        .where(PayrollRun.employee_id == emp.id)
+        .order_by(PayPeriod.start_date.asc())
+    )).all()
+
+    events = []
+    total_earned = Decimal("0.00")
+    total_paid = Decimal("0.00")
+    for run, period in runs:
+        net = Decimal(str(run.net_amount or 0))
+        total_earned += net
+        events.append({
+            "occurred_at": period.end_date,
+            "sort_order": 1,
+            "type": "استحقاق راتب",
+            "reference": period.period_name,
+            "description": f"أجر {run.base_amount:.2f} + حوافز {run.bonus_amount:.2f} + إضافي {run.overtime_amount:.2f} − خصومات {run.deductions_amount:.2f}",
+            "debit": Decimal("0.00"),
+            "credit": net,
+        })
+        if run.status == "paid" or period.status == "paid":
+            total_paid += net
+            events.append({
+                "occurred_at": period.end_date,
+                "sort_order": 2,
+                "type": "صرف راتب",
+                "reference": period.period_name,
+                "description": f"صرف صافي راتب فترة {period.period_name}",
+                "debit": net,
+                "credit": Decimal("0.00"),
+            })
+
+    statement = _build_statement_timeline(events, credit_nature=True, date_from=date_from, date_to=date_to)
+    return {
+        "employee": {
+            "id": emp.id,
+            "code": emp.code,
+            "name": emp.name,
+            "department": emp.department,
+            "pay_type": emp.pay_type,
+        },
+        "totals": {
+            "total_earned": float(total_earned),
+            "total_paid": float(total_paid),
+            "balance_due": float(total_earned - total_paid),
+        },
+        "statement": statement,
     }
 
 
 @router.get("/general-ledger/{account_code}")
 async def report_account_ledger(
     account_code: str,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
     current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
     db: AsyncSession = Depends(get_db),
 ):
-    """كشف حساب دفتر الأستاذ العام بالتفصيل مع الرصيد التراكمي المستمر."""
+    """كشف حساب دفتر الأستاذ العام بالتفصيل مع الرصيد الافتتاحي والتراكمي المستمر."""
     account = await db.scalar(select(Account).where(Account.code == account_code.strip()))
     if not account:
         raise HTTPException(404, f"الحساب ذو الكود {account_code} غير موجود.")
@@ -1075,30 +1603,39 @@ async def report_account_ledger(
     )
     rows = lines_res.all()
 
+    is_debit_nature = account.account_type in ("asset", "expense")
+    start_date_bound = date_from
+    end_date_bound = date_to
+
+    opening_balance = Decimal("0.00")
     running_balance = Decimal("0.00")
     total_debit = Decimal("0.00")
     total_credit = Decimal("0.00")
     statement_lines = []
 
-    is_debit_nature = account.account_type in ("asset", "expense")
-
     for line, je in rows:
+        entry_dt = je.entry_date.date() if isinstance(je.entry_date, datetime) else je.entry_date
         dr = Decimal(str(line.debit))
         cr = Decimal(str(line.credit))
+        delta = (dr - cr) if is_debit_nature else (cr - dr)
+
+        if start_date_bound and entry_dt and entry_dt < start_date_bound:
+            opening_balance += delta
+            running_balance = opening_balance
+            continue
+        if end_date_bound and entry_dt and entry_dt > end_date_bound:
+            continue
+
         total_debit += dr
         total_credit += cr
-
-        if is_debit_nature:
-            running_balance += (dr - cr)
-        else:
-            running_balance += (cr - dr)
+        running_balance += delta
 
         statement_lines.append({
             "line_id": line.id,
             "entry_number": je.entry_number,
             "entry_date": je.entry_date.isoformat(),
-            "reference_type": je.reference_type,
-            "reference_id": je.reference_id,
+            "reference_type": je.source_doc_type,
+            "reference_id": je.source_doc_id,
             "description": line.description or je.description,
             "debit": float(dr),
             "credit": float(cr),
@@ -1114,9 +1651,11 @@ async def report_account_ledger(
             "nature": "debit" if is_debit_nature else "credit",
         },
         "summary": {
+            "opening_balance": float(opening_balance),
             "total_debit": float(total_debit),
             "total_credit": float(total_credit),
             "net_balance": float(running_balance),
+            "closing_balance": float(running_balance),
             "lines_count": len(statement_lines),
         },
         "lines": statement_lines,
@@ -1387,3 +1926,31 @@ async def report_analytics_stock_health(
 ):
     """المخزون الراكد (بلا حركة منذ عدد أيام) والأصناف تحت حد إعادة الطلب في مخزن الخامات."""
     return await analytics.stock_health(db, idle_days)
+
+
+@router.get(
+    "/manufacturing-profitability",
+    response_model=ManufacturingProfitabilityReportRead,
+)
+async def report_manufacturing_profitability(
+    date_from: Optional[date] = Query(default=None),
+    date_to: Optional[date] = Query(default=None),
+    manufacturing_type: Optional[str] = Query(default=None),
+    customer_id: Optional[str] = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_permission("finance:reports:view")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    تقرير مقارنة ربحية وتكاليف التصنيع الداخلي والتشغيل للغير (CMT - Phase 6 / T6):
+    - يفصل تكلفة التصنيع الداخلي للمصنع عن تكلفة خدمة التشغيل للغير.
+    - يستبعد خامات العميل المعزولة من تكاليف وإيرادات المصنع.
+    - يقارن مصنعية الخدمة والإيرادات المحققة بهامش الربح الفعلي لكل نمط تصنيع.
+    """
+    return await get_manufacturing_profitability_report(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        manufacturing_type=manufacturing_type,
+        customer_id=customer_id,
+    )
+

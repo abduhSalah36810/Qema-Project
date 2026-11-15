@@ -1,7 +1,7 @@
 import hashlib
 import uuid
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import date, datetime, time, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -33,6 +33,10 @@ from app.modules.customers.schemas import (
     ReturnableDeliveryLineRead,
     ReturnableDeliveryRead,
     ProductionOrderForCustomerCreate,
+    SoldItemRowRead,
+    SoldItemsResponse,
+    SoldItemsSummaryRead,
+    OpeningCustomerBalanceCreate,
 )
 from app.modules.customers.models import (
     CustomerDelivery,
@@ -43,10 +47,23 @@ from app.modules.customers.models import (
     CustomerOrderLine,
     CustomerPayment,
 )
+from app.modules.finance.models import CashDocument, PaymentAllocation
 from app.modules.finance.balances import customer_order_financials, document_net_sales_value, money
-from app.modules.finance.ledger_service import post_journal_entry, get_weighted_average_cost
-from app.modules.finance.schemas import CashDocumentCreate
-from app.modules.finance.service import create_cash_document, finalize_cash_document, get_main_treasury
+from app.modules.finance.ledger_service import post_journal_entry, get_weighted_average_cost, resolve_expense_code, is_opening_balances_locked
+from app.modules.finance.schemas import (
+    CashDocumentCreate,
+    PaymentAllocationCreate,
+    PaymentAllocationRead,
+    UnallocatedPaymentRead,
+)
+from app.modules.finance.service import (
+    allocate_customer_payment,
+    create_cash_document,
+    finalize_cash_document,
+    get_main_treasury,
+    get_main_bank,
+    get_unallocated_customer_payments,
+)
 from app.modules.production.stock import (
     FACTORY_BRAND_BUCKET,
     RETURN_PENDING_PREFIX,
@@ -185,6 +202,21 @@ def _order_payload(order: CustomerOrder) -> dict:
             ],
             "notes": line.notes,
         })
+    payment_rows = [_payment_payload(p) for p in sorted(order.payments, key=lambda entry: entry.received_at)]
+    for alloc in getattr(order, "allocations", []) or []:
+        cd = getattr(alloc, "cash_document", None)
+        payment_rows.append({
+            "id": alloc.id,
+            "receipt_number": f"تخصيص ({cd.document_number if cd else alloc.id[:8]})",
+            "amount": float(alloc.allocated_amount),
+            "received_at": alloc.allocated_at,
+            "method": "allocation",
+            "reference": cd.document_number if cd else "",
+            "notes": alloc.notes or "تخصيص من دفعة مسددة مسبقاً",
+            "recorded_by": alloc.allocated_by or "",
+            "status": "approved",
+            "cash_document_id": alloc.cash_document_id,
+        })
     return {
         "id": order.id,
         "order_number": order.order_number,
@@ -205,7 +237,7 @@ def _order_payload(order: CustomerOrder) -> dict:
         "pending_payments_amount": fin.paid_pending,
         "lines": lines,
         "deliveries": deliveries,
-        "payments": [_payment_payload(p) for p in sorted(order.payments, key=lambda entry: entry.received_at)],
+        "payments": payment_rows,
         "returns": [_return_payload(r) for r in sorted(order.returns or [], key=lambda entry: entry.returned_at)],
     }
 
@@ -224,6 +256,7 @@ def _order_load_options():
         .selectinload(CustomerDeliveryLine.order_line)
         .selectinload(CustomerOrderLine.variant),
         selectinload(CustomerOrder.payments),
+        selectinload(CustomerOrder.allocations).selectinload(PaymentAllocation.cash_document),
         selectinload(CustomerOrder.returns)
         .selectinload(CustomerDeliveryReturn.lines)
         .selectinload(CustomerDeliveryReturnLine.order_line)
@@ -451,6 +484,168 @@ async def list_returnable_deliveries(
     return result
 
 
+@router.get("/sold-items", response_model=SoldItemsResponse)
+async def list_sold_items(
+    current_user: CustomerViewer,
+    db: Database,
+    customer_id: Annotated[str | None, Query()] = None,
+    product_id: Annotated[str | None, Query()] = None,
+    variant_id: Annotated[str | None, Query()] = None,
+    order_type: Annotated[str | None, Query()] = None,
+    date_from: Annotated[date | None, Query()] = None,
+    date_to: Annotated[date | None, Query()] = None,
+    search: Annotated[str | None, Query(max_length=120)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+):
+    """سجل الأصناف المباعة والمسلمة فعلياً للعملاء مع احتساب صافي الخصم والمرتجعات."""
+    del current_user
+    stmt = (
+        select(CustomerOrder)
+        .options(*_order_load_options(), selectinload(CustomerOrder.customer))
+        .where(CustomerOrder.status != "cancelled")
+        .order_by(CustomerOrder.order_date.desc(), CustomerOrder.order_number.desc())
+    )
+    if customer_id:
+        stmt = stmt.where(CustomerOrder.customer_id == customer_id)
+    if order_type:
+        stmt = stmt.where(CustomerOrder.order_type == order_type)
+
+    orders = (await db.execute(stmt)).scalars().all()
+
+    start_dt = datetime.combine(date_from, time.min, tzinfo=timezone.utc) if date_from else None
+    end_dt = datetime.combine(date_to, time.max, tzinfo=timezone.utc) if date_to else None
+    q = search.strip().lower() if search and search.strip() else ""
+
+    rows: list[SoldItemRowRead] = []
+    distinct_products: set[str] = set()
+    total_delivered_qty = 0.0
+    total_returned_qty = 0.0
+    total_net_qty = 0.0
+    total_delivered_val = Decimal("0.00")
+    total_returned_val = Decimal("0.00")
+    total_net_val = Decimal("0.00")
+
+    for order in orders:
+        customer = order.customer
+        if not customer:
+            continue
+        fin = customer_order_financials(order)
+        net_ratio = fin.net_ratio
+
+        returned_by_d_line: dict[str, Decimal] = {}
+        for ret in getattr(order, "returns", []) or []:
+            for r_line in getattr(ret, "lines", []) or []:
+                returned_by_d_line[r_line.delivery_line_id] = (
+                    returned_by_d_line.get(r_line.delivery_line_id, Decimal("0")) + Decimal(str(r_line.quantity or 0))
+                )
+
+        order_lines_by_id = {ol.id: ol for ol in order.lines}
+
+        for delivery in getattr(order, "deliveries", []) or []:
+            delivered_at = delivery.delivered_at
+            if delivered_at.tzinfo is None:
+                delivered_at = delivered_at.replace(tzinfo=timezone.utc)
+            if start_dt and delivered_at < start_dt:
+                continue
+            if end_dt and delivered_at > end_dt:
+                continue
+
+            for d_line in getattr(delivery, "lines", []) or []:
+                o_line = d_line.order_line or order_lines_by_id.get(d_line.order_line_id)
+                if not o_line:
+                    continue
+                if product_id and o_line.product_id != product_id:
+                    continue
+                if variant_id and o_line.variant_id != variant_id:
+                    continue
+
+                product = o_line.product
+                variant = o_line.variant
+                v_info = _variant_label(variant) if variant else ""
+                p_name = product.name_ar if product else ""
+                p_code = product.code if product else ""
+
+                if q:
+                    haystack = " ".join(
+                        [
+                            customer.name or "",
+                            customer.code or "",
+                            order.order_number or "",
+                            delivery.delivery_number or "",
+                            p_name,
+                            p_code,
+                            v_info,
+                        ]
+                    ).lower()
+                    if q not in haystack:
+                        continue
+
+                d_qty = Decimal(str(d_line.quantity or 0))
+                r_qty = returned_by_d_line.get(d_line.id, Decimal("0"))
+                net_qty = max(Decimal("0"), d_qty - r_qty)
+                u_price = Decimal(str(o_line.unit_price or 0))
+                net_u_price = (u_price * net_ratio).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+                d_val = money(d_qty * u_price * net_ratio)
+                r_val = money(r_qty * u_price * net_ratio)
+                n_val = d_val - r_val
+
+                distinct_products.add(o_line.product_id)
+                total_delivered_qty += float(d_qty)
+                total_returned_qty += float(r_qty)
+                total_net_qty += float(net_qty)
+                total_delivered_val += d_val
+                total_returned_val += r_val
+                total_net_val += n_val
+
+                rows.append(
+                    SoldItemRowRead(
+                        delivery_line_id=d_line.id,
+                        delivery_id=delivery.id,
+                        delivery_number=delivery.delivery_number,
+                        delivered_at=delivery.delivered_at,
+                        order_id=order.id,
+                        order_number=order.order_number,
+                        order_type=order.order_type,
+                        order_status=order.status,
+                        customer_id=customer.id,
+                        customer_code=customer.code,
+                        customer_name=customer.name,
+                        product_id=o_line.product_id,
+                        product_code=p_code,
+                        product_name=p_name,
+                        variant_id=o_line.variant_id,
+                        variant_info=v_info,
+                        ordered_quantity=float(o_line.quantity or 0),
+                        delivered_quantity=float(d_qty),
+                        returned_quantity=float(r_qty),
+                        net_sold_quantity=float(net_qty),
+                        unit_price=float(u_price),
+                        net_unit_price=float(net_u_price),
+                        delivered_value=float(d_val),
+                        returned_value=float(r_val),
+                        net_sold_value=float(n_val),
+                    )
+                )
+
+    rows.sort(key=lambda r: r.delivered_at, reverse=True)
+    limited_rows = rows[:limit]
+
+    return SoldItemsResponse(
+        summary=SoldItemsSummaryRead(
+            lines_count=len(rows),
+            distinct_products_count=len(distinct_products),
+            total_delivered_quantity=total_delivered_qty,
+            total_returned_quantity=total_returned_qty,
+            total_net_sold_quantity=total_net_qty,
+            total_delivered_value=float(total_delivered_val),
+            total_returned_value=float(total_returned_val),
+            total_net_sold_value=float(total_net_val),
+        ),
+        items=limited_rows,
+    )
+
+
 @router.get("/{customer_id}/account", response_model=CustomerAccountRead)
 async def get_customer_account(customer_id: str, current_user: CustomerViewer, db: Database):
     del current_user
@@ -544,6 +739,104 @@ async def create_customer_order(customer_id: str, data: CustomerOrderCreate, cur
     return CustomerOrderRead.model_validate(_order_payload(saved))
 
 
+@router.post("/{customer_id}/opening-balances", response_model=CustomerOrderRead, status_code=status.HTTP_201_CREATED)
+async def create_opening_customer_balance(
+    customer_id: str,
+    data: OpeningCustomerBalanceCreate,
+    current_user: SalesOrderCreator,
+    db: Database,
+):
+    """تسجيل رصيد افتتاحي لعميل (مديونية قديمة أو دفعة مقدمة) بمبلغ إجمالي دون بنود أو تسليمات."""
+    if await is_opening_balances_locked(db):
+        raise HTTPException(status_code=409, detail="تم قفل الأرصدة الافتتاحية ولا يمكن إنشاء مستندات افتتاحية جديدة.")
+
+    customer = await db.get(Customer, customer_id)
+    if customer is None or customer.status != "active":
+        raise HTTPException(status_code=404, detail="العميل غير موجود أو موقوف.")
+
+    now = datetime.now(timezone.utc)
+    order = CustomerOrder(
+        id=str(uuid.uuid4()),
+        order_number=f"CO-OB-{now.year}-{uuid.uuid4().hex[:6].upper()}",
+        original_order_number=data.original_order_number.strip(),
+        customer_id=customer_id,
+        order_type="ready_goods",
+        status="open",
+        is_opening=True,
+        is_advance=data.is_advance,
+        opening_amount=data.amount,
+        order_date=data.order_date,
+        discount_amount=Decimal("0.00"),
+        payment_terms="",
+        notes=data.notes.strip(),
+        created_by=current_user.id,
+        lines=[],
+    )
+    db.add(order)
+    await db.commit()
+    saved = await _load_order(db, order.id)
+    return CustomerOrderRead.model_validate(_order_payload(saved))
+
+
+@router.post("/{customer_id}/opening-balances/{order_id}/approve", response_model=CustomerOrderRead)
+async def approve_opening_customer_balance(
+    customer_id: str,
+    order_id: str,
+    current_user: SalesOrderCreator,
+    db: Database,
+):
+    """اعتماد رصيد العميل الافتتاحي وترحيل قيده المحاسبي لحساب 3900 (Maker-Checker)."""
+    order = await _load_order(db, order_id, customer_id, lock=True)
+    if not order or not getattr(order, "is_opening", False):
+        raise HTTPException(status_code=404, detail="الرصيد الافتتاحي للعميل غير موجود.")
+    if getattr(order, "approved_by", None) is not None:
+        raise HTTPException(status_code=409, detail="تم اعتماد الرصيد الافتتاحي مسبقاً.")
+
+    if order.created_by == current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="لا يمكن لمنشئ المستند الافتتاحي اعتماده بنفسه (Maker-Checker). يلزم اعتماد مستخدم آخر.",
+        )
+
+    now = datetime.now(timezone.utc)
+    order.approved_by = current_user.id
+    order.approved_at = now
+    order.status = "delivered"
+
+    amt = Decimal(str(order.opening_amount))
+    ref = order.original_order_number or order.order_number
+    if not order.is_advance:
+        await post_journal_entry(
+            db,
+            source_doc_type="opening_customer_balance",
+            source_doc_id=order.id,
+            description=f"إثبات رصيد مدين افتتاحي للعميل عن طلب {ref}",
+            lines=[
+                {"account_code": "1100", "debit": amt, "credit": 0, "description": f"مديونية عميل افتتاحية عن {ref}"},
+                {"account_code": "3900", "debit": 0, "credit": amt, "description": f"رصيد افتتاحي عميل عن {ref}"},
+            ],
+            user_id=current_user.id,
+            entry_date=order.order_date,
+        )
+    else:
+        await post_journal_entry(
+            db,
+            source_doc_type="opening_customer_balance",
+            source_doc_id=order.id,
+            description=f"إثبات دفعة مقدمة افتتاحية دائنة للعميل عن طلب {ref}",
+            lines=[
+                {"account_code": "3900", "debit": amt, "credit": 0, "description": f"رصيد افتتاحي دفعة مقدمة عميل عن {ref}"},
+                {"account_code": "1100", "debit": 0, "credit": amt, "description": f"دفعة مقدمة من العميل عن {ref}"},
+            ],
+            user_id=current_user.id,
+            entry_date=order.order_date,
+        )
+
+    await db.commit()
+    saved = await _load_order(db, order.id)
+    return CustomerOrderRead.model_validate(_order_payload(saved))
+
+
 @router.post("/{customer_id}/orders/{order_id}/deliveries", response_model=CustomerDeliveryRead, status_code=status.HTTP_201_CREATED)
 async def record_customer_delivery(
     customer_id: str,
@@ -553,8 +846,8 @@ async def record_customer_delivery(
     db: Database,
 ):
     order = await _load_order(db, order_id, customer_id, lock=True)
-    if order.status in {"cancelled", "delivered"}:
-        raise HTTPException(status_code=409, detail="لا يمكن تسجيل تسليم على معاملة ملغاة أو مكتملة.")
+    if order.status in {"cancelled", "delivered"} or getattr(order, "is_opening", False):
+        raise HTTPException(status_code=409, detail="لا يمكن تسجيل تسليم على معاملة ملغاة أو مكتملة أو رصيد افتتاحي.")
     requested_ids = [line.order_line_id for line in data.lines]
     if len(set(requested_ids)) != len(requested_ids):
         raise HTTPException(status_code=422, detail="لا تكرر البند نفسه في دفعة التسليم.")
@@ -1035,7 +1328,11 @@ async def record_customer_payment(
             status_code=409,
             detail=f"مبلغ التحصيل ({data.amount:.2f}) يتجاوز المتبقي على الطلب ({max(Decimal('0'), available):.2f}) بعد خصم التحصيلات المعلقة.",
         )
-    treasury = await get_main_treasury(db)
+    target_account = await get_main_treasury(db)
+    if data.method == "bank_transfer":
+        bank = await get_main_bank(db)
+        if bank and bank.is_active:
+            target_account = bank
     now = datetime.now(timezone.utc)
     received_at = data.received_at or now
     payment = CustomerPayment(
@@ -1051,12 +1348,13 @@ async def record_customer_payment(
         db,
         CashDocumentCreate(
             document_type="income",
-            to_account_id=treasury.id,
+            to_account_id=target_account.id,
             amount=data.amount,
             description=f"تحصيل عميل ({method_label}) للطلب {order.order_number} إيصال {payment.receipt_number}",
             occurred_at=received_at,
             source_system="customer_payment",
             source_reference=payment.id,
+            customer_id=customer_id,
         ),
         current_user.id,
         allow_system_source=True,
@@ -1175,13 +1473,14 @@ async def inspect_customer_return(
         line.scrapped_quantity = scrap_qty
 
     if scrap_cost > Decimal("0.00"):
+        scrap_acc = await resolve_expense_code(db, "5220", "5200")
         await post_journal_entry(
             db,
             source_doc_type="customer_return_scrap",
             source_doc_id=return_doc.id,
             description=f"إعدام مرتجع تالف {return_doc.return_number}",
             lines=[
-                {"account_code": "5200", "debit": scrap_cost, "credit": 0, "description": "هالك مرتجعات عملاء"},
+                {"account_code": scrap_acc, "debit": scrap_cost, "credit": 0, "description": "هالك مرتجعات عملاء"},
                 {"account_code": "1230", "debit": 0, "credit": scrap_cost, "description": "إخراج مرتجع تالف من مخزون التام"},
             ],
             user_id=current_user.id,
@@ -1269,4 +1568,56 @@ async def create_linked_production_order(
         id=production.id, order_number=production.order_number, status=production.status,
         target_quantity=Decimal(str(production.target_quantity)), product_name=product.name_ar,
         variant_info=_variant_label(variant),
+    )
+
+
+@router.get("/{customer_id}/unallocated-payments", response_model=list[UnallocatedPaymentRead])
+async def list_customer_unallocated_payments(
+    customer_id: str,
+    current_user: CustomerViewer,
+    db: Database,
+):
+    """عرض المقبوضات النقدية المحصلة من العميل والتي تملك رصيداً غير مخصص بعد على طلبات بيع."""
+    del current_user
+    rows = await get_unallocated_customer_payments(db, customer_id)
+    return [UnallocatedPaymentRead(**row) for row in rows]
+
+
+@router.post(
+    "/{customer_id}/orders/{order_id}/allocate-payment",
+    response_model=PaymentAllocationRead,
+)
+async def allocate_payment_to_customer_order(
+    customer_id: str,
+    order_id: str,
+    data: PaymentAllocationCreate,
+    current_user: FinanceManager,
+    db: Database,
+):
+    """تخصيص وتسوية دفعة تحصيل سابقة ومعتمدة على طلب عميل دون تكرار حركة الخزينة."""
+    alloc = await allocate_customer_payment(
+        db,
+        customer_id=customer_id,
+        order_id=order_id,
+        cash_document_id=data.cash_document_id,
+        amount=data.amount,
+        user_id=current_user.id,
+        notes=data.notes,
+    )
+    await db.commit()
+    await db.refresh(alloc)
+    cd = await db.get(CashDocument, alloc.cash_document_id)
+    return PaymentAllocationRead(
+        id=alloc.id,
+        allocation_number=alloc.allocation_number,
+        cash_document_id=alloc.cash_document_id,
+        cash_document_number=cd.document_number if cd else None,
+        supplier_id=alloc.supplier_id,
+        customer_id=alloc.customer_id,
+        supplier_invoice_id=alloc.supplier_invoice_id,
+        customer_order_id=alloc.customer_order_id,
+        allocated_amount=alloc.allocated_amount,
+        allocated_at=alloc.allocated_at,
+        allocated_by=alloc.allocated_by,
+        notes=alloc.notes,
     )
