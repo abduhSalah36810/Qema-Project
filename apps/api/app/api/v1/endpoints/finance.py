@@ -1411,6 +1411,12 @@ async def create_opening_balances(
             ),
         )
 
+    if data.custody_balance > Decimal("0.00"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="أرصدة العهد تُسجَّل بعد يوم القطع بتحويل من الخزينة إلى حساب العهدة",
+        )
+
     if await is_opening_balances_locked(db):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1427,16 +1433,55 @@ async def create_opening_balances(
             detail="تم تسجيل القيد الافتتاحي العام للنظام مسبقاً ولا يمكن تكراره أو ترحيل قيد افتتاحي عام ثانٍ.",
         )
 
+    chosen_bank_account = None
+    if data.bank_balance > Decimal("0.00"):
+        bank_accounts = (
+            await db.scalars(
+                select(CashAccount).where(
+                    CashAccount.account_type == "bank",
+                    CashAccount.is_active.is_(True),
+                )
+            )
+        ).all()
+        if not bank_accounts:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="لا يوجد أي حساب بنكي نشط في النظام لتسجيل الرصيد الافتتاحي للبنك. يرجى تهيئة حساب بنكي أولاً.",
+            )
+        if len(bank_accounts) == 1:
+            chosen_bank_account = bank_accounts[0]
+            if data.bank_account_id and data.bank_account_id != chosen_bank_account.id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="حساب البنك المحدد غير صحيح أو غير موجود.",
+                )
+        else:
+            if not data.bank_account_id:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="يوجد أكثر من حساب بنكي نشط. حقل bank_account_id إلزامي عند وجود رصيد بنكي.",
+                )
+            chosen_bank_account = next((b for b in bank_accounts if b.id == data.bank_account_id), None)
+            if not chosen_bank_account:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="حساب البنك المحدد غير موجود أو غير نشط.",
+                )
+
+    if data.treasury_balance > Decimal("0.00"):
+        treasury = await db.get(CashAccount, CANONICAL_TREASURY_ID)
+        if not treasury:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="حساب الخزينة الرئيسية الكانوني غير مهيأ في النظام.",
+            )
+
     lines: list[dict[str, Any]] = []
-    # النقدية والبنك والعهد (مدين)
-    asset_mappings = [
-        ("1010", data.treasury_balance, "رصيد الخزينة الرئيسية الافتتاحي"),
-        ("1030", data.bank_balance, "رصيد حساب بنك المصنع الافتتاحي"),
-        ("1020", data.custody_balance, "أرصدة العهد النقدية الافتتاحية"),
-    ]
-    for code, amt, label in asset_mappings:
-        if amt > Decimal("0.00"):
-            lines.append({"account_code": code, "debit": amt, "credit": Decimal("0.00"), "description": label})
+    # النقدية والبنك (مدين)
+    if data.treasury_balance > Decimal("0.00"):
+        lines.append({"account_code": "1010", "debit": data.treasury_balance, "credit": Decimal("0.00"), "description": "رصيد الخزينة الرئيسية الافتتاحي"})
+    if data.bank_balance > Decimal("0.00"):
+        lines.append({"account_code": "1030", "debit": data.bank_balance, "credit": Decimal("0.00"), "description": "رصيد حساب بنك المصنع الافتتاحي"})
 
     # رأس المال (دائن)
     if data.paid_in_capital > Decimal("0.00"):
@@ -1463,6 +1508,68 @@ async def create_opening_balances(
         user_id=current_user.id,
         entry_date=entry_date,
     )
+
+    # إنشاء حركات دفتر النقدية الافتتاحية ذرّياً مع القيد
+    if data.treasury_balance > Decimal("0.00"):
+        doc_tr = CashDocument(
+            id=str(uuid.uuid4()),
+            document_number=f"CSH-OB-TR-{uuid.uuid4().hex[:8].upper()}",
+            document_type="opening_balance",
+            to_account_id=CANONICAL_TREASURY_ID,
+            from_account_id=None,
+            amount=data.treasury_balance,
+            description="رصيد الخزينة الرئيسية الافتتاحي",
+            occurred_at=entry_date,
+            source_system="opening_balance",
+            source_reference=f"OB-{data.accounting_start_date.isoformat()}-TREASURY",
+            status="approved",
+            created_by=current_user.id,
+            approved_by=current_user.id,
+            approved_at=entry_date,
+        )
+        db.add(doc_tr)
+        await db.flush()
+        db.add(
+            CashLedgerEntry(
+                id=str(uuid.uuid4()),
+                document_id=doc_tr.id,
+                account_id=CANONICAL_TREASURY_ID,
+                amount=data.treasury_balance,
+                created_by=current_user.id,
+                created_at=entry_date,
+            )
+        )
+
+    if data.bank_balance > Decimal("0.00") and chosen_bank_account:
+        doc_bk = CashDocument(
+            id=str(uuid.uuid4()),
+            document_number=f"CSH-OB-BK-{uuid.uuid4().hex[:8].upper()}",
+            document_type="opening_balance",
+            to_account_id=chosen_bank_account.id,
+            from_account_id=None,
+            amount=data.bank_balance,
+            description=f"رصيد {chosen_bank_account.name} الافتتاحي",
+            occurred_at=entry_date,
+            source_system="opening_balance",
+            source_reference=f"OB-{data.accounting_start_date.isoformat()}-BANK",
+            status="approved",
+            created_by=current_user.id,
+            approved_by=current_user.id,
+            approved_at=entry_date,
+        )
+        db.add(doc_bk)
+        await db.flush()
+        db.add(
+            CashLedgerEntry(
+                id=str(uuid.uuid4()),
+                document_id=doc_bk.id,
+                account_id=chosen_bank_account.id,
+                amount=data.bank_balance,
+                created_by=current_user.id,
+                created_at=entry_date,
+            )
+        )
+
     # قفل الأرصدة الافتتاحية تلقائياً عند ترحيل القيد الافتتاحي العام
     await set_accounting_lock(
         db,

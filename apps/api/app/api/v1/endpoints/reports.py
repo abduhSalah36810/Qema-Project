@@ -1485,13 +1485,19 @@ async def report_cash_account_statement(
         .order_by(CashDocument.occurred_at.asc(), CashLedgerEntry.created_at.asc())
     )).all()
 
-    doc_type_ar = {"income": "سند قبض / إيراد", "expense": "سند صرف / مصروف", "transfer": "تحويل نقدي"}
+    doc_type_ar = {
+        "income": "سند قبض / إيراد",
+        "expense": "سند صرف / مصروف",
+        "transfer": "تحويل نقدي",
+        "opening_balance": "رصيد افتتاحي",
+    }
     events = []
     for ledger, doc in rows:
         amt = Decimal(str(ledger.amount or 0))
+        sort_order = 0 if doc.document_type == "opening_balance" else 1
         events.append({
             "occurred_at": doc.occurred_at or ledger.created_at,
-            "sort_order": 1,
+            "sort_order": sort_order,
             "type": doc_type_ar.get(doc.document_type, doc.document_type),
             "reference": doc.document_number,
             "description": doc.description,

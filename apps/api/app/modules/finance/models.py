@@ -34,7 +34,7 @@ class CashAccount(Base):
 class CashDocument(Base):
     __tablename__ = "cash_documents"
     __table_args__ = (
-        CheckConstraint("document_type in ('income', 'expense', 'transfer')", name="ck_cash_documents_type"),
+        CheckConstraint("document_type in ('income', 'expense', 'transfer', 'opening_balance')", name="ck_cash_documents_type"),
         CheckConstraint("status in ('pending', 'approved', 'rejected', 'reversed')", name="ck_cash_documents_status"),
         CheckConstraint("amount > 0", name="ck_cash_documents_amount_positive"),
         UniqueConstraint("source_system", "source_reference", name="uq_cash_document_source_reference"),

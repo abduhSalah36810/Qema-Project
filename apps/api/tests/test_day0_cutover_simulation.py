@@ -31,12 +31,13 @@ from app.modules.finance.models import (
     AccountingLock,
     CashAccount,
     CashDocument,
+    CashLedgerEntry,
     JournalEntry,
     JournalEntryLine,
     Supplier,
     SupplierInvoice,
 )
-from app.modules.finance.ledger_service import CANONICAL_TREASURY_ID, get_weighted_average_cost
+from app.modules.finance.ledger_service import CANONICAL_BANK_ID, CANONICAL_TREASURY_ID, get_weighted_average_cost
 from app.modules.finance.schemas import OpeningBalancesCreate
 from app.modules.production.models import (
     CatalogItem,
@@ -447,6 +448,18 @@ async def test_day0_cutover_full_simulation(ctx):
     # ─────────────────────────────────────────────────────────────────────────
     # ٥. القيد الافتتاحي العام للنقدية ورأس المال (فيُقفل النظام تلقائياً)
     # ─────────────────────────────────────────────────────────────────────────
+    # التحقق من رفض أي قيمة غير صفرية للعهد بـ 422
+    custody_rej_res = await a["fm"].post(f"{API}/finance/opening-balances", json={
+        "accounting_start_date": cutover_date.isoformat(),
+        "treasury_balance": "20000.00",
+        "bank_balance": "80000.00",
+        "custody_balance": "5000.00",
+        "paid_in_capital": "105000.00",
+        "notes": "محاولة مرفوضة لقيد رصيد عهدة",
+    })
+    assert custody_rej_res.status_code == 422, custody_rej_res.text
+    assert "أرصدة العهد تُسجَّل بعد يوم القطع بتحويل من الخزينة إلى حساب العهدة" in custody_rej_res.text
+
     ob_res = await a["fm"].post(f"{API}/finance/opening-balances", json={
         "accounting_start_date": cutover_date.isoformat(),
         "treasury_balance": "20000.00",
@@ -496,12 +509,30 @@ async def test_day0_cutover_full_simulation(ctx):
     assert acc_1030_pre is not None and Decimal(str(acc_1030_pre["total_debit"])) == Decimal("80000.00"), "رصيد 1030 في الأستاذ العام يجب أن يكون 80,000.00 ج.م"
 
     # فحص دفتر النقدية المساعد (Cash Ledger Subledger):
-    # [عيب تطبيقي موثق]: القيد الافتتاحي العام يرحل إلى دفتر الأستاذ العام (1010) ولكنه لا يغذي دفتر النقدية
-    # المساعد (CashLedgerEntry). بناءً عليه، يظهر رصيد الخزينة المساعد 0.00 ج.م بدلاً من 20,000.00 ج.م.
+    # بعد القيد الافتتاحي العام، يتم إنشاء حركات افتتاحية ذرّية في cash_ledger_entries:
+    # رصيد دفتر الخزينة = 20,000 ج.م ورصيد دفتر البنك = 80,000 ج.م
     treasury_pre_ops = await _get_treasury_balance(a["fm"])
-    assert treasury_pre_ops == Decimal("0.00"), (
-        f"توثيق العيب: رصيد الخزينة في دفتر النقدية المساعد هو {treasury_pre_ops} لعدم إنشاء قيد مساعد بالقيد العام"
+    assert treasury_pre_ops == Decimal("20000.00"), (
+        f"رصيد الخزينة في دفتر النقدية المساعد يجب أن يكون 20,000.00 ج.م، الفعلي: {treasury_pre_ops}"
     )
+    bank_pre_ops = await session.scalar(
+        sa.select(sa.func.coalesce(sa.func.sum(CashLedgerEntry.amount), 0)).where(
+            CashLedgerEntry.account_id == CANONICAL_BANK_ID
+        )
+    )
+    assert Decimal(str(bank_pre_ops)) == Decimal("80000.00"), (
+        f"رصيد البنك في دفتر النقدية المساعد يجب أن يكون 80,000.00 ج.م، الفعلي: {bank_pre_ops}"
+    )
+
+    # التحقق من أن كشف حساب النقدية يعرض الرصيد الافتتاحي كأول سطر بأرصدة تراكمية صحيحة
+    tr_stmt_res = await a["fm"].get(f"{API}/reports/cash-account-statement/{CANONICAL_TREASURY_ID}")
+    assert tr_stmt_res.status_code == 200, tr_stmt_res.text
+    tr_stmt = tr_stmt_res.json()["statement"]
+    assert len(tr_stmt["transactions"]) > 0, "يجب أن يحتوي كشف حساب الخزينة على حركات"
+    first_tx = tr_stmt["transactions"][0]
+    assert first_tx["type"] == "رصيد افتتاحي"
+    assert first_tx["debit"] == 20000.0
+    assert first_tx["running_balance"] == 20000.0
 
     # مطابقة حساب 3900:
     # المخزون الافتتاحي = +25,000 دائن 3900
@@ -533,18 +564,27 @@ async def test_day0_cutover_full_simulation(ctx):
     # ─────────────────────────────────────────────────────────────────────────
     # ٧. العمليات التشغيلية بعد القفل (Post-Lock Operations): سداد، تحصيل، تسليم C3، صرف خامات
     # ─────────────────────────────────────────────────────────────────────────
-    # (ج1) إثبات العيب التطبيقي: محاولة سداد جزئي 6,000 ج.م لمورد 1 من رصيد الخزينة الافتتاحي قبل أي تحصيل:
-    # التطبيق يرفض الصرف برمز 409 لأن دفتر النقدية المساعد رصيده 0.00 ج.م رغم وجود 20,000 في الأستاذ العام
-    pay_fail_res = await a["fm"].post(f"{API}/finance/supplier-invoices/{inv1_id}/payments", json={
+    # (ج1) سداد جزئي 6,000 ج.م لمورد 1 من رصيد الخزينة الافتتاحي بعد القفل وقبل أي تحصيل:
+    # ينجح السداد والتخصيص ويُعتمد تلقائياً للمدير المالي (FIN-DEC-01) نظراً لتوفر الرصيد الافتتاحي في الخزينة
+    pay_res = await a["fm"].post(f"{API}/finance/supplier-invoices/{inv1_id}/payments", json={
         "amount": "6000.00",
-        "description": f"محاولة سداد جزئي قبل التحصيل {tag}",
+        "description": f"سداد جزئي لمورد 1 من الرصيد الافتتاحي {tag}",
     })
-    assert pay_fail_res.status_code == 409, (
-        f"المتوقع 409 بسبب عيب عدم تغذية دفتر النقدية المساعد، المستلم: {pay_fail_res.status_code}"
-    )
-    assert "الرصيد غير كافٍ لاعتماد الصرف" in pay_fail_res.text or "0.00" in pay_fail_res.text
+    assert pay_res.status_code == 201, pay_res.text
+    csh_doc = pay_res.json()
+    assert csh_doc["status"] == "approved", "سند الصرف المنشأ بواسطة المدير المالي يُعتمد تلقائياً (FIN-DEC-01)"
 
-    # (ج2) تحصيل جزئي 10,000 ج.م من عميل 1 مع التخصيص (سند قبض يغذي دفتر النقدية المساعد فعلياً)
+    # كشف حساب مورد 1 أصبح 4,000.00 ج.م (10,000 - 6,000)
+    s1_stmt_after = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup1_id}")).json()
+    assert s1_stmt_after["totals"]["balance_due"] == 4000.0, (
+        f"المتوقع 4000.00 ج.م لمورد 1 بعد السداد الجزئي، الفعلي: {s1_stmt_after['totals']['balance_due']}"
+    )
+
+    # رصيد الخزينة المساعد بعد السداد (20,000 - 6,000 = 14,000.00 ج.م)
+    treasury_after_pay = await _get_treasury_balance(a["fm"])
+    assert treasury_after_pay == Decimal("14000.00"), f"الخزينة يجب أن تكون 14000.00 ج.م بعد السداد، الفعلي: {treasury_after_pay}"
+
+    # (ج2) تحصيل جزئي 10,000 ج.م من عميل 1 مع التخصيص (سند قبض يغذي دفتر النقدية المساعد)
     coll_res = await a["fm"].post(f"{API}/customers/{c1_id}/orders/{cust1_order_id}/payments", json={
         "amount": "10000.00",
         "method": "cash",
@@ -559,29 +599,9 @@ async def test_day0_cutover_full_simulation(ctx):
         f"المتوقع 5000.00 ج.م لعميل 1 بعد التحصيل، الفعلي: {c1_stmt_after['totals']['balance_due']}"
     )
 
-    # رصيد الخزينة المساعد بعد التحصيل أصبح 10,000.00 ج.م
+    # رصيد الخزينة المساعد بعد التحصيل أصبح 24,000.00 ج.م (14,000 + 10,000)
     treasury_after_coll = await _get_treasury_balance(a["fm"])
-    assert treasury_after_coll == Decimal("10000.00"), f"رصيد الخزينة بعد التحصيل يجب أن يكون 10,000.00 ج.م، الفعلي: {treasury_after_coll}"
-
-    # (ج3) سداد جزئي 6,000 ج.م لمورد 1 بعد توفر سيولة في دفتر النقدية المساعد:
-    # ينجح السداد والتخصيص ويُعتمد تلقائياً للمدير المالي (FIN-DEC-01)
-    pay_res = await a["fm"].post(f"{API}/finance/supplier-invoices/{inv1_id}/payments", json={
-        "amount": "6000.00",
-        "description": f"سداد جزئي لمورد 1 عن فاتورة {tag}",
-    })
-    assert pay_res.status_code == 201, pay_res.text
-    csh_doc = pay_res.json()
-    assert csh_doc["status"] == "approved", "سند الصرف المنشأ بواسطة المدير المالي يُعتمد تلقائياً (FIN-DEC-01)"
-
-    # كشف حساب مورد 1 أصبح 4,000.00 ج.م
-    s1_stmt_after = (await a["fm"].get(f"{API}/reports/supplier-statement/{sup1_id}")).json()
-    assert s1_stmt_after["totals"]["balance_due"] == 4000.0, (
-        f"المتوقع 4000.00 ج.م لمورد 1 بعد السداد الجزئي، الفعلي: {s1_stmt_after['totals']['balance_due']}"
-    )
-
-    # رصيد الخزينة المساعد بعد السداد (10,000 - 6,000 = 4,000.00 ج.م)
-    treasury_after_pay = await _get_treasury_balance(a["fm"])
-    assert treasury_after_pay == Decimal("4000.00"), f"الخزينة يجب أن تكون 4000.00 ج.م بعد السداد، الفعلي: {treasury_after_pay}"
+    assert treasury_after_coll == Decimal("24000.00"), f"رصيد الخزينة بعد التحصيل يجب أن يكون 24,000.00 ج.م، الفعلي: {treasury_after_coll}"
 
     # عميل ثالث (C3) بطلب بيع حقيقي وتسليم بضاعة تامة
     c3_res = await a["fm"].post(f"{API}/customers", json={"code": f"C3_REAL_{tag}", "name": f"عميل حقيقي {tag}"})
@@ -904,6 +924,27 @@ async def test_day0_cutover_full_simulation(ctx):
     delta_2100_relock = net_2100_relock_cr - initial_2100_cr
     assert delta_2100_relock == sum_sup_stmts, (
         f"رصيد 2100 في الأستاذ العام ({delta_2100_relock}) يجب أن يطابق مجموع كشوف حسابات الموردين ({sum_sup_stmts})"
+    )
+
+    # 3. ثابت مطابقة في نهاية السيناريو: رصيد دفتر النقدية لكل حساب = رصيد حسابه في الأستاذ العام (1010 و 1030)
+    acc_1010_relock = next((r for r in tb_post_relock["rows"] if r["code"] == "1010"), None)
+    assert acc_1010_relock is not None, "حساب 1010 يجب أن يظهر في ميزان المراجعة"
+    gl_1010_bal = Decimal(str(acc_1010_relock["total_debit"])) - Decimal(str(acc_1010_relock["total_credit"]))
+    cash_ledger_1010 = await _get_treasury_balance(a["fm"])
+    assert cash_ledger_1010 == gl_1010_bal, (
+        f"رصيد دفتر الخزينة المساعد ({cash_ledger_1010}) يجب أن يطابق تماماً رصيد حساب 1010 في الأستاذ العام ({gl_1010_bal})"
+    )
+
+    acc_1030_relock = next((r for r in tb_post_relock["rows"] if r["code"] == "1030"), None)
+    assert acc_1030_relock is not None, "حساب 1030 يجب أن يظهر في ميزان المراجعة"
+    gl_1030_bal = Decimal(str(acc_1030_relock["total_debit"])) - Decimal(str(acc_1030_relock["total_credit"]))
+    bank_cash_bal = await session.scalar(
+        sa.select(sa.func.coalesce(sa.func.sum(CashLedgerEntry.amount), 0)).where(
+            CashLedgerEntry.account_id == CANONICAL_BANK_ID
+        )
+    )
+    assert Decimal(str(bank_cash_bal)) == gl_1030_bal, (
+        f"رصيد دفتر البنك المساعد ({bank_cash_bal}) يجب أن يطابق تماماً رصيد حساب 1030 في الأستاذ العام ({gl_1030_bal})"
     )
 
 @pytest.mark.asyncio

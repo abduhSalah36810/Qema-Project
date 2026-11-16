@@ -19,9 +19,12 @@ import app.db.base  # noqa: F401
 from app.core.auth import AuthenticatedUser
 from app.modules.finance.models import (
     Account,
+    CashDocument,
+    CashLedgerEntry,
     JournalEntry,
     JournalEntryLine,
 )
+from app.modules.finance.ledger_service import CANONICAL_TREASURY_ID
 from app.modules.finance.schemas import (
     OpeningBalancesCreate,
 )
@@ -48,15 +51,31 @@ def test_opening_balances_schema_rejects_unbalanced_entry():
 
 
 def test_opening_balances_schema_accepts_balanced_entry():
-    """قبول القيد الافتتاحي المتوازن تماماً المقتصر على النقدية والبنك والعهد ورأس المال."""
+    """قبول القيد الافتتاحي المتوازن تماماً المقتصر على النقدية والبنك ورأس المال."""
     ob = OpeningBalancesCreate(
         accounting_start_date=date(2026, 11, 1),
-        treasury_balance=Decimal("50000.00"),
+        treasury_balance=Decimal("60000.00"),
         bank_balance=Decimal("100000.00"),
-        custody_balance=Decimal("10000.00"),
         paid_in_capital=Decimal("160000.00"),
     )
     assert ob.accounting_start_date == date(2026, 11, 1)
+
+
+@pytest.mark.asyncio
+async def test_create_opening_balances_rejects_nonzero_custody_balance():
+    """رفض أي رصيد غير صفري للعهد في القيد الافتتاحي العام برسالة واضحة بـ 422."""
+    session = AsyncMock()
+    user = AuthenticatedUser(id="fm-1", email="fm@factory.com", claims={"sub": "fm-1"})
+    payload = OpeningBalancesCreate(
+        accounting_start_date=date(2026, 11, 1),
+        treasury_balance=Decimal("50000.00"),
+        custody_balance=Decimal("10000.00"),
+        paid_in_capital=Decimal("60000.00"),
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await create_opening_balances(payload, user, session)
+    assert exc_info.value.status_code == 422
+    assert "أرصدة العهد تُسجَّل بعد يوم القطع بتحويل من الخزينة إلى حساب العهدة" in exc_info.value.detail
 
 
 @pytest.mark.parametrize(
@@ -92,9 +111,18 @@ def test_opening_balances_schema_rejects_prohibited_subledger_accounts(prohibite
 @pytest.mark.asyncio
 @patch("app.api.v1.endpoints.finance.post_journal_entry", new_callable=AsyncMock)
 async def test_create_opening_balances_posts_balanced_je(mock_post_je):
-    """ترحيل القيد الافتتاحي ينشئ قيد يومية برمز source_doc_type='opening_balance' وسطوره كاملة."""
+    """ترحيل القيد الافتتاحي ينشئ قيد يومية برمز source_doc_type='opening_balance' وسطوره وحركات دفتر النقدية."""
     session = AsyncMock()
     session.scalar.return_value = None  # No prior opening balance
+    mock_bank = MagicMock()
+    mock_bank.id = "bank-1"
+    mock_bank.name = "حساب بنك المصنع"
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = [mock_bank]
+    session.scalars.return_value = mock_scalars
+    mock_tr = MagicMock()
+    mock_tr.id = CANONICAL_TREASURY_ID
+    session.get.return_value = mock_tr
     user = AuthenticatedUser(id="fm-1", email="fm@factory.com", claims={"sub": "fm-1"})
 
     mock_je = MagicMock(spec=JournalEntry)
@@ -117,6 +145,15 @@ async def test_create_opening_balances_posts_balanced_je(mock_post_je):
     assert res.total_assets == Decimal("100000.00")
     assert res.total_liabilities_and_equity == Decimal("100000.00")
     assert res.journal_entry_number == "JE-OB-20261101"
+
+    # التحقق من إنشاء حركات دفتر النقدية
+    added = [c[0][0] for c in session.add.call_args_list]
+    cash_docs = [x for x in added if isinstance(x, CashDocument)]
+    cash_entries = [x for x in added if isinstance(x, CashLedgerEntry)]
+    assert len(cash_docs) == 2, "يجب إنشاء سندي نقدية افتتاحيين (خزينة وبنك)"
+    assert len(cash_entries) == 2, "يجب قيد حركتين في دفتر النقدية المساعد (خزينة وبنك)"
+    assert all(d.document_type == "opening_balance" for d in cash_docs)
+    assert all(d.status == "approved" for d in cash_docs)
 
     mock_post_je.assert_awaited_once()
     kwargs = mock_post_je.call_args.kwargs

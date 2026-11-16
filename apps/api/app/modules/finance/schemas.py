@@ -354,6 +354,7 @@ class OpeningBalancesCreate(BaseModel):
     accounting_start_date: date
     treasury_balance: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
     bank_balance: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
+    bank_account_id: Optional[str] = None
     custody_balance: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
     accounts_receivable: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
     raw_materials_inventory: Decimal = Field(default=Decimal("0.00"), ge=0, max_digits=14, decimal_places=2)
