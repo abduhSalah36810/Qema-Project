@@ -55,6 +55,9 @@ class DemoError(RuntimeError):
 
 class Demo:
     def __init__(self, api: str):
+        import os
+        if os.environ.get("APP_ENV", "").strip().lower() == "production":
+            raise DemoError("حظر أمني صارم: يمنع تشغيل سكربت العرض التجريبي seed_pilot_demo في بيئة الإنتاج (APP_ENV=production).")
         host = urlparse(api).hostname
         if host not in {"localhost", "127.0.0.1", "::1"}:
             raise DemoError(f"حظر: بيانات العرض تُبنى على خادم محلي فقط (المستهدف {host}).")

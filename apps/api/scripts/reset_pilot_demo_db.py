@@ -35,6 +35,8 @@ DEMO_DB = "qemma_pilot_demo"
 
 
 def demo_database_url() -> str:
+    if os.environ.get("APP_ENV", "").strip().lower() == "production":
+        raise SystemExit("حظر أمني: يمنع إعادة ضبط قاعدة العرض التجريبي في بيئة الإنتاج (APP_ENV=production).")
     url = make_url(settings.database_url)
     if url.host not in {"localhost", "127.0.0.1", "::1"}:
         raise SystemExit(f"حظر: قاعدة العرض تُدار على خادم محلي فقط (المستهدف {url.host}).")

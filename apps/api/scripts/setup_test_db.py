@@ -30,6 +30,9 @@ async def setup_and_seed_test_database(target_url: str | None = None) -> None:
     """
     تهيئة البيانات المرجعية في قاعدة الاختبارات بعد التحقق الأمني المزدوج.
     """
+    if os.environ.get("APP_ENV", "").strip().lower() == "production":
+        raise RuntimeError("حظر أمني: يمنع تشغيل سكربت setup_test_db في بيئة الإنتاج (APP_ENV=production).")
+
     url = target_url or os.environ.get("TEST_DATABASE_URL")
     if not url:
         url = "postgresql+asyncpg://qemma_dev:changeme_local_only@localhost:5432/qemma_test_db"

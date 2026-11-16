@@ -59,6 +59,9 @@ def utc_now() -> datetime:
 
 
 async def seed_e2e_dataset(target_url: str | None = None) -> None:
+    if os.environ.get("APP_ENV", "").strip().lower() == "production":
+        raise RuntimeError("حظر أمني صارم: يمنع تشغيل سكربت البيانات التجريبية seed_e2e_dataset في بيئة الإنتاج (APP_ENV=production).")
+
     url = target_url or os.environ.get("DATABASE_URL") or os.environ.get("TEST_DATABASE_URL")
     if not url:
         url = "postgresql+asyncpg://qemma_dev:changeme_local_only@localhost:5432/qemma_test_db"
