@@ -129,6 +129,7 @@ async def _enrich_cash_document_read(db: AsyncSession, doc: CashDocument) -> Cas
                 paid_compare = fin.paid_approved if doc.status == "approved" else (fin.paid_approved + doc.amount)
                 read.is_prepayment = bool(paid_compare > fin.received_value)
 
+    read.is_auto_posted = bool(doc.status == "approved" and doc.approved_by and doc.approved_by == doc.created_by)
     return read
 
 
@@ -136,6 +137,8 @@ async def _enrich_cash_document_read(db: AsyncSession, doc: CashDocument) -> Cas
 async def list_cash_documents(
     status: Optional[str] = Query(default=None),
     approvable_by_me: bool = Query(default=False),
+    auto_posted_only: bool = Query(default=False),
+    prepayment_only: bool = Query(default=False),
     current_user: AuthenticatedUser = Depends(require_permission("finance:cash:view")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -146,6 +149,12 @@ async def list_cash_documents(
     )
     if status:
         stmt = stmt.where(CashDocument.status == status)
+    if auto_posted_only:
+        stmt = stmt.where(
+            CashDocument.status == "approved",
+            CashDocument.approved_by.is_not(None),
+            CashDocument.approved_by == CashDocument.created_by,
+        )
     if approvable_by_me:
         # نفس قواعد الخزينة: لا يظهر للمستخدم ما أنشأه، ولا سند صرف رواتب شارك في إعداد كشفه
         from app.modules.production.models import PAYROLL_PREPARATION_ACTIONS, PayPeriodEvent
@@ -167,7 +176,10 @@ async def list_cash_documents(
     docs = (await db.scalars(stmt)).all()
     results = []
     for d in docs:
-        results.append(await _enrich_cash_document_read(db, d))
+        read_item = await _enrich_cash_document_read(db, d)
+        if prepayment_only and not read_item.is_prepayment:
+            continue
+        results.append(read_item)
     return results
 
 
@@ -306,6 +318,10 @@ async def serialize_supplier_invoice(
         has_pending_payment_request=fin.paid_pending > zero,
         can_request_full_balance=_full_balance_outstanding(invoice, fin) > zero and fin.paid_pending <= zero,
         status=invoice.status,
+        is_opening=bool(getattr(invoice, "is_opening", False)),
+        is_advance=bool(getattr(invoice, "is_advance", False)),
+        approved_by=getattr(invoice, "approved_by", None),
+        approved_at=getattr(invoice, "approved_at", None),
         notes=invoice.notes, created_by=invoice.created_by, received_by=invoice.received_by,
         received_at=invoice.received_at, lines=line_rows, payments=payment_rows,
     )

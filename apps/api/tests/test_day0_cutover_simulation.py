@@ -1112,6 +1112,16 @@ async def test_advance_supplier_payment_lifecycle(ctx):
     assert Decimal(str(pay_doc["invoice_total"])) == Decimal("10000.00")
     assert Decimal(str(pay_doc["received_value"])) == Decimal("0.00")
 
+    # فحص فلترة GET /finance/cash-documents بمعاملي auto_posted_only و prepayment_only
+    prepay_only_res = await a["fm"].get(f"{API}/finance/cash-documents", params={"prepayment_only": "true"})
+    assert prepay_only_res.status_code == 200
+    assert any(d["id"] == pay_doc_id for d in prepay_only_res.json())
+
+    auto_posted_res = await a["fm"].get(f"{API}/finance/cash-documents", params={"auto_posted_only": "true"})
+    assert auto_posted_res.status_code == 200
+    assert any(d["id"] == pay_doc_id for d in auto_posted_res.json())
+    assert all(d["is_auto_posted"] is True for d in auto_posted_res.json())
+
     # 4. محاولة سداد دفعة ثانية بـ 3,000 ج.م (8000 + 3000 = 11000 > 10000)
     overpay_res = await a["fm"].post(f"{API}/finance/supplier-invoices/{inv_id}/payments", json={
         "amount": "3000.00",

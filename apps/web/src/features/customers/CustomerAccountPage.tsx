@@ -3,6 +3,8 @@ import { ApiError } from '@/lib/api';
 import { useAuth } from '@/features/auth/AuthContext';
 import { financeApi, UnallocatedPayment } from '@/features/finance/financeApi';
 import {
+  createCustomerOpeningBalance,
+  approveCustomerOpeningBalance,
   createCustomerOrder,
   createCustomerProductionOrder,
   Customer,
@@ -59,7 +61,7 @@ function methodLabel(method: CustomerPayment['method']): string {
 
 export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustomerUpdated }: CustomerAccountPageProps) {
   // أذونات الخادم فقط: لا تظهر أزرار الإجراءات لمستخدم موثق بلا أدوار (Deny-by-default)
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const canManageCustomers = hasPermission('customers:manage');
   // طلب البيع يحدد السعر والخصم: يلزم إنشاء الطلب وتفويض التسعير معاً (كما يفرض الخادم)
   const canCreateSalesOrder = hasPermission('customers:orders:create') && hasPermission('pricing:manage');
@@ -72,6 +74,7 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [orderModalOpen, setOrderModalOpen] = useState(false);
+  const [openingModalOpen, setOpeningModalOpen] = useState(false);
   const [deliveryOrder, setDeliveryOrder] = useState<CustomerOrder | null>(null);
   const [paymentOrder, setPaymentOrder] = useState<CustomerOrder | null>(null);
   const [allocatingOrder, setAllocatingOrder] = useState<CustomerOrder | null>(null);
@@ -114,6 +117,18 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
   }), { orders: 0, invoiced: 0, collected: 0, balance: 0, delivered: 0, receivable: 0, pending: 0 }), [account]);
 
   const setErrorFrom = (operationError: unknown) => setError(apiError(operationError));
+  const handleApproveOpening = async (order: CustomerOrder) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await approveCustomerOpeningBalance(customer.id, order.id);
+      await reload();
+    } catch (e) {
+      setError(apiError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
   const toggleStatus = async () => {
     setSaving(true);
     setError(null);
@@ -147,7 +162,24 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
             </>
           )}
           {canCreateSalesOrder && (
-            <button className="btn btn--primary" type="button" onClick={() => setOrderModalOpen(true)} disabled={customer.status !== 'active'}>＋ طلب جديد</button>
+            <>
+              <button
+                className="btn btn--secondary"
+                type="button"
+                onClick={() => setOpeningModalOpen(true)}
+                disabled={customer.status !== 'active'}
+              >
+                ＋ رصيد افتتاحي
+              </button>
+              <button
+                className="btn btn--primary"
+                type="button"
+                onClick={() => setOrderModalOpen(true)}
+                disabled={customer.status !== 'active'}
+              >
+                ＋ طلب جديد
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -191,10 +223,115 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
         <section className="customers-card customer-transactions" aria-label="سجل معاملات العميل">
           <div className="customer-section-heading"><div><span>السجل الكامل</span><h3>الطلبات والتصنيع والتسليمات والمدفوعات</h3></div><button className="btn btn--secondary" type="button" onClick={() => void reload()} disabled={loading}>تحديث</button></div>
           <div className="customer-provisional-banner">سجل تشغيلي لمعاملات العميل. يتم صرف دفعات التسليم مع الخصم الفعلي والمباشر من رصيد مخزن المنتجات التامة.</div>
+          {/* الأرصدة الافتتاحية بانتظار الاعتماد */}
+          {account?.orders?.some((o) => o.is_opening && !o.approved_by) && (
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '0.85rem 1rem',
+                backgroundColor: '#fffbeb',
+                border: '1px solid #fde68a',
+                borderRadius: '8px',
+              }}
+            >
+              <strong style={{ display: 'block', color: '#92400e', marginBottom: '0.4rem', fontSize: '0.92rem' }}>
+                ⏳ أرصدة افتتاحية للعميل بانتظار الاعتماد (Maker-Checker):
+              </strong>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {account.orders
+                  .filter((o) => o.is_opening && !o.approved_by)
+                  .map((o) => {
+                    const isOwn = Boolean(user?.id && o.created_by === user?.id);
+                    return (
+                      <div
+                        key={o.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '0.5rem 0.75rem',
+                          backgroundColor: '#ffffff',
+                          borderRadius: '6px',
+                          border: '1px solid #fef3c7',
+                        }}
+                      >
+                        <div>
+                          <strong>{o.original_order_number || o.order_number}</strong>
+                          <span style={{ margin: '0 0.5rem', color: '#cbd5e1' }}>|</span>
+                          <span>{o.is_advance ? 'دفعة مقدمة من العميل' : 'مديونية على العميل'}: <strong>{formatMoney(o.total_amount)}</strong></span>
+                          <span style={{ margin: '0 0.5rem', color: '#cbd5e1' }}>|</span>
+                          <small style={{ color: '#64748b' }}>أنشأه: {o.created_by || '—'} · {formatDate(o.order_date)}</small>
+                        </div>
+                        {isOwn ? (
+                          <span style={{ fontSize: '0.8rem', color: '#92400e', backgroundColor: '#fef3c7', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
+                            أنشأته أنت (يلزم اعتماد مسؤول آخر)
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn--primary"
+                            style={{ padding: '0.25rem 0.75rem', fontSize: '0.85rem' }}
+                            disabled={saving}
+                            onClick={() => void handleApproveOpening(o)}
+                          >
+                            اعتماد وترحيل القيد
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
           {loading ? <div className="customers-empty" role="status">جاري تحميل ملف العميل…</div> : !account?.orders.length ? <div className="customers-empty">لا توجد طلبات لهذا العميل بعد. اضغط «＋ طلب جديد».</div> : (
             <div className="customer-order-list">{account.orders.map((order) => (
               <article className="customer-order-card" key={order.id}>
-                <header className="customer-order-card__header"><div><span className="customer-order-code">{order.order_number}</span><h4>{typeLabel(order.order_type)}</h4><small>{formatDate(order.order_date)}</small></div><span className={`customer-order-status customer-order-status--${order.status}`}>{statusLabel(order.status)}</span></header>
+                <header className="customer-order-card__header">
+                  <div>
+                    <span className="customer-order-code">{order.original_order_number || order.order_number}</span>
+                    <h4>
+                      {order.is_opening ? 'رصيد افتتاحي' : typeLabel(order.order_type)}
+                      {order.is_opening && (
+                        <span
+                          className="badge"
+                          style={{
+                            marginRight: '0.5rem',
+                            backgroundColor: '#e0f2fe',
+                            color: '#0369a1',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: '4px',
+                            fontSize: '0.78rem',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {order.is_advance ? 'دفعة مقدمة من العميل' : 'مديونية سابقة'}
+                        </span>
+                      )}
+                    </h4>
+                    <small>{formatDate(order.order_date)}</small>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span className={`customer-order-status customer-order-status--${order.status}`}>
+                      {order.is_opening ? (order.approved_by ? 'معتمد' : 'بانتظار الاعتماد') : statusLabel(order.status)}
+                    </span>
+                    {order.is_opening && !order.approved_by && (
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                        disabled={saving || (Boolean(user?.id) && order.created_by === user?.id)}
+                        title={
+                          Boolean(user?.id) && order.created_by === user?.id
+                            ? 'Maker-Checker: لا يمكنك اعتماد ما أنشأته بنفسك'
+                            : 'اعتماد الرصيد الافتتاحي وترحيل قيده'
+                        }
+                        onClick={() => void handleApproveOpening(order)}
+                      >
+                        اعتماد الرصيد
+                      </button>
+                    )}
+                  </div>
+                </header>
                 <div className="customer-order-card__summary"><span>الإجمالي <strong>{formatMoney(order.total_amount)}</strong></span><span>المدفوع <strong>{formatMoney(order.paid_amount)}</strong></span><span>{order.balance_amount < 0 ? 'رصيد دائن مبدئي' : 'المتبقي'} <strong>{formatMoney(Math.abs(order.balance_amount))}</strong></span>{order.discount_amount > 0 && <span>الخصم <strong>{formatMoney(order.discount_amount)}</strong></span>}</div>
                 {order.payment_terms && <p className="customer-terms"><b>شروط التعامل:</b> {order.payment_terms}</p>}
                 <div className="customer-lines">{order.lines.map((line) => {
@@ -231,6 +368,7 @@ export function CustomerAccountPage({ customer, onBack, onEditCustomer, onCustom
       </div>
 
       {orderModalOpen && <CustomerOrderModal customerId={customer.id} onClose={() => setOrderModalOpen(false)} onSaved={() => { setOrderModalOpen(false); void reload(); }} />}
+      {openingModalOpen && <CustomerOpeningModal customerId={customer.id} onClose={() => setOpeningModalOpen(false)} onSaved={() => { setOpeningModalOpen(false); void reload(); }} />}
       {deliveryOrder && <DeliveryModal customerId={customer.id} order={deliveryOrder} onClose={() => setDeliveryOrder(null)} onSaved={() => { setDeliveryOrder(null); void reload(); }} onError={setErrorFrom} />}
       {paymentOrder && <PaymentModal customerId={customer.id} order={paymentOrder} onClose={() => setPaymentOrder(null)} onSaved={() => { setPaymentOrder(null); void reload(); }} onError={setErrorFrom} />}
       {allocatingOrder && (
@@ -519,6 +657,134 @@ function AllocateCustomerPaymentModal({
           </button>
           <button className="btn btn--primary" type="submit" disabled={saving || !selectedDocId}>
             {saving ? 'جاري التخصيص…' : 'تأكيد التخصيص للطلب'}
+          </button>
+        </footer>
+      </form>
+    </ModalFrame>
+  );
+}
+
+function CustomerOpeningModal({
+  customerId,
+  onClose,
+  onSaved,
+}: {
+  customerId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [orderNumber, setOrderNumber] = useState('');
+  const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState('');
+  const [isAdvance, setIsAdvance] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const num = Number(amount);
+    if (!num || num <= 0) {
+      setError('يرجى إدخال مبلغ صحيح أكبر من الصفر.');
+      return;
+    }
+    if (!orderNumber.trim()) {
+      setError('رقم الإيصال / الطلب الأصلي مطلوب.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await createCustomerOpeningBalance(customerId, {
+        original_order_number: orderNumber.trim(),
+        order_date: new Date(orderDate).toISOString(),
+        amount: num,
+        is_advance: isAdvance,
+        notes: notes.trim(),
+      });
+      onSaved();
+    } catch (e) {
+      setError(apiError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalFrame title="تسجيل رصيد افتتاحي للعميل" onClose={onClose}>
+      <form className="customer-flow-form" onSubmit={(event) => void submit(event)}>
+        {error && (
+          <div className="customers-alert" role="alert">
+            {error}
+          </div>
+        )}
+        <label>
+          رقم الإيصال / الطلب الأصلي *
+          <input
+            required
+            type="text"
+            placeholder="مثال: REC-2025-089"
+            value={orderNumber}
+            onChange={(e) => setOrderNumber(e.target.value)}
+          />
+        </label>
+        <div className="customer-form-grid">
+          <label>
+            تاريخ الرصيد الافتتاحي *
+            <input
+              required
+              type="date"
+              value={orderDate}
+              onChange={(e) => setOrderDate(e.target.value)}
+            />
+          </label>
+          <label>
+            المبلغ (ج.م) *
+            <input
+              required
+              type="number"
+              min="0.01"
+              step="0.01"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </label>
+        </div>
+        <div
+          style={{
+            margin: '0.5rem 0',
+            padding: '0.75rem',
+            backgroundColor: '#f8fafc',
+            borderRadius: '6px',
+            border: '1px solid #e2e8f0',
+          }}
+        >
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 600 }}>
+            <input
+              type="checkbox"
+              checked={isAdvance}
+              onChange={(e) => setIsAdvance(e.target.checked)}
+            />
+            <span>دفعة مقدمة دائنة للعميل (سدد مسبقاً قبل استلام البضاعة)</span>
+          </label>
+          <small style={{ display: 'block', color: '#64748b', marginTop: '0.25rem' }}>
+            اتركه غير محدد إذا كان المبلغ مديونية مستحقة على العميل عن بضاعة مسلّمة سابقاً.
+          </small>
+        </div>
+        <label>
+          ملاحظات
+          <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+        <p className="customer-provisional-banner">
+          يُحفظ الرصيد الافتتاحي معلقاً بانتظار الاعتماد. ترحيل القيد لحساب 3900 يتطلب اعتماد مسؤول آخر (Maker-Checker).
+        </p>
+        <footer>
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
+            إلغاء
+          </button>
+          <button className="btn btn--primary" type="submit" disabled={saving}>
+            {saving ? 'جاري الحفظ…' : 'حفظ الرصيد الافتتاحي'}
           </button>
         </footer>
       </form>

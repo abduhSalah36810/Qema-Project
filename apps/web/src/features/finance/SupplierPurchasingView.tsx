@@ -51,6 +51,11 @@ type Invoice = {
   /** مؤشرات بلا مبالغ: متاحة لأمين المخزن */
   has_pending_payment_request?: boolean;
   can_request_full_balance?: boolean;
+  is_opening?: boolean;
+  is_advance?: boolean;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  created_by?: string;
 };
 type DraftLine = {
   item_id: string;
@@ -78,7 +83,7 @@ function errText(err: unknown, fallback: string) {
 }
 
 export function SupplierPurchasingView() {
-  const { hasPermission, roles } = useAuth();
+  const { hasPermission, roles, user } = useAuth();
   const isWarehouseOnly = roles.includes('warehouse_manager') && !roles.includes('finance_manager') && !roles.includes('general_manager');
   const canCreateInvoices = hasPermission('suppliers:invoices:create');
   const canReceive = hasPermission('suppliers:receive');
@@ -96,6 +101,7 @@ export function SupplierPurchasingView() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<'open' | 'all'>('open');
   const [showNewInvoice, setShowNewInvoice] = useState(false);
+  const [showOpeningModal, setShowOpeningModal] = useState(false);
 
   const [header, setHeader] = useState({ supplier_id: '', invoice_number: '', notes: '' });
   const [draft, setDraft] = useState({ item_id: '', quantity: '', unit_price: '', discount: '' });
@@ -262,9 +268,25 @@ export function SupplierPurchasingView() {
     }
   };
 
+  const handleApproveOpeningInvoice = async (invoice: Invoice) => {
+    setBusy(true);
+    setError('');
+    setSuccess('');
+    try {
+      await financeApi.approveOpeningSupplierInvoice(invoice.id);
+      flash(`تم اعتماد الفاتورة الافتتاحية ${invoice.invoice_number} للمورد ${invoice.supplier_name} وترحيل قيدها للأستاذ العام بنجاح.`);
+      await load();
+    } catch (err) {
+      fail(errText(err, 'تعذر اعتماد الفاتورة الافتتاحية.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // «تحتاج إجراء»: لم تُستلم بالكامل، أو عليها مستحق (للمالية)، أو يمكن طلب سداد كامل مستحقها (للمخزن)
   const visibleInvoices = invoices.filter((inv) =>
     filter === 'all' ||
+    (inv.is_opening && !inv.approved_by) ||
     inv.status !== 'received' ||
     (showMoney && Number(inv.payable_balance || 0) > 0.001) ||
     (canRequestFullBalance && Boolean(inv.can_request_full_balance))
@@ -283,8 +305,9 @@ export function SupplierPurchasingView() {
       {success && <div className="purchasing__alert purchasing__alert--ok" role="status">✓ {success}</div>}
 
       {canCreateInvoices && !showNewInvoice && (
-        <div className="purchasing__new-toggle">
+        <div className="purchasing__new-toggle" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
           <button type="button" className="btn btn--primary" onClick={() => setShowNewInvoice(true)}>＋ تسجيل فاتورة شراء جديدة</button>
+          <button type="button" className="btn btn--secondary" onClick={() => setShowOpeningModal(true)}>＋ إدخال رصيد افتتاحي لمورد</button>
         </div>
       )}
 
@@ -365,6 +388,71 @@ export function SupplierPurchasingView() {
         </div>
       </div>
 
+      {/* فواتير افتتاحية بانتظار الاعتماد */}
+      {invoices.some((inv) => inv.is_opening && !inv.approved_by) && (
+        <div
+          style={{
+            marginBottom: '1.25rem',
+            padding: '1rem',
+            backgroundColor: '#fffbeb',
+            border: '1px solid #fde68a',
+            borderRadius: '8px',
+          }}
+        >
+          <strong style={{ display: 'block', color: '#92400e', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+            ⏳ فواتير موردين افتتاحية بانتظار الاعتماد (Maker-Checker):
+          </strong>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {invoices
+              .filter((inv) => inv.is_opening && !inv.approved_by)
+              .map((inv) => {
+                const isOwn = Boolean(user?.id && inv.created_by === user?.id);
+                return (
+                  <div
+                    key={inv.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.6rem 0.85rem',
+                      backgroundColor: '#ffffff',
+                      borderRadius: '6px',
+                      border: '1px solid #fef3c7',
+                      flexWrap: 'wrap',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <div>
+                      <strong>{inv.supplier_name}</strong>
+                      <span style={{ margin: '0 0.5rem', color: '#cbd5e1' }}>|</span>
+                      <span>فاتورة: <code>{inv.invoice_number}</code> ({inv.internal_number})</span>
+                      <span style={{ margin: '0 0.5rem', color: '#cbd5e1' }}>|</span>
+                      <span>{inv.is_advance ? 'دفعة مقدمة لنا عند المورد' : 'مستحق للمورد'}: <strong>{money(inv.invoice_total)}</strong></span>
+                      <span style={{ margin: '0 0.5rem', color: '#cbd5e1' }}>|</span>
+                      <small style={{ color: '#64748b' }}>أنشأها: {inv.created_by || '—'} · {inv.invoice_date?.slice(0, 10)}</small>
+                    </div>
+                    {isOwn ? (
+                      <span style={{ fontSize: '0.8rem', color: '#92400e', backgroundColor: '#fef3c7', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
+                        أنشأتها أنت (يلزم اعتماد مسؤول آخر)
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        style={{ padding: '0.3rem 0.75rem', fontSize: '0.85rem' }}
+                        disabled={busy}
+                        onClick={() => void handleApproveOpeningInvoice(inv)}
+                      >
+                        اعتماد وترحيل القيد
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
+
       {loading ? <div className="md-empty" role="status">جاري التحميل…</div> : visibleInvoices.length === 0 ? (
         <div className="md-empty">{filter === 'open' ? 'لا توجد فواتير تحتاج استلاماً أو سداداً.' : 'لا توجد فواتير شراء بعد.'}</div>
       ) : visibleInvoices.map((inv) => {
@@ -376,10 +464,63 @@ export function SupplierPurchasingView() {
           <article key={inv.id} className="purchasing__card purchasing__invoice">
             <header className="purchasing__invoice-head">
               <div>
-                <strong>{inv.supplier_name}</strong>
+                <strong>
+                  {inv.supplier_name}
+                  {inv.is_opening && (
+                    <span
+                      className="badge"
+                      style={{
+                        marginRight: '0.5rem',
+                        backgroundColor: '#e0f2fe',
+                        color: '#0369a1',
+                        padding: '0.15rem 0.5rem',
+                        borderRadius: '4px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                      }}
+                    >
+                      رصيد افتتاحي
+                    </span>
+                  )}
+                  {inv.is_advance && (
+                    <span
+                      className="badge"
+                      style={{
+                        marginRight: '0.35rem',
+                        backgroundColor: '#fef3c7',
+                        color: '#92400e',
+                        padding: '0.15rem 0.5rem',
+                        borderRadius: '4px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                      }}
+                    >
+                      دفعة مقدمة
+                    </span>
+                  )}
+                </strong>
                 <small>فاتورة المورد {inv.invoice_number} · مرجع النظام {inv.internal_number} · {new Date(inv.invoice_date).toLocaleDateString('ar-EG')}</small>
               </div>
-              <span className={`purchasing__status purchasing__status--${st.tone}`}>{st.label}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span className={`purchasing__status purchasing__status--${st.tone}`}>
+                  {inv.is_opening ? (inv.approved_by ? 'معتمدة' : 'بانتظار الاعتماد') : st.label}
+                </span>
+                {inv.is_opening && !inv.approved_by && (
+                  <button
+                    type="button"
+                    className="btn btn--primary btn--sm"
+                    disabled={busy || (Boolean(user?.id) && inv.created_by === user?.id)}
+                    title={
+                      Boolean(user?.id) && inv.created_by === user?.id
+                        ? 'Maker-Checker: لا يمكنك اعتماد ما أنشأته بنفسك'
+                        : 'اعتماد الفاتورة الافتتاحية'
+                    }
+                    onClick={() => void handleApproveOpeningInvoice(inv)}
+                  >
+                    اعتماد الفاتورة
+                  </button>
+                )}
+              </div>
             </header>
 
             {showMoney && (
@@ -392,47 +533,65 @@ export function SupplierPurchasingView() {
               </dl>
             )}
 
-            <div className="md-table-wrap">
-              <table className="md-table">
-                <thead>
-                  <tr>
-                    <th>الخامة</th><th>في الفاتورة</th><th>استُلم</th><th>المتبقي</th>
-                    {canReceiveThis && <th>وصل الآن</th>}
-                    {showMoney && <th>إجمالي البند</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {inv.lines.map((l) => {
-                    const remaining = remainingOf(l);
-                    return (
-                      <tr key={l.id}>
-                        <td><strong>{l.item_name_ar}</strong><small>{l.item_code}</small></td>
-                        <td>{qty(l.invoiced_quantity)} {l.unit_name_ar}</td>
-                        <td>{qty(l.received_quantity)}</td>
-                        <td>{remaining > 0 ? <span className="purchasing__warn">{qty(remaining)}</span> : <span className="purchasing__ok">✓</span>}</td>
-                        {canReceiveThis && (
-                          <td>
-                            {remaining > 0 ? (
-                              <input
-                                className="purchasing__qty"
-                                aria-label={`الكمية التي وصلت من ${l.item_name_ar}`}
-                                type="number" min="0" step="0.001" max={remaining}
-                                value={receiving[inv.id]?.[l.id] ?? ''}
-                                placeholder="0"
-                                onChange={(e) => setReceiving((cur) => ({ ...cur, [inv.id]: { ...cur[inv.id], [l.id]: e.target.value } }))}
-                              />
-                            ) : '—'}
-                          </td>
-                        )}
-                        {showMoney && <td>{money(l.line_total)}{Number(l.discount_amount || 0) > 0 && <small>خصم {money(l.discount_amount)}</small>}</td>}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            {inv.is_opening ? (
+              <div
+                style={{
+                  margin: '0.75rem 0',
+                  padding: '0.75rem 1rem',
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '6px',
+                  fontSize: '0.88rem',
+                  color: '#475569',
+                }}
+              >
+                فاتورة رصيد افتتاحي مسجلة بمبلغ إجمالي دون بنود أصناف أو أثر مخزني.{' '}
+                {inv.notes ? `ملاحظات: ${inv.notes}` : ''}
+              </div>
+            ) : (
+              <div className="md-table-wrap">
+                <table className="md-table">
+                  <thead>
+                    <tr>
+                      <th>الخامة</th><th>في الفاتورة</th><th>استُلم</th><th>المتبقي</th>
+                      {canReceiveThis && <th>وصل الآن</th>}
+                      {showMoney && <th>إجمالي البند</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inv.lines.map((l) => {
+                      const remaining = remainingOf(l);
+                      return (
+                        <tr key={l.id}>
+                          <td><strong>{l.item_name_ar}</strong><small>{l.item_code}</small></td>
+                          <td>{qty(l.invoiced_quantity)} {l.unit_name_ar}</td>
+                          <td>{qty(l.received_quantity)}</td>
+                          <td>{remaining > 0 ? <span className="purchasing__warn">{qty(remaining)}</span> : <span className="purchasing__ok">✓</span>}</td>
+                          {canReceiveThis && (
+                            <td>
+                              {remaining > 0 ? (
+                                <input
+                                  className="purchasing__qty"
+                                  aria-label={`الكمية التي وصلت من ${l.item_name_ar}`}
+                                  type="number" min="0" step="0.001" max={remaining}
+                                  value={receiving[inv.id]?.[l.id] ?? ''}
+                                  placeholder="0"
+                                  onChange={(e) => setReceiving((cur) => ({ ...cur, [inv.id]: { ...cur[inv.id], [l.id]: e.target.value } }))}
+                                />
+                              ) : '—'}
+                            </td>
+                          )}
+                          {showMoney && <td>{money(l.line_total)}{Number(l.discount_amount || 0) > 0 && <small>خصم {money(l.discount_amount)}</small>}</td>}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
-            <footer className="purchasing__actions">
+            {!inv.is_opening && (
+              <footer className="purchasing__actions">
               {canReceiveThis && (
                 <>
                   <button type="button" className="btn btn--secondary" onClick={() => fillRemaining(inv)}>وصل كل المتبقي</button>
@@ -471,6 +630,7 @@ export function SupplierPurchasingView() {
                 <span className="purchasing__ok">✓ الفاتورة مستلمة ومسددة بالكامل</span>
               )}
             </footer>
+            )}
 
             {inv.payments && inv.payments.length > 0 && showMoney && (
               <ul className="purchasing__payments" aria-label="دفعات الفاتورة">
@@ -496,6 +656,17 @@ export function SupplierPurchasingView() {
             const inv = allocatingInvoice;
             setAllocatingInvoice(null);
             flash(`تم تخصيص ${money(allocatedAmt)} من الدفعة ${docNum} لسداد فاتورة ${inv.internal_number} بنجاح ودون تكرار الصرف النقدى.`);
+            void load();
+          }}
+        />
+      )}
+
+      {showOpeningModal && (
+        <SupplierOpeningModal
+          suppliers={suppliers}
+          onClose={() => setShowOpeningModal(false)}
+          onSaved={() => {
+            setShowOpeningModal(false);
             void load();
           }}
         />
@@ -753,6 +924,211 @@ function AllocateSupplierPaymentModal({ invoice, onClose, onSuccess }: AllocateS
                 {busy ? 'جاري التخصيص…' : 'تأكيد التخصيص للسداد'}
               </button>
             )}
+          </footer>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SupplierOpeningModal({
+  suppliers,
+  onClose,
+  onSaved,
+}: {
+  suppliers: Supplier[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [supplierId, setSupplierId] = useState('');
+  const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState('');
+  const [isAdvance, setIsAdvance] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!supplierId) {
+      setError('يرجى اختيار المورد.');
+      return;
+    }
+    if (!invoiceNumber.trim()) {
+      setError('رقم فاتورة المورد مطلوب.');
+      return;
+    }
+    const num = Number(amount);
+    if (!num || num <= 0) {
+      setError('يرجى إدخال مبلغ صحيح أكبر من الصفر.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      await financeApi.createOpeningSupplierInvoice({
+        supplier_id: supplierId,
+        invoice_number: invoiceNumber.trim(),
+        invoice_date: new Date(invoiceDate).toISOString(),
+        amount: num,
+        is_advance: isAdvance,
+        notes: notes.trim(),
+      });
+      onSaved();
+    } catch (err) {
+      setError(errText(err, 'تعذر تسجيل الفاتورة الافتتاحية للمورد.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(15, 23, 42, 0.65)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        padding: '1rem',
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="تسجيل رصيد افتتاحي لمورد"
+      dir="rtl"
+    >
+      <div
+        style={{
+          backgroundColor: '#ffffff',
+          borderRadius: '12px',
+          maxWidth: '560px',
+          width: '100%',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
+          overflow: 'hidden',
+        }}
+      >
+        <header
+          style={{
+            padding: '1.25rem 1.5rem',
+            borderBottom: '1px solid #e2e8f0',
+            backgroundColor: '#f8fafc',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#0f172a' }}>تسجيل رصيد افتتاحي لمورد</h3>
+            <span style={{ fontSize: '0.82rem', color: '#64748b' }}>إثبات مستحقات أو دفعات مقدمة للموردين قبل يوم القطع</span>
+          </div>
+          <button
+            type="button"
+            aria-label="إغلاق"
+            onClick={onClose}
+            style={{ background: 'none', border: 'none', fontSize: '1.25rem', cursor: 'pointer', color: '#94a3b8' }}
+          >
+            ✕
+          </button>
+        </header>
+        <form onSubmit={(e) => void submit(e)} style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {error && (
+            <div className="purchasing__alert purchasing__alert--error" role="alert">
+              ⚠️ {error}
+            </div>
+          )}
+          <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem' }}>
+            المورد *
+            <select
+              required
+              value={supplierId}
+              onChange={(e) => setSupplierId(e.target.value)}
+              style={{ width: '100%', padding: '0.55rem', borderRadius: '6px', border: '1px solid #cbd5e1', marginTop: '0.35rem' }}
+            >
+              <option value="">— اختر المورد —</option>
+              {suppliers.filter((s) => s.is_active).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.code})
+                </option>
+              ))}
+            </select>
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem' }}>
+              رقم الفاتورة الأصلي *
+              <input
+                required
+                placeholder="كما هو بالفاتورة الورقية"
+                value={invoiceNumber}
+                onChange={(e) => setInvoiceNumber(e.target.value)}
+                style={{ width: '100%', padding: '0.55rem', borderRadius: '6px', border: '1px solid #cbd5e1', marginTop: '0.35rem' }}
+              />
+            </label>
+            <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem' }}>
+              تاريخ الفاتورة *
+              <input
+                required
+                type="date"
+                value={invoiceDate}
+                onChange={(e) => setInvoiceDate(e.target.value)}
+                style={{ width: '100%', padding: '0.55rem', borderRadius: '6px', border: '1px solid #cbd5e1', marginTop: '0.35rem' }}
+              />
+            </label>
+          </div>
+          <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem' }}>
+            المبلغ (ج.م) *
+            <input
+              required
+              type="number"
+              min="0.01"
+              step="0.01"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              style={{ width: '100%', padding: '0.55rem', borderRadius: '6px', border: '1px solid #cbd5e1', marginTop: '0.35rem' }}
+            />
+          </label>
+          <div
+            style={{
+              padding: '0.75rem',
+              backgroundColor: '#f8fafc',
+              borderRadius: '6px',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>
+              <input
+                type="checkbox"
+                checked={isAdvance}
+                onChange={(e) => setIsAdvance(e.target.checked)}
+              />
+              <span>دفعة مقدمة لنا عند المورد (سُددت له مسبقاً قبل يوم القطع)</span>
+            </label>
+            <small style={{ display: 'block', color: '#64748b', marginTop: '0.25rem' }}>
+              اتركه غير محدد إذا كان المبلغ رصيداً مستحقاً للمورد علينا عن توريدات قديمة.
+            </small>
+          </div>
+          <label style={{ display: 'block', fontWeight: 600, fontSize: '0.88rem' }}>
+            ملاحظات
+            <input
+              placeholder="اختياري"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              style={{ width: '100%', padding: '0.55rem', borderRadius: '6px', border: '1px solid #cbd5e1', marginTop: '0.35rem' }}
+            />
+          </label>
+          <p style={{ margin: 0, fontSize: '0.82rem', color: '#92400e', backgroundColor: '#fffbeb', padding: '0.6rem 0.85rem', borderRadius: '6px', border: '1px solid #fde68a' }}>
+            يُحفظ الرصيد الافتتاحي معلقاً بانتظار الاعتماد. ترحيل القيد لحساب 3900 يتطلب اعتماد مسؤول آخر (Maker-Checker).
+          </p>
+          <footer style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '0.5rem' }}>
+            <button type="button" className="btn btn--secondary" onClick={onClose} disabled={saving}>
+              إلغاء
+            </button>
+            <button className="btn btn--primary" type="submit" disabled={saving}>
+              {saving ? 'جاري الحفظ…' : 'حفظ الفاتورة الافتتاحية'}
+            </button>
           </footer>
         </form>
       </div>

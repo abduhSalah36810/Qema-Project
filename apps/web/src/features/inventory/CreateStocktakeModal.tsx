@@ -20,6 +20,7 @@ export const CreateStocktakeModal: React.FC<CreateStocktakeModalProps> = ({
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>('');
   const [scopeType, setScopeType] = useState<'full_warehouse' | 'specific_items'>('full_warehouse');
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [isOpening, setIsOpening] = useState<boolean>(false);
   const [description, setDescription] = useState<string>('');
   const [itemSearchTerm, setItemSearchTerm] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
@@ -100,6 +101,7 @@ export const CreateStocktakeModal: React.FC<CreateStocktakeModalProps> = ({
     const payload: StocktakeCreateRequest = {
       warehouse_id: selectedWarehouseId,
       scope_type: scopeType,
+      is_opening: isOpening,
       item_ids: scopeType === 'specific_items' ? selectedItemIds : undefined,
       description: description.trim() || undefined,
     };
@@ -358,6 +360,22 @@ export const CreateStocktakeModal: React.FC<CreateStocktakeModalProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* خيار جرد افتتاحي */}
+                <div style={{ marginBottom: '1.25rem', padding: '0.75rem', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 600, color: '#0f172a' }}>
+                    <input
+                      type="checkbox"
+                      checked={isOpening}
+                      onChange={(e) => setIsOpening(e.target.checked)}
+                      aria-label="جرد افتتاحي"
+                    />
+                    <span>جرد افتتاحي (أرصدة بداية النشاط قبل يوم القطع)</span>
+                  </label>
+                  <p style={{ margin: '0.35rem 1.6rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                    تُسوى فروقات الجرد الافتتاحي بالكامل في حساب الأرصدة الافتتاحية 3900 دون التأثير على حسابات تكلفة البضاعة أو مصروفات الفروقات المخزنية.
+                  </p>
+                </div>
 
                 {/* وصف أو سبب الجرد */}
                 <div style={{ marginBottom: '1rem' }}>

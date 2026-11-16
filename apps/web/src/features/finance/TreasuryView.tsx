@@ -293,8 +293,9 @@ function ApproveModal({ document, fromAccountName, toAccountName, onClose, onCon
 }
 
 export function TreasuryView() {
-  const { user, hasPermission } = useAuth();
+  const { user, roles, hasPermission } = useAuth();
   const canApprove = hasPermission('finance:cash:approve');
+  const isGMorFM = roles.includes('general_manager') || roles.includes('finance_manager');
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [documents, setDocuments] = useState<CashDocument[]>([]);
   const [approvableIds, setApprovableIds] = useState<Set<string>>(new Set());
@@ -305,6 +306,8 @@ export function TreasuryView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'approved' | 'pending' | 'rejected'>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense' | 'transfer'>('all');
+  const [autoPostedOnly, setAutoPostedOnly] = useState(false);
+  const [prepaymentOnly, setPrepaymentOnly] = useState(false);
 
   // نوافذ الاعتماد والرفض
   const [approvingDoc, setApprovingDoc] = useState<CashDocument | null>(null);
@@ -315,7 +318,10 @@ export function TreasuryView() {
     try {
       const [accountRows, documentRows, approvableRows] = await Promise.all([
         financeApi.getAccounts(),
-        financeApi.getCashDocuments(),
+        financeApi.getCashDocuments({
+          auto_posted_only: autoPostedOnly ? true : undefined,
+          prepayment_only: prepaymentOnly ? true : undefined,
+        }),
         canApprove
           ? financeApi.getCashDocuments({ status: 'pending', approvable_by_me: true })
           : Promise.resolve([] as CashDocument[]),
@@ -329,7 +335,7 @@ export function TreasuryView() {
     } finally {
       setLoading(false);
     }
-  }, [canApprove]);
+  }, [canApprove, autoPostedOnly, prepaymentOnly]);
 
   useEffect(() => {
     void load();
@@ -914,6 +920,27 @@ export function TreasuryView() {
                     <option value="pending">بانتظار الاعتماد</option>
                     <option value="rejected">مرفوض</option>
                   </select>
+
+                  {isGMorFM && (
+                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className={`btn btn--sm ${autoPostedOnly ? 'btn--primary' : 'btn--secondary'}`}
+                        onClick={() => setAutoPostedOnly((prev) => !prev)}
+                        style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+                      >
+                        {autoPostedOnly ? '✓ قيود مرحلة آلياً فقط' : 'قيود مرحلة آلياً فقط'}
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn btn--sm ${prepaymentOnly ? 'btn--primary' : 'btn--secondary'}`}
+                        onClick={() => setPrepaymentOnly((prev) => !prev)}
+                        style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+                      >
+                        {prepaymentOnly ? '✓ دفعات مقدمة فقط' : 'دفعات مقدمة فقط'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -934,7 +961,7 @@ export function TreasuryView() {
             <p style={{ color: '#64748b', fontSize: '0.95rem', margin: '0 0 0.5rem 0' }}>
               لا توجد قيود أو حركات نقدية مطابقة لمعايير البحث والتصفية.
             </p>
-            {(searchQuery || statusFilter !== 'all' || typeFilter !== 'all') && (
+            {(searchQuery || statusFilter !== 'all' || typeFilter !== 'all' || autoPostedOnly || prepaymentOnly) && (
               <button
                 type="button"
                 className="btn btn--secondary"
@@ -943,6 +970,8 @@ export function TreasuryView() {
                   setSearchQuery('');
                   setStatusFilter('all');
                   setTypeFilter('all');
+                  setAutoPostedOnly(false);
+                  setPrepaymentOnly(false);
                 }}
               >
                 إعادة ضبط عوامل التصفية
@@ -1077,6 +1106,40 @@ export function TreasuryView() {
                                                     {doc.unallocated_amount != null && toNumber(doc.unallocated_amount) > 0 && (
                                                       <span style={{ display: 'inline-block', fontSize: '0.75rem', padding: '0.15rem 0.45rem', borderRadius: '4px', backgroundColor: '#f0fdf4', color: '#166534', border: '1px solid #86efac', marginLeft: '0.35rem', fontWeight: 600 }}>
                                                         غير مخصص: {formatMoney(doc.unallocated_amount)}
+                                                      </span>
+                                                    )}
+                                                    {doc.is_prepayment && (
+                                                      <span
+                                                        style={{
+                                                          display: 'inline-block',
+                                                          fontSize: '0.75rem',
+                                                          padding: '0.15rem 0.45rem',
+                                                          borderRadius: '4px',
+                                                          backgroundColor: '#fef3c7',
+                                                          color: '#92400e',
+                                                          border: '1px solid #fcd34d',
+                                                          marginLeft: '0.35rem',
+                                                          fontWeight: 600,
+                                                        }}
+                                                      >
+                                                        دفعة مقدمة: المستلم {formatMoney(doc.received_value ?? 0)} من إجمالي {formatMoney(doc.invoice_total ?? doc.amount)}
+                                                      </span>
+                                                    )}
+                                                    {doc.is_auto_posted && (
+                                                      <span
+                                                        style={{
+                                                          display: 'inline-block',
+                                                          fontSize: '0.75rem',
+                                                          padding: '0.15rem 0.45rem',
+                                                          borderRadius: '4px',
+                                                          backgroundColor: '#f3e8ff',
+                                                          color: '#6b21a8',
+                                                          border: '1px solid #d8b4fe',
+                                                          marginLeft: '0.35rem',
+                                                          fontWeight: 600,
+                                                        }}
+                                                      >
+                                                        مُرحَّل آلياً
                                                       </span>
                                                     )}
                                                     {doc.description}

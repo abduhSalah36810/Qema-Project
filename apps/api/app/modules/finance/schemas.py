@@ -83,6 +83,7 @@ class CashDocumentRead(BaseModel):
     invoice_total: Decimal | None = None
     received_value: Decimal | None = None
     is_prepayment: bool | None = None
+    is_auto_posted: bool = False
 
 
 class PaymentAllocationCreate(BaseModel):
@@ -223,6 +224,10 @@ class SupplierInvoiceRead(BaseModel):
     # مؤشرات بلا مبالغ (تظهر لكل الأدوار): هل يوجد طلب سداد معلق؟ وهل يمكن طلب سداد كامل المستحق؟
     has_pending_payment_request: bool = False
     can_request_full_balance: bool = False
+    is_opening: bool = False
+    is_advance: bool = False
+    approved_by: str | None = None
+    approved_at: datetime | None = None
 
 
 class SupplierFullBalanceRequest(BaseModel):

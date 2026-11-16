@@ -68,6 +68,7 @@ export interface StocktakeSession {
   warehouse_name_ar: string;
   status: StocktakeStatus;
   scope_type: 'full_warehouse' | 'specific_items';
+  is_opening?: boolean;
   description?: string | null;
   total_lines: number;
   counted_lines: number;
@@ -138,6 +139,7 @@ export interface StockLedgerEntry {
 export interface StocktakeCreateRequest {
   warehouse_id: string;
   scope_type?: 'full_warehouse' | 'specific_items';
+  is_opening?: boolean;
   item_ids?: string[];
   description?: string;
 }
@@ -145,6 +147,7 @@ export interface StocktakeCreateRequest {
 export interface LineCountInput {
   line_id: string;
   counted_quantity: number;
+  unit_cost?: number;
   notes?: string;
 }
 

@@ -257,14 +257,16 @@ describe('Reports hub', () => {
 
     // Inputs: treasury 50000, capital 50000 -> balanced
     const inputs = screen.getAllByRole('spinbutton');
-    // Find treasury input and capital input
+    // inputs[0]: treasury, inputs[1]: bank, inputs[2]: capital
     fireEvent.change(inputs[0], { target: { value: '50000' } }); // treasury
-    fireEvent.change(inputs[7], { target: { value: '0' } });     // AP
-    fireEvent.change(inputs[8], { target: { value: '50000' } }); // capital
+    fireEvent.change(inputs[2], { target: { value: '50000' } }); // capital
 
-    const submitBtn = screen.getByRole('button', { name: /اعتماد وترحيل القيد الافتتاحي/ });
-    expect(submitBtn).not.toBeDisabled();
-    fireEvent.click(submitBtn);
+    const reviewBtn = screen.getByRole('button', { name: /مراجعة وترحيل القيد الافتتاحي/ });
+    expect(reviewBtn).not.toBeDisabled();
+    fireEvent.click(reviewBtn);
+
+    const confirmBtn = screen.getByRole('button', { name: /تأكيد الترحيل النهائي وإقفال الأرصدة/ });
+    fireEvent.click(confirmBtn);
 
     expect(createSpy).toHaveBeenCalledWith(
       expect.objectContaining({

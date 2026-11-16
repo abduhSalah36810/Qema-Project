@@ -1,10 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   financeApi,
   errorMessage,
   formatMoney,
   type BalanceSheetReport,
   type OpeningBalancesPayload,
+  type CashAccount,
+  type AccountingLockStatusRead,
 } from '../financeApi';
 import {
   KpiCard,
@@ -13,6 +15,7 @@ import {
   Panel,
 } from './reportUi';
 import { useLoad } from '../FinancialReportsView';
+import { OpeningLockStatusCard } from '../OpeningLockStatusCard';
 
 export type BalanceSheetSubTab = 'all' | 'summary' | 'assets' | 'liabilities' | 'equity';
 
@@ -26,51 +29,67 @@ export function BalanceSheetView() {
   );
 
   const [showOpeningModal, setShowOpeningModal] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [openingSubmitting, setOpeningSubmitting] = useState(false);
   const [openingError, setOpeningError] = useState('');
   const [openingSuccess, setOpeningSuccess] = useState('');
+  const [bankAccounts, setBankAccounts] = useState<CashAccount[]>([]);
+  const [bankAccountId, setBankAccountId] = useState('');
 
-  // Form state for Opening Balances
+  const { data: lockStatus, reload: reloadLockStatus } = useLoad<AccountingLockStatusRead>(
+    () => financeApi.getOpeningBalancesLockStatus(),
+    [],
+    'تعذر تحميل حالة قفل الأرصدة الافتتاحية.'
+  );
+
+  useEffect(() => {
+    if (showOpeningModal) {
+      void financeApi.getAccounts().then((accs) => {
+        const banks = accs.filter((a) => a.account_type === 'bank' && a.is_active);
+        setBankAccounts(banks);
+        if (banks.length === 1 && !bankAccountId) {
+          setBankAccountId(banks[0].id);
+        }
+      }).catch(() => {});
+    }
+  }, [showOpeningModal, bankAccountId]);
+
+  // Form state for General Opening Balances (Restricted to Treasury, Bank, Capital)
   const [startDate, setStartDate] = useState('2026-01-01');
   const [treasuryBal, setTreasuryBal] = useState('0');
   const [bankBal, setBankBal] = useState('0');
-  const [custodyBal, setCustodyBal] = useState('0');
-  const [arBal, setArBal] = useState('0');
-  const [rawBal, setRawBal] = useState('0');
-  const [wipBal, setWipBal] = useState('0');
-  const [finishedBal, setFinishedBal] = useState('0');
-  const [apBal, setApBal] = useState('0');
   const [capitalBal, setCapitalBal] = useState('0');
   const [notes, setNotes] = useState('الأرصدة الافتتاحية المعتمدة للمصنع');
 
   const totalAssetsInput = useMemo(() => {
-    return (
-      (parseFloat(treasuryBal) || 0) +
-      (parseFloat(bankBal) || 0) +
-      (parseFloat(custodyBal) || 0) +
-      (parseFloat(arBal) || 0) +
-      (parseFloat(rawBal) || 0) +
-      (parseFloat(wipBal) || 0) +
-      (parseFloat(finishedBal) || 0)
-    );
-  }, [treasuryBal, bankBal, custodyBal, arBal, rawBal, wipBal, finishedBal]);
+    return (parseFloat(treasuryBal) || 0) + (parseFloat(bankBal) || 0);
+  }, [treasuryBal, bankBal]);
 
   const totalLiabEquityInput = useMemo(() => {
-    return (parseFloat(apBal) || 0) + (parseFloat(capitalBal) || 0);
-  }, [apBal, capitalBal]);
+    return parseFloat(capitalBal) || 0;
+  }, [capitalBal]);
 
   const diffInput = useMemo(() => {
     return Math.round((totalAssetsInput - totalLiabEquityInput) * 100) / 100;
   }, [totalAssetsInput, totalLiabEquityInput]);
 
-  const isInputBalanced = Math.abs(diffInput) < 0.01;
+  const isInputBalanced = Math.abs(diffInput) < 0.01 && totalAssetsInput > 0;
 
-  const handleSubmitOpening = async (e: React.FormEvent) => {
+  const handleOpenConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isInputBalanced) {
-      setOpeningError(`القيد غير متزن بمقدار ${diffInput.toFixed(2)} ج.م. يجب أن تتساوى الأصول تماماً مع الخصوم ورأس المال.`);
+      setOpeningError(`القيد غير متزن بمقدار ${diffInput.toFixed(2)} ج.م. يجب أن تتساوى النقدية والبنوك تماماً مع رأس المال.`);
       return;
     }
+    if (parseFloat(bankBal) > 0 && bankAccounts.length > 1 && !bankAccountId) {
+      setOpeningError('يرجى اختيار الحساب البنكي المودع به رصيد البنك الافتتاحي.');
+      return;
+    }
+    setOpeningError('');
+    setShowConfirmModal(true);
+  };
+
+  const handleExecuteOpening = async () => {
     setOpeningSubmitting(true);
     setOpeningError('');
     try {
@@ -78,23 +97,21 @@ export function BalanceSheetView() {
         accounting_start_date: startDate,
         treasury_balance: treasuryBal,
         bank_balance: bankBal,
-        custody_balance: custodyBal,
-        accounts_receivable: arBal,
-        raw_materials_inventory: rawBal,
-        wip_inventory: wipBal,
-        finished_goods_inventory: finishedBal,
-        accounts_payable: apBal,
+        bank_account_id: bankAccountId || undefined,
         paid_in_capital: capitalBal,
         notes,
       };
       await financeApi.createOpeningBalances(payload);
       setOpeningSuccess('تم تسجيل واعتماد القيد الافتتاحي بنجاح!');
+      setShowConfirmModal(false);
       setTimeout(() => {
         setShowOpeningModal(false);
         reload();
+        reloadLockStatus();
       }, 1200);
     } catch (err: unknown) {
       setOpeningError(errorMessage(err, 'فشل تسجيل القيد الافتتاحي.'));
+      setShowConfirmModal(false);
     } finally {
       setOpeningSubmitting(false);
     }
@@ -241,6 +258,9 @@ export function BalanceSheetView() {
             </div>
           )}
 
+          {/* Opening Balances Lock Status Card */}
+          <OpeningLockStatusCard lockStatus={lockStatus} onReload={reloadLockStatus} />
+
           {/* KPIs */}
           {showSummary && (
             <KpiGrid>
@@ -345,7 +365,14 @@ export function BalanceSheetView() {
                           {data.equity.equity_items.map((item) => (
                             <tr key={item.code}>
                               <td><code>{item.code}</code></td>
-                              <td><strong>{item.name_ar}</strong></td>
+                              <td>
+                                <strong>{item.code === '3900' ? 'حقوق ملكية: أرصدة افتتاحية' : item.name_ar}</strong>
+                                {item.code === '3900' && (
+                                  <small style={{ display: 'block', color: '#64748b', fontSize: '0.78rem' }}>
+                                    تسوية الحركات الافتتاحية الموزعة (المخزون + العملاء − الموردين)
+                                  </small>
+                                )}
+                              </td>
                               <td style={{ textAlign: 'left' }}>{formatMoney(item.amount)}</td>
                             </tr>
                           ))}
@@ -415,11 +442,32 @@ export function BalanceSheetView() {
                 {openingError && <div className="rh-state rh-state--error" style={{ marginBottom: '1rem' }}>{openingError}</div>}
                 {openingSuccess && <div className="rh-state" style={{ background: '#ecfdf5', color: '#047857', borderColor: '#10b981', marginBottom: '1rem' }}>{openingSuccess}</div>}
 
-                <form onSubmit={handleSubmitOpening}>
+                {/* Guide Box */}
+                <div
+                  style={{
+                    background: '#eff6ff',
+                    border: '1px solid #bfdbfe',
+                    borderRadius: '8px',
+                    padding: '0.9rem',
+                    marginBottom: '1.25rem',
+                    fontSize: '0.88rem',
+                    color: '#1e40af',
+                    lineHeight: '1.5',
+                  }}
+                >
+                  <strong>ℹ️ تنبيه هام حول نطاق القيد الافتتاحي العام:</strong>
+                  <div style={{ marginTop: '0.25rem' }}>
+                    يقتصر هذا القيد على إثبات <strong>رصيد الخزينة، رصيد البنك، ورأس المال المدفوع</strong>.
+                    أرصدة المخزون، والعملاء، والموردين تُسجَّل كلٌّ في شاشتها المتخصصة (الجرد الافتتاحي للمخزون، فواتير الموردين الافتتاحية، وأرصدة العملاء الافتتاحية) وتُسوَّى آلياً في حساب <code>3900 - حقوق ملكية: أرصدة افتتاحية</code>.
+                    أما أرصدة العهد فتُسجَّل بعد يوم القطع بتحويل رسمي من الخزينة.
+                  </div>
+                </div>
+
+                <form onSubmit={handleOpenConfirm}>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '1.5rem' }}>
-                    {/* الطرف المدين: الأصول */}
+                    {/* الطرف المدين: النقدية والبنوك */}
                     <fieldset style={{ border: '1px solid #cbd5e1', borderRadius: '8px', padding: '1rem' }}>
-                      <legend style={{ fontWeight: 700, color: '#0f172a', padding: '0 0.5rem' }}>طرف الأصول (المدين)</legend>
+                      <legend style={{ fontWeight: 700, color: '#0f172a', padding: '0 0.5rem' }}>طرف الأصول النقدية (المدين)</legend>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                         <label>
                           <span style={{ display: 'block', fontSize: '0.85rem' }}>تاريخ بداية المحاسبة:</span>
@@ -430,49 +478,44 @@ export function BalanceSheetView() {
                           <input type="number" step="0.01" min="0" value={treasuryBal} onChange={(e) => setTreasuryBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
                         </label>
                         <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>رصيد البنك (1020):</span>
+                          <span style={{ display: 'block', fontSize: '0.85rem' }}>رصيد الحساب البنكي (1020):</span>
                           <input type="number" step="0.01" min="0" value={bankBal} onChange={(e) => setBankBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
                         </label>
-                        <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>رصيد العهد النقدية المؤقتة (1030):</span>
-                          <input type="number" step="0.01" min="0" value={custodyBal} onChange={(e) => setCustodyBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
-                        </label>
-                        <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>أرصدة العملاء والمدينين (1100):</span>
-                          <input type="number" step="0.01" min="0" value={arBal} onChange={(e) => setArBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
-                        </label>
-                        <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>مخزون الخامات (1210):</span>
-                          <input type="number" step="0.01" min="0" value={rawBal} onChange={(e) => setRawBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
-                        </label>
-                        <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>مخزون تحت التشغيل (1220):</span>
-                          <input type="number" step="0.01" min="0" value={wipBal} onChange={(e) => setWipBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
-                        </label>
-                        <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>مخزون تام الصنع (1230):</span>
-                          <input type="number" step="0.01" min="0" value={finishedBal} onChange={(e) => setFinishedBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
-                        </label>
+                        {parseFloat(bankBal) > 0 && bankAccounts.length > 0 && (
+                          <label>
+                            <span style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#1e3a8a' }}>الحساب البنكي المودع به:</span>
+                            <select
+                              value={bankAccountId}
+                              onChange={(e) => setBankAccountId(e.target.value)}
+                              className="form-input"
+                              style={{ width: '100%', padding: '6px' }}
+                              required={bankAccounts.length > 1}
+                            >
+                              <option value="">-- اختر الحساب البنكي --</option>
+                              {bankAccounts.map((b) => (
+                                <option key={b.id} value={b.id}>
+                                  {b.name} ({b.account_number || b.id})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
                         <div style={{ marginTop: '0.5rem', fontWeight: 700, textAlign: 'left', color: '#0f172a' }}>
-                          إجمالي الأصول: {totalAssetsInput.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                          إجمالي النقدية والبنوك: {totalAssetsInput.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
                         </div>
                       </div>
                     </fieldset>
 
-                    {/* الطرف الدائن: الخصوم وحقوق الملكية */}
+                    {/* الطرف الدائن: رأس المال المدفوع */}
                     <fieldset style={{ border: '1px solid #cbd5e1', borderRadius: '8px', padding: '1rem' }}>
-                      <legend style={{ fontWeight: 700, color: '#0f172a', padding: '0 0.5rem' }}>طرف الخصوم ورأس المال (الدائن)</legend>
+                      <legend style={{ fontWeight: 700, color: '#0f172a', padding: '0 0.5rem' }}>طرف حقوق الملكية (الدائن)</legend>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>مستحقات الموردين والدائنين (2000):</span>
-                          <input type="number" step="0.01" min="0" value={apBal} onChange={(e) => setApBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
-                        </label>
                         <label>
                           <span style={{ display: 'block', fontSize: '0.85rem' }}>رأس المال المدفوع (3000):</span>
                           <input type="number" step="0.01" min="0" value={capitalBal} onChange={(e) => setCapitalBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
                         </label>
                         <div style={{ marginTop: '0.5rem', fontWeight: 700, textAlign: 'left', color: '#0f172a' }}>
-                          إجمالي الخصوم ورأس المال: {totalLiabEquityInput.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                          إجمالي رأس المال: {totalLiabEquityInput.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
                         </div>
 
                         <div style={{ marginTop: '1.5rem', padding: '1rem', background: isInputBalanced ? '#ecfdf5' : '#fef2f2', border: `1px solid ${isInputBalanced ? '#10b981' : '#ef4444'}`, borderRadius: '6px' }}>
@@ -481,8 +524,8 @@ export function BalanceSheetView() {
                           </div>
                           <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#475569' }}>
                             {isInputBalanced
-                              ? 'يمكن اعتماد وترحيل القيد الافتتاحي الآن.'
-                              : 'لا يمكن اعتماد القيد حتى يتساوى طرف الأصول تماماً مع طرف الخصوم وحقوق الملكية.'}
+                              ? 'يمكن ترحيل القيد الافتتاحي الآن.'
+                              : 'يجب أن يتساوى مجموع النقدية والبنك تماماً مع رأس المال المدفوع.'}
                           </p>
                         </div>
 
@@ -503,10 +546,68 @@ export function BalanceSheetView() {
                       className="btn btn--primary"
                       disabled={!isInputBalanced || openingSubmitting}
                     >
-                      {openingSubmitting ? 'جارٍ الاعتماد والترحيل...' : 'اعتماد وترحيل القيد الافتتاحي 🚀'}
+                      مراجعة وترحيل القيد الافتتاحي 🚀
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          )}
+
+          {/* Confirmation Modal */}
+          {showConfirmModal && (
+            <div
+              className="modal-backdrop"
+              onClick={() => setShowConfirmModal(false)}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15,23,42,0.6)',
+                zIndex: 1300,
+                display: 'grid',
+                placeItems: 'center',
+                padding: '16px',
+              }}
+            >
+              <div
+                className="modal-card"
+                style={{
+                  maxWidth: '520px',
+                  width: '100%',
+                  background: '#fff',
+                  borderRadius: '12px',
+                  padding: '24px',
+                }}
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+              >
+                <div style={{ color: '#b45309', fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.75rem' }}>
+                  ⚠️ تأكيد ترحيل القيد الافتتاحي
+                </div>
+                <p style={{ fontSize: '0.95rem', color: '#334155', lineHeight: '1.6', marginBottom: '1.25rem' }}>
+                  <strong>ترحيل هذا القيد يقفل الأرصدة الافتتاحية للمصنع.</strong>
+                  <br />
+                  سيتم إنشاء قيد اليومية الافتتاحي وحركات دفتر النقدية، وسيتم قفل فترة ما قبل بداية المحاسبة نهائياً. لا يمكن التعديل لاحقاً إلا بطلب فك قفل معتمد من الإدارة العامة.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn--secondary"
+                    onClick={() => setShowConfirmModal(false)}
+                    disabled={openingSubmitting}
+                  >
+                    تراجع
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--primary"
+                    onClick={handleExecuteOpening}
+                    disabled={openingSubmitting}
+                  >
+                    {openingSubmitting ? 'جارٍ الترحيل...' : 'تأكيد الترحيل النهائي وإقفال الأرصدة'}
+                  </button>
+                </div>
               </div>
             </div>
           )}

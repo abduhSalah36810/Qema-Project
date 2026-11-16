@@ -129,6 +129,7 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
   const [auditLogs, setAuditLogs] = useState<StocktakeAuditLog[]>([]);
   const [ledgerEntries, setLedgerEntries] = useState<StockLedgerEntry[]>([]);
   const [countsMap, setCountsMap] = useState<Record<string, string>>({});
+  const [unitCostsMap, setUnitCostsMap] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<'lines' | 'audit' | 'ledger'>('lines');
   const [filterType, setFilterType] = useState<string>('all');
   const [loading, setLoading] = useState<boolean>(true);
@@ -167,14 +168,19 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
 
       // Initialize counts map from lines
       const initialMap: Record<string, string> = {};
+      const initialCosts: Record<string, string> = {};
       data.lines?.forEach((line) => {
         // أسطر إعادة العد تبدأ فارغة حتى يُدخل العداد قيمة جديدة فعلياً
         if (line.status === 'recount_required') return;
         if (line.counted_quantity !== null && line.counted_quantity !== undefined) {
           initialMap[line.id] = String(line.counted_quantity);
         }
+        if (line.unit_cost !== undefined && line.unit_cost !== null && line.unit_cost > 0) {
+          initialCosts[line.id] = String(line.unit_cost);
+        }
       });
       setCountsMap(initialMap);
+      setUnitCostsMap(initialCosts);
 
       // Load audit
       const audit = await fetchStocktakeAudit(sessionId);
@@ -232,6 +238,10 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
     return null;
   };
 
+  const isCustomerBucket = (bucketRef?: string | null): boolean => {
+    return Boolean(bucketRef && (bucketRef.startsWith('customer:') || bucketRef.startsWith('customer_deposit:')));
+  };
+
   const buildCountsToSave = () => {
     const sessionLines = session?.lines || [];
     return sessionLines
@@ -240,17 +250,43 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
         const val = countsMap[line.id];
         if (val === undefined || val.trim() === '' || countInputError(val)) return false;
         if (line.status === 'recount_required') return true;
-        return line.counted_quantity === null || line.counted_quantity === undefined || Number(val) !== Number(line.counted_quantity);
+        const countChanged = line.counted_quantity === null || line.counted_quantity === undefined || Number(val) !== Number(line.counted_quantity);
+        const costVal = unitCostsMap[line.id];
+        const costChanged = costVal !== undefined && Number(costVal) !== Number(line.unit_cost);
+        return countChanged || costChanged;
       })
-      .map((line) => ({ line_id: line.id, counted_quantity: Number(countsMap[line.id]) }));
+      .map((line) => {
+        const isCust = isCustomerBucket(line.bucket_reference);
+        const cost = isCust ? 0 : (unitCostsMap[line.id] !== undefined ? Number(unitCostsMap[line.id]) : (line.unit_cost || 0));
+        return {
+          line_id: line.id,
+          counted_quantity: Number(countsMap[line.id]),
+          unit_cost: session?.is_opening ? cost : undefined,
+        };
+      });
   };
 
   const hasInvalidCounts = (session?.lines || []).some((line) => isLineEditable(line) && countInputError(countsMap[line.id]) !== null);
+  const hasInvalidOpeningCosts = Boolean(
+    session?.is_opening &&
+      (session?.lines || []).some((line) => {
+        if (!isLineEditable(line)) return false;
+        const val = countsMap[line.id];
+        if (val === undefined || val.trim() === '') return false;
+        if (isCustomerBucket(line.bucket_reference)) return false;
+        const cost = Number(unitCostsMap[line.id] ?? line.unit_cost ?? 0);
+        return !Number.isFinite(cost) || cost <= 0;
+      })
+  );
 
   const handleSaveCounts = async () => {
     if (!session || !session.lines) return;
     if (hasInvalidCounts) {
       setError('راجع الكميات المعدودة: لا تقبل قيم سالبة أو غير رقمية.');
+      return;
+    }
+    if (hasInvalidOpeningCosts) {
+      setError('تكلفة الوحدة إلزامية لجميع بنود خامات وبضائع المصنع في الجرد الافتتاحي (يجب أن تكون أكبر من صفر).');
       return;
     }
     setActionBusy(true);
@@ -282,6 +318,10 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
     if (!session) return;
     if (hasInvalidCounts) {
       setError('راجع الكميات المعدودة: لا تقبل قيم سالبة أو غير رقمية.');
+      return;
+    }
+    if (hasInvalidOpeningCosts) {
+      setError('تكلفة الوحدة إلزامية لجميع بنود خامات وبضائع المصنع في الجرد الافتتاحي (يجب أن تكون أكبر من صفر).');
       return;
     }
     setActionBusy(true);
@@ -608,6 +648,25 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
         </div>
       )}
 
+      {/* تنبيه الجرد الافتتاحي */}
+      {session.is_opening && (
+        <div
+          role="region"
+          aria-label="تنبيه الجرد الافتتاحي"
+          style={{
+            backgroundColor: '#eff6ff',
+            color: '#1e40af',
+            border: '1px solid #bfdbfe',
+            marginBottom: '1rem',
+            padding: '0.85rem 1.25rem',
+            borderRadius: '8px',
+            fontSize: '0.9rem',
+          }}
+        >
+          <strong>📦 جلسة جرد افتتاحي للمصنع:</strong> يتم إثبات رصيد المخزون الأولي بتسجيل تكلفة الوحدة لكل صنف مصنعي. الفروقات ترحل مباشرة لحساب الأرصدة الافتتاحية 3900 دون أي مساس بقائمة الدخل. خامات العملاء معفية من التكلفة ومصنفة كـ «خامة عميل».
+        </div>
+      )}
+
       {/* بطاقات الإحصاءات والمؤشرات */}
       <div className="warehouse-summary" style={{ marginBottom: '1.5rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem' }}>
         <article style={{ padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #e2e8f0', backgroundColor: '#fff' }}>
@@ -782,6 +841,9 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
                   <th>الوحدة</th>
                   <th style={{ textAlign: 'center' }}>الرصيد الدفتري (اللقطة)</th>
                   <th style={{ textAlign: 'center', width: '220px' }}>العد الفعلي</th>
+                  {session.is_opening && (
+                    <th style={{ textAlign: 'center', width: '140px' }}>تكلفة الوحدة (ج.م) *</th>
+                  )}
                   <th style={{ textAlign: 'center' }}>الفرق (المعدود − الدفتري)</th>
                   <th style={{ textAlign: 'center' }}>نوع الفرق</th>
                   <th style={{ textAlign: 'center' }}>حالة السطر</th>
@@ -791,7 +853,7 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
               <tbody>
                 {filteredLines.length === 0 ? (
                   <tr>
-                    <td colSpan={10} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
+                    <td colSpan={session.is_opening ? 11 : 10} style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>
                       لا توجد أسطر مطابقة للفلتر المحدد
                     </td>
                   </tr>
@@ -880,6 +942,55 @@ export const StocktakeDetailView: React.FC<StocktakeDetailViewProps> = ({
                             </div>
                           )}
                         </td>
+
+                        {/* تكلفة الوحدة للجرد الافتتاحي */}
+                        {session.is_opening && (
+                          <td style={{ textAlign: 'center' }}>
+                            {isCustomerBucket(line.bucket_reference) ? (
+                              <span
+                                style={{
+                                  fontSize: '0.78rem',
+                                  padding: '0.2rem 0.5rem',
+                                  backgroundColor: '#f1f5f9',
+                                  color: '#64748b',
+                                  borderRadius: '4px',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                خامة عميل
+                              </span>
+                            ) : editable ? (
+                              <input
+                                type="number"
+                                min="0.0001"
+                                step="any"
+                                placeholder="التكلفة..."
+                                aria-label={`تكلفة الوحدة ${line.item_code}`}
+                                value={unitCostsMap[line.id] ?? ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setUnitCostsMap((prev) => ({ ...prev, [line.id]: val }));
+                                }}
+                                style={{
+                                  width: '95px',
+                                  padding: '0.35rem 0.5rem',
+                                  borderRadius: '4px',
+                                  border: '1px solid #cbd5e1',
+                                  textAlign: 'center',
+                                  fontSize: '0.9rem',
+                                }}
+                              />
+                            ) : (
+                              <span style={{ fontWeight: 600, color: '#0f172a' }}>
+                                {Number(line.unit_cost || 0).toLocaleString('ar-EG', {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 4,
+                                })}{' '}
+                                ج.م
+                              </span>
+                            )}
+                          </td>
+                        )}
 
                         {/* الفرق */}
                         <td style={{ textAlign: 'center', fontWeight: 600 }}>

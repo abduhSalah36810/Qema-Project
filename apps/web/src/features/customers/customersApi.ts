@@ -78,6 +78,12 @@ export interface CustomerOrder {
   returned_value?: number;
   receivable_amount?: number;
   pending_payments_amount?: number;
+  is_opening?: boolean;
+  is_advance?: boolean;
+  original_order_number?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  created_by?: string | null;
   /** مرتجعات الطلب (كميات وحالات) */
   returns?: CustomerReturn[];
   lines: CustomerOrderLine[];
@@ -379,6 +385,34 @@ export function fetchSoldItems(filters: SoldItemsFilter = {}): Promise<SoldItems
   if (filters.limit) params.set('limit', String(filters.limit));
   const qs = params.toString();
   return apiClient.request<SoldItemsResponse>(`/api/v1/customers/sold-items${qs ? `?${qs}` : ''}`);
+}
+
+export function createCustomerOpeningBalance(
+  customerId: string,
+  input: {
+    original_order_number: string;
+    order_date: string;
+    amount: number;
+    is_advance?: boolean;
+    notes?: string;
+  }
+): Promise<CustomerOrder> {
+  return apiClient.request<CustomerOrder>(`/api/v1/customers/${encodeURIComponent(customerId)}/opening-balances`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+export function approveCustomerOpeningBalance(customerId: string, orderId: string): Promise<CustomerOrder> {
+  return apiClient.request<CustomerOrder>(
+    `/api/v1/customers/${encodeURIComponent(customerId)}/opening-balances/${encodeURIComponent(orderId)}/approve`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }
+  );
 }
 
 

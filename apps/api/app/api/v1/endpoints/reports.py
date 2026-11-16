@@ -802,6 +802,8 @@ async def report_supplier_statement(
             "pending_payments": float(fin.paid_pending),
             "balance_due": float(fin.payable_balance),
             "remaining_on_invoice": float(fin.balance_due),
+            "is_opening": bool(getattr(inv, "is_opening", False)),
+            "is_advance": bool(getattr(inv, "is_advance", False)),
         })
 
     # الدفعات النقدية المباشرة للمورد (سندات الصرف التي لم تنشأ من فاتورة شراء محددة)

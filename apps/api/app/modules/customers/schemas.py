@@ -161,6 +161,12 @@ class CustomerOrderRead(BaseModel):
     returned_value: float = 0.0
     receivable_amount: float = 0.0
     pending_payments_amount: float = 0.0
+    is_opening: bool = False
+    is_advance: bool = False
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    original_order_number: str | None = None
+    created_by: str | None = None
     returns: list["CustomerDeliveryReturnRead"] = []
     deliveries: list[CustomerDeliveryRead]
     payments: list[CustomerPaymentRead]

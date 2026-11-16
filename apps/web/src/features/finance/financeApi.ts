@@ -90,6 +90,10 @@ export type CashDocument = {
   supplier_name?: string | null;
   customer_name?: string | null;
   unallocated_amount?: string | number | null;
+  invoice_total?: string | number | null;
+  received_value?: string | number | null;
+  is_prepayment?: boolean | null;
+  is_auto_posted?: boolean | null;
 };
 
 export type UnallocatedPayment = {
@@ -517,6 +521,7 @@ export type OpeningBalancesPayload = {
   accounting_start_date: string;
   treasury_balance?: number | string;
   bank_balance?: number | string;
+  bank_account_id?: string;
   custody_balance?: number | string;
   accounts_receivable?: number | string;
   raw_materials_inventory?: number | string;
@@ -525,6 +530,28 @@ export type OpeningBalancesPayload = {
   accounts_payable?: number | string;
   paid_in_capital?: number | string;
   notes?: string;
+};
+
+export type AccountingLockRead = {
+  id: string;
+  lock_type: string;
+  is_locked: boolean;
+  action: string;
+  reason: string | null;
+  performed_by: string;
+  performed_at: string;
+  requested_by?: string | null;
+  unlock_request_id?: string | null;
+};
+
+export type AccountingLockStatusRead = {
+  is_locked: boolean;
+  lock_type: string;
+  current_action?: string | null;
+  latest_reason?: string | null;
+  latest_performed_by?: string | null;
+  latest_performed_at?: string | null;
+  history: AccountingLockRead[];
 };
 
 export type PurchasedItemRow = {
@@ -577,10 +604,17 @@ const jsonPost = (body: unknown): RequestInit => ({
 
 export const financeApi = {
   getAccounts: () => apiClient.request<CashAccount[]>('/api/v1/finance/accounts'),
-  getCashDocuments: (params?: { status?: string; approvable_by_me?: boolean }) => {
+  getCashDocuments: (params?: {
+    status?: string;
+    approvable_by_me?: boolean;
+    auto_posted_only?: boolean;
+    prepayment_only?: boolean;
+  }) => {
     const query = new URLSearchParams();
     if (params?.status) query.set('status', params.status);
     if (params?.approvable_by_me) query.set('approvable_by_me', 'true');
+    if (params?.auto_posted_only) query.set('auto_posted_only', 'true');
+    if (params?.prepayment_only) query.set('prepayment_only', 'true');
     const qs = query.toString();
     return apiClient.request<CashDocument[]>(`/api/v1/finance/cash-documents${qs ? `?${qs}` : ''}`);
   },
@@ -754,4 +788,22 @@ export const financeApi = {
     const qs = query.toString();
     return apiClient.request<PurchasedItemsResponse>(`/api/v1/finance/purchased-items${qs ? `?${qs}` : ''}`);
   },
+  createOpeningSupplierInvoice: (payload: {
+    supplier_id: string;
+    invoice_number: string;
+    invoice_date: string;
+    amount: number;
+    is_advance?: boolean;
+    notes?: string;
+  }) => apiClient.request<any>('/api/v1/finance/supplier-invoices/opening', jsonPost(payload)),
+  approveOpeningSupplierInvoice: (invoiceId: string) =>
+    apiClient.request<any>(`/api/v1/finance/supplier-invoices/${encodeURIComponent(invoiceId)}/approve-opening`, jsonPost({})),
+  getOpeningBalancesLockStatus: () =>
+    apiClient.request<AccountingLockStatusRead>('/api/v1/finance/opening-balances/lock-status'),
+  lockOpeningBalances: (payload?: { reason?: string }) =>
+    apiClient.request<{ is_locked: boolean; message: string }>('/api/v1/finance/opening-balances/lock', jsonPost(payload || {})),
+  requestUnlockOpeningBalances: (payload: { reason: string }) =>
+    apiClient.request<{ status: string; request_id: string; message: string }>('/api/v1/finance/opening-balances/request-unlock', jsonPost(payload)),
+  approveUnlockOpeningBalances: (payload?: { approval_notes?: string }) =>
+    apiClient.request<{ is_locked: boolean; message: string }>('/api/v1/finance/opening-balances/approve-unlock', jsonPost(payload || {})),
 };
