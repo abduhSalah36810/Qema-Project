@@ -1355,29 +1355,35 @@ export interface JobCostSheet {
   order_number: string;
   manufacturing_type: 'internal' | 'external';
   manufacturing_type_label_ar: string;
+  status: string;
+  status_label_ar: string;
   customer_id?: string | null;
   customer_name?: string | null;
   product_name_ar: string;
-  variant_info: string;
+  product_code: string;
   target_quantity: number;
-  status: string;
-  status_label_ar: string;
+  completed_quantity: number;
   factory_materials: JobCostSheetMaterialLine[];
   customer_materials: JobCostSheetMaterialLine[];
-  total_factory_material_cost: number;
-  total_customer_material_cost: number;
-  labor: JobCostSheetLaborDetail;
-  overhead: JobCostSheetOverheadDetail;
+  factory_materials_cost: number;
+  direct_labor_cost: number;
+  allocated_overhead_cost: number;
+  total_factory_manufacturing_cost: number;
+  unit_factory_cost: number;
+  customer_materials_count: number;
+  customer_materials_total_consumed: number;
+  customer_materials_total_wasted: number;
+  customer_materials_total_returned: number;
+  labor_detail: JobCostSheetLaborDetail;
+  overhead_detail: JobCostSheetOverheadDetail;
   waste_analysis: JobCostSheetWasteAnalysis;
-  total_manufacturing_cost: number;
-  unit_manufacturing_cost: number;
   agreed_service_price: number;
   expected_revenue: number;
-  gross_margin: number;
+  gross_margin_amount: number;
   gross_margin_pct: number;
+  calculated_at?: string | null;
+  calculated_by?: string | null;
   can_view_prices: boolean;
-  cost_calculated_at?: string | null;
-  cost_calculated_by?: string | null;
 }
 
 export interface WasteSettlementPayload {

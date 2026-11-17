@@ -1681,6 +1681,9 @@ class JobCostSheetRead(BaseModel):
     calculated_at: Optional[datetime] = None
     calculated_by: Optional[str] = None
 
+    # هل يرى هذا الدور القيم المالية؟ (أمين المخزن يرى الجانب الكمي فقط)
+    can_view_prices: bool = True
+
 
 class ManufacturingProfitabilityItem(BaseModel):
     order_id: str

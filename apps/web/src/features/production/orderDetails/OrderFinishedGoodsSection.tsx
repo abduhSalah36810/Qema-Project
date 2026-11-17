@@ -11,7 +11,7 @@ import {
   receiveFinishedGoodsApi,
   newIdempotencyKey,
 } from '../productionApi';
-import { FG_RECEIPT_STATUSES, EPSILON, itemRemaining, toNumber, initialFgLines, type FgLineInput, type SectionContext } from './constants';
+import { FG_RECEIPT_STATUSES, EPSILON, itemTotalRemaining, round6, toNumber, initialFgLines, type FgLineInput, type SectionContext } from './constants';
 
 interface OrderFinishedGoodsSectionProps {
   ctx: SectionContext;
@@ -37,14 +37,20 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
     setFgLines(initialFgLines(order.items));
   }, [order.id, order.items]);
 
+  /** المتبقي بعد هذا الاستلام: قد يكون سالباً ليكشف التجاوز مباشرة (أسلوب شاشة التسوية) */
+  const itemRemainingAfter = (item: ProductionOrderItem): number => {
+    const input = fgLines[item.id] || { accepted: '0', rejected: '0' };
+    return round6(itemTotalRemaining(item) - toNumber(input.accepted) - toNumber(input.rejected));
+  };
   const fgLineError = (item: ProductionOrderItem): string | null => {
     const input = fgLines[item.id] || { accepted: '0', rejected: '0' };
     const accepted = toNumber(input.accepted);
     const rejected = toNumber(input.rejected);
     if (!Number.isFinite(accepted) || accepted < 0) return 'السليم لا يقل عن صفر';
     if (!Number.isFinite(rejected) || rejected < 0) return 'المرفوض لا يقل عن صفر';
-    const remaining = itemRemaining(item);
-    if (accepted > remaining + EPSILON) return `السليم يتجاوز المتبقي (${remaining})`;
+    // نفس قاعدة الخادم وشاشة التسوية: السليم السابق + المرفوض السابق + السليم الآن + المرفوض الآن ≤ المستهدف
+    const remainingAfter = itemRemainingAfter(item);
+    if (remainingAfter < -EPSILON) return `الإجمالي بعد الاستلام يتجاوز المستهدف (المتبقي: ${remainingAfter})`;
     return null;
   };
   const fgPayloadLines = orderItems
@@ -59,13 +65,13 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
   const totalTarget = orderItems.reduce((s, it) => s + (it.target_quantity ?? 0), 0);
   const totalAccepted = orderItems.reduce((s, it) => s + (it.received_quantity ?? 0), 0);
   const totalRejected = orderItems.reduce((s, it) => s + (it.rejected_quantity ?? 0), 0);
-  const totalRemaining = Math.max(0, totalTarget - totalAccepted);
+  const totalRemaining = orderItems.reduce((s, it) => s + Math.max(0, itemTotalRemaining(it)), 0);
 
   // 4. استلام المنتج التام لكل بند
   const handleReceiveFinishedGoods = async (e: React.FormEvent) => {
     e.preventDefault();
     if (fgHasErrors) {
-      setStatus({ type: 'error', text: 'راجع كميات الاستلام: لا تقبل قيم سالبة، ولا يتجاوز السليم المتبقي لكل بند.' });
+      setStatus({ type: 'error', text: 'راجع كميات الاستلام: لا تقبل قيم سالبة، ومجموع (السليم + المرفوض) لكل بند لا يتجاوز المستهدف مع ما سبق استلامه.' });
       return;
     }
     if (fgPayloadLines.length === 0) {
@@ -178,13 +184,15 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
                 <th>المتبقي</th>
                 <th>سليم الآن</th>
                 <th>مرفوض الآن</th>
+                <th>المتبقي بعد الاستلام</th>
               </tr>
             </thead>
             <tbody>
               {orderItems.map((item) => {
-                const remaining = itemRemaining(item);
+                const remaining = Math.max(0, itemTotalRemaining(item));
                 const input = fgLines[item.id] || { accepted: '0', rejected: '0' };
                 const lineError = fgLineError(item);
+                const remainingAfter = itemRemainingAfter(item);
                 const label = `${item.product_name_ar} ${item.variant_info || ''}`.trim();
                 return (
                   <tr key={item.id}>
@@ -210,15 +218,16 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
                           setFgLines((prev) => ({ ...prev, [item.id]: { ...(prev[item.id] || { accepted: '0', rejected: '0' }), accepted: val } }));
                         }}
                       />
-                      {lineError && <small role="alert" style={{ display: 'block', color: '#b91c1c' }}>{lineError}</small>}
                     </td>
                     <td>
                       <input
                         type="number"
                         min={0}
+                        max={remaining}
                         step="any"
                         className="table-input"
                         aria-label={`الكمية المرفوضة ${label}`}
+                        aria-invalid={lineError ? true : undefined}
                         value={input.rejected}
                         disabled={!canSubmitFg || !canReceiveFinishedGoods}
                         onChange={(e) => {
@@ -226,6 +235,10 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
                           setFgLines((prev) => ({ ...prev, [item.id]: { ...(prev[item.id] || { accepted: '0', rejected: '0' }), rejected: val } }));
                         }}
                       />
+                    </td>
+                    <td className={`qty-col ${remainingAfter < 0 ? 'diff--neg' : ''}`}>
+                      <strong>{remainingAfter}</strong>
+                      {lineError && <small role="alert" style={{ display: 'block', color: '#b91c1c' }}>{lineError}</small>}
                     </td>
                   </tr>
                 );

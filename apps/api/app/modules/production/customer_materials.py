@@ -735,6 +735,7 @@ async def get_job_cost_sheet(
         waste_analysis=waste_analysis,
         calculated_at=order.cost_calculated_at,
         calculated_by=order.cost_calculated_by,
+        can_view_prices=can_view_prices,
     )
 
 

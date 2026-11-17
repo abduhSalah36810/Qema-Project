@@ -275,7 +275,7 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
           <div style={{ fontSize: '0.8rem', color: '#64748b' }}>خامات المصنع المباشرة</div>
           <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
-            {canViewPrices ? `${Number(costSheet?.total_factory_material_cost ?? order.actual_material_cost ?? 0).toFixed(2)} ج.م` : '—'}
+            {canViewPrices ? `${Number(costSheet?.factory_materials_cost ?? order.actual_material_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
           <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
             {isCmt ? 'مستلزمات وإضافات المصنع فقط' : 'إجمالي الأقمشة والمستلزمات'}
@@ -286,7 +286,7 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
           <div style={{ fontSize: '0.8rem', color: '#64748b' }}>أجور التشغيل المباشرة</div>
           <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
-            {canViewPrices ? `${Number(costSheet?.labor.total_cost ?? order.actual_labor_cost ?? 0).toFixed(2)} ج.م` : '—'}
+            {canViewPrices ? `${Number(costSheet?.labor_detail.total_cost ?? order.actual_labor_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
           <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
             {order.labor_costing_method === 'time_based' ? 'حسب ساعات العمل' : 'حسب القطع المنتجة'}
@@ -297,10 +297,10 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
           <div style={{ fontSize: '0.8rem', color: '#64748b' }}>المصاريف غير المباشرة الموزعة</div>
           <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
-            {canViewPrices ? `${Number(costSheet?.overhead.total_cost ?? order.actual_overhead_cost ?? 0).toFixed(2)} ج.م` : '—'}
+            {canViewPrices ? `${Number(costSheet?.overhead_detail.total_cost ?? order.actual_overhead_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
           <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-            {costSheet?.overhead.basis_label_ar || 'بدون تحميل إضافي'}
+            {costSheet?.overhead_detail.basis_label_ar || 'بدون تحميل إضافي'}
           </div>
         </div>
 
@@ -308,10 +308,10 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
         <div style={{ padding: '14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #cbd5e1', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
           <div style={{ fontSize: '0.8rem', color: '#475569', fontWeight: 600 }}>إجمالي تكلفة أمر التشغيل</div>
           <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
-            {canViewPrices ? `${Number(costSheet?.total_manufacturing_cost ?? order.total_actual_cost ?? 0).toFixed(2)} ج.م` : '—'}
+            {canViewPrices ? `${Number(costSheet?.total_factory_manufacturing_cost ?? order.total_actual_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
           <div style={{ fontSize: '0.75rem', color: '#475569' }}>
-            تكلفة القطعة: {canViewPrices ? `${Number(costSheet?.unit_manufacturing_cost ?? order.unit_manufacturing_cost ?? 0).toFixed(2)} ج.م` : '—'}
+            تكلفة القطعة: {canViewPrices ? `${Number(costSheet?.unit_factory_cost ?? order.unit_manufacturing_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
         </div>
 
@@ -330,19 +330,19 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
         <div
           style={{
             padding: '14px',
-            background: (costSheet?.gross_margin ?? 0) >= 0 ? '#ecfdf5' : '#fef2f2',
+            background: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#ecfdf5' : '#fef2f2',
             borderRadius: '8px',
-            border: (costSheet?.gross_margin ?? 0) >= 0 ? '1px solid #a7f3d0' : '1px solid #fecaca',
+            border: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '1px solid #a7f3d0' : '1px solid #fecaca',
             boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
           }}
         >
-          <div style={{ fontSize: '0.8rem', color: (costSheet?.gross_margin ?? 0) >= 0 ? '#047857' : '#b91c1c' }}>
+          <div style={{ fontSize: '0.8rem', color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#047857' : '#b91c1c' }}>
             مجمل الربح والنسبة
           </div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: (costSheet?.gross_margin ?? 0) >= 0 ? '#065f46' : '#991b1b', margin: '4px 0' }}>
-            {canViewPrices ? `${Number(costSheet?.gross_margin ?? 0).toFixed(2)} ج.م` : '—'}
+          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#065f46' : '#991b1b', margin: '4px 0' }}>
+            {canViewPrices ? `${Number(costSheet?.gross_margin_amount ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: (costSheet?.gross_margin ?? 0) >= 0 ? '#059669' : '#dc2626' }}>
+          <div style={{ fontSize: '0.75rem', color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#059669' : '#dc2626' }}>
             هامش الربح: {canViewPrices ? `${Number(costSheet?.gross_margin_pct ?? 0).toFixed(1)}%` : '—'}
           </div>
         </div>
@@ -419,7 +419,7 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
             </div>
             {canViewPrices && (
               <span className="badge badge--primary">
-                إجمالي خامات المصنع: {Number(costSheet.total_factory_material_cost).toFixed(2)} ج.م
+                إجمالي خامات المصنع: {Number(costSheet.factory_materials_cost).toFixed(2)} ج.م
               </span>
             )}
           </div>

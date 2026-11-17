@@ -88,6 +88,11 @@ export function itemRemaining(item: ProductionOrderItem): number {
   return Math.max(0, round6(item.target_quantity - (item.received_quantity ?? 0)));
 }
 
+/** المتبقي الفعلي لاستكمال المستهدف: يستوعب السليم والمرفوض السابقين (قد يكون سالبًا للتنبيه). */
+export function itemTotalRemaining(item: ProductionOrderItem): number {
+  return round6(item.target_quantity - (item.received_quantity ?? 0) - (item.rejected_quantity ?? 0));
+}
+
 export function toNumber(value: string): number {
   if (value.trim() === '') return 0;
   return Number(value);
@@ -101,7 +106,8 @@ export const RETURN_CONDITION_LABELS: Record<ReturnCondition, string> = { good: 
 export function initialFgLines(items: ProductionOrderItem[] | undefined): Record<string, FgLineInput> {
   const result: Record<string, FgLineInput> = {};
   (items || []).forEach((item) => {
-    result[item.id] = { accepted: String(itemRemaining(item)), rejected: '0' };
+    // الافتراضي المقترح: المتبقي بعد حساب السليم والمرفوض السابقين (لا يتجاوز المستهدف أبداً)
+    result[item.id] = { accepted: String(Math.max(0, itemTotalRemaining(item))), rejected: '0' };
   });
   return result;
 }

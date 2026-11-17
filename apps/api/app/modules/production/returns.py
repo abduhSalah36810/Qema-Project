@@ -292,6 +292,10 @@ def _reduce_order_cost(order: ProductionOrder, amount: Decimal) -> None:
     order.total_actual_cost = (
         order.actual_material_cost + (order.actual_labor_cost or Decimal("0.00")) + (order.actual_overhead_cost or Decimal("0.00"))
     )
+    # إعادة احتساب تكلفة القطعة بعد خروج المرتجع من تكلفة الأمر حتى لا تظل قيمة قديمة (stale) في التقارير
+    target_q = Decimal(str(order.target_quantity or 0))
+    if target_q > Decimal("0"):
+        order.unit_manufacturing_cost = (order.total_actual_cost / target_q).quantize(Decimal("0.0001"))
 
 
 # ─── 3. تأكيد أمين المخزن للاستلام الفعلي ──────────────────────────────────

@@ -1693,6 +1693,7 @@ async def receive_finished_goods(
                 selectinload(ProductionOrder.order_items).selectinload(ProductionOrderItem.variant),
                 selectinload(ProductionOrder.stage_events),
                 selectinload(ProductionOrder.demands),
+                selectinload(ProductionOrder.materials),
             )
             .where(ProductionOrder.id == order_id)
             .with_for_update(of=ProductionOrder)
@@ -1728,12 +1729,38 @@ async def receive_finished_goods(
                 detail="هذا الأمر يحتوي على أكثر من مقاس/بند؛ حدد الكمية المستلمة لكل بند على حدة.",
             )
 
+        # ── أساس التكلفة المحمَّلة على المنتج التام (بند 2: منع الاحتساب المزدوج) ──
+        # تكلفة التام = تكلفة الخامات المستهلكة فعلياً لا المصروف:
+        # - المرتجع يخرج من تكلفة الأمر عند استلام أمين المخزن له (Dr 1210 / Cr 1220).
+        # - الهالك المُسجل في التسوية تُحمَّل تكلفته على مصروفات التصنيع (5220/5200) عند إغلاق الأمر ولا يدخل تكلفة القطعة.
+        # - الخامات غير المسواة بعد (لا تسوية للورشة) تبقى على أساس المصروف كما كانت لتوافق الدورة القديمة.
+        # - خامات العميل (CMT) أمانة صفرية التكلفة ولا تدخل في الأساس.
         unit_mfg_cost = order.unit_manufacturing_cost or Decimal("0.0000")
         tot_cost = order.total_actual_cost or Decimal("0.00")
         target_q = Decimal(str(order.target_quantity or 0))
         if unit_mfg_cost <= Decimal("0.0000") and tot_cost > Decimal("0.00") and target_q > Decimal("0.00"):
             unit_mfg_cost = (tot_cost / target_q).quantize(Decimal("0.0001"))
             order.unit_manufacturing_cost = unit_mfg_cost
+
+        consumed_mat_cost = Decimal("0.00")
+        scrapped_mat_cost = Decimal("0.00")
+        recon_touched = False
+        for mat in (order.materials or []):
+            if getattr(mat, "supplied_by", "factory") != "factory":
+                continue
+            mat_cost = Decimal(str(mat.unit_cost or 0))
+            consumed_mat_cost += (mat.actual_consumed_quantity or Decimal("0.000")) * mat_cost
+            scrapped_mat_cost += (mat.actual_waste_quantity or Decimal("0.000")) * mat_cost
+            if any((mat.actual_consumed_quantity or Decimal("0.000"), mat.actual_returned_quantity or Decimal("0.000"), mat.actual_waste_quantity or Decimal("0.000"))):
+                recon_touched = True
+        if recon_touched:
+            inventory_cost_basis = max(Decimal("0.00"), consumed_mat_cost)
+        else:
+            inventory_cost_basis = max(Decimal("0.00"), (order.actual_material_cost or Decimal("0.00")) - scrapped_mat_cost)
+        if target_q > Decimal("0.00") and inventory_cost_basis > Decimal("0.00"):
+            unit_inventory_cost = (inventory_cost_basis / target_q).quantize(Decimal("0.0001"))
+        else:
+            unit_inventory_cost = unit_mfg_cost
 
         receipt_id = str(uuid.uuid4())
         total_fg_cost = Decimal("0.00")
@@ -1747,12 +1774,22 @@ async def receive_finished_goods(
             item = items_by_id.get(order_item_id)
             if not item:
                 raise HTTPException(status_code=422, detail="أحد بنود الاستلام لا يتبع أمر التشغيل.")
+            # القاعدة نفسها المطبقة في شاشة التسوية: (السليم السابق + المرفوض السابق + السليم الآن + المرفوض الآن)
+            # يجب ألا يتجاوز الكمية المستهدفة للبند. الكمية المرفوضة جزء من إنتاج الأمر ولا تُستقبل فوق المستهدف.
             already = float(item.received_quantity or 0.0)
-            if already + accepted > item.target_quantity + 1e-9:
+            already_rejected = float(item.rejected_quantity or 0.0)
+            total_after = already + already_rejected + accepted + rejected
+            remaining_after = item.target_quantity - total_after
+            if total_after > item.target_quantity + 1e-9:
                 label = _variant_short_label(item.variant)
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"الكمية المستلمة للبند ({label}) = {already + accepted:g} تتجاوز الكمية المستهدفة له ({item.target_quantity:g}).",
+                    detail=(
+                        f"الكمية المستلمة للبند ({label}) = سليم سابق {already:g} + مرفوض سابق {already_rejected:g} "
+                        f"+ سليم الآن {accepted:g} + مرفوض الآن {rejected:g} = {total_after:g} "
+                        f"تتجاوز الكمية المستهدفة له ({item.target_quantity:g}). "
+                        f"المتبقي بعد الاستلام ({remaining_after:g})."
+                    ),
                 )
             if accepted > 0:
                 catalog_item = await get_or_create_finished_goods_item(db, item.product_id, item.variant_id)
@@ -1778,7 +1815,7 @@ async def receive_finished_goods(
 
                         if share > 0:
                             cust_bucket = f"private_label:{d.customer_id}"
-                            share_cost = (Decimal(str(share)) * unit_mfg_cost).quantize(Decimal("0.01"))
+                            share_cost = (Decimal(str(share)) * unit_inventory_cost).quantize(Decimal("0.01"))
                             total_fg_cost += share_cost
                             db.add(StockLedgerEntry(
                                 id=str(uuid.uuid4()),
@@ -1792,7 +1829,7 @@ async def receive_finished_goods(
                                 reference_doc_id=order.id,
                                 entry_type="finished_goods_receipt",
                                 created_by=current_user.id,
-                                unit_cost=unit_mfg_cost,
+                                unit_cost=unit_inventory_cost,
                                 total_cost=share_cost,
                             ))
                             d.fulfilled_quantity = round(d.fulfilled_quantity + share, 4)
@@ -1800,7 +1837,7 @@ async def receive_finished_goods(
                     bucket_ref = f"aggregated:{len(demands)}_customers"
                 else:
                     bucket_ref = finished_goods_bucket(item.product_type, item.customer_id)
-                    line_cost = (Decimal(str(accepted)) * unit_mfg_cost).quantize(Decimal("0.01"))
+                    line_cost = (Decimal(str(accepted)) * unit_inventory_cost).quantize(Decimal("0.01"))
                     total_fg_cost += line_cost
                     db.add(StockLedgerEntry(
                         id=str(uuid.uuid4()),
@@ -1814,7 +1851,7 @@ async def receive_finished_goods(
                         reference_doc_id=order.id,
                         entry_type="finished_goods_receipt",
                         created_by=current_user.id,
-                        unit_cost=unit_mfg_cost,
+                        unit_cost=unit_inventory_cost,
                         total_cost=line_cost,
                     ))
             else:
@@ -1832,7 +1869,7 @@ async def receive_finished_goods(
                 accepted_quantity=accepted,
                 rejected_quantity=rejected,
                 total_received=item.received_quantity,
-                remaining_quantity=max(0.0, round(item.target_quantity - item.received_quantity, 6)),
+                remaining_quantity=max(0.0, round(item.target_quantity - item.received_quantity - float(item.rejected_quantity or 0.0), 6)),
             ))
 
         order.wip_balance = (order.wip_balance or Decimal("0.00")) - total_fg_cost
@@ -1851,8 +1888,11 @@ async def receive_finished_goods(
                 user_id=current_user.id,
             )
 
+        # الاكتمال يحتسب المرفوض أيضاً لاتساقه مع حارس السقف أعلاه:
+        # (السليم + المرفوض) بلغ المستهدف ← اكتمل الاستلام ولا يُقبل استلام إضافي على البند.
         all_received = all(
-            float(item.received_quantity or 0.0) + 1e-9 >= item.target_quantity for item in order.order_items
+            float(item.received_quantity or 0.0) + float(item.rejected_quantity or 0.0) + 1e-9 >= item.target_quantity
+            for item in order.order_items
         )
         if all_received:
             order.status = "receipt_completed"
