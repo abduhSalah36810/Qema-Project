@@ -27,11 +27,11 @@ interface Shortcut {
 const ROLE_HOME: Record<string, { title: string; focus: string; shortcuts: Shortcut[] }> = {
   general_manager: {
     title: 'المدير العام',
-    focus: 'متابعة التشغيل كاملاً، والاعتمادات التي تنتظر قرارك.',
+    focus: 'متابعة التشغيل كاملاً، مؤشرات الأداء، والتقارير التنفيذية.',
     shortcuts: [
       { navId: 'dashboard', label: 'لوحة التشغيل', icon: '📊', permission: 'reports:view' },
       { navId: 'batches', label: 'أوامر التشغيل', icon: '🧵', permission: 'production:orders:view' },
-      { navId: 'finance-treasury', label: 'الخزينة والاعتمادات', icon: '🏦', permission: 'finance:cash:view' },
+      { navId: 'report-management', label: 'تقارير الإدارة', icon: '📈', permission: 'finance:reports:view' },
       { navId: 'finance-customers', label: 'العملاء والطلبات', icon: '👥', permission: 'customers:view' },
     ],
   },
@@ -99,7 +99,7 @@ export const TaskInboxView: React.FC<TaskInboxViewProps> = ({ onNavigate }) => {
   const dialog = useDialog();
   const userId = user?.id;
   const activeRole = roles[0] || '';
-  const canApproveCash = hasPermission('finance:cash:approve');
+  const canApproveCash = roles.includes('finance_manager') && hasPermission('finance:cash:approve');
   const home = ROLE_HOME[activeRole];
 
   const [tasks, setTasks] = useState<TaskItem[]>([]);

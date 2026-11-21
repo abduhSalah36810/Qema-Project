@@ -293,19 +293,19 @@ async def decide_cash_document(
       (post_on_creation=True من finalize_cash_document فقط؛ قرار المصنع: لا توجد جهة اعتماد فوق المدير المالي).
     - الاعتماد يكتب دفتر النقدية + قيد اليومية + أثر المستند المصدر في معاملة واحدة.
     """
-    del user_roles  # الصلاحية تُفرض على مستوى المسار
     document = await db.scalar(select(CashDocument).where(CashDocument.id == document_id).with_for_update())
     if not document:
         raise HTTPException(404, "المستند النقدي غير موجود.")
     if document.status != "pending":
         raise HTTPException(409, "تمت معالجة هذا المستند ولا يمكن اعتماده أو رفضه مرة أخرى.")
-    if not post_on_creation and document.created_by and document.created_by == user_id:
+    is_finance_mgr = bool(user_roles and "finance_manager" in user_roles)
+    if not post_on_creation and not is_finance_mgr and document.created_by and document.created_by == user_id:
         raise HTTPException(
             status_code=409,
-            detail="لا يجوز لمنشئ المستند النقدي اعتماده أو رفضه بنفسه. يعتمده مسؤول مالي آخر أو المدير العام.",
+            detail="لا يجوز لمنشئ المستند النقدي اعتماده أو رفضه بنفسه. يعتمده المدير المالي.",
         )
-    if not post_on_creation and document.source_system == "payroll" and document.source_reference:
-        # Maker-Checker على مصدر الكشف: من أعد كشف الرواتب أو عدّله لا يقرر سند صرفه، ولو أنشأ السند غيره
+    if not post_on_creation and not is_finance_mgr and document.source_system == "payroll" and document.source_reference:
+        # Maker-Checker على مصدر الكشف لغير المدير المالي
         from app.modules.production.models import PAYROLL_PREPARATION_ACTIONS, PayPeriodEvent
 
         preparers = set((await db.scalars(

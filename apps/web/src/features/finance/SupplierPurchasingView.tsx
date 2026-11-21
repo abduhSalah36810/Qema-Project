@@ -644,44 +644,44 @@ export function SupplierPurchasingView() {
 
             {!inv.is_opening && (
               <footer className="purchasing__actions">
-              {canReceiveThis && (
-                <>
-                  <button type="button" className="btn btn--secondary" onClick={() => fillRemaining(inv)}>وصل كل المتبقي</button>
-                  <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void confirmReceipt(inv)}>تأكيد الاستلام بالمخزن</button>
-                </>
-              )}
-              {canRequestPayment && payable > 0.001 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '0.75rem' }}>
-                  <div className="purchasing__pay">
-                    <label>مبلغ السداد
-                      <input type="number" min="0.01" step="0.01" max={payable.toFixed(2)} placeholder={`حتى ${payable.toFixed(2)}`}
-                        value={paymentAmounts[inv.id] ?? ''} onChange={(e) => setPaymentAmounts({ ...paymentAmounts, [inv.id]: e.target.value })} />
-                    </label>
-                    <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => void requestPayment(inv)}>طلب سداد (يُعتمد في الخزينة)</button>
+                {canReceiveThis && (
+                  <>
+                    <button type="button" className="btn btn--secondary" onClick={() => fillRemaining(inv)}>وصل كل المتبقي</button>
+                    <button type="button" className="btn btn--primary" disabled={busy} onClick={() => void confirmReceipt(inv)}>تأكيد الاستلام بالمخزن</button>
+                  </>
+                )}
+                {canRequestPayment && payable > 0.001 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '0.75rem' }}>
+                    <div className="purchasing__pay">
+                      <label>مبلغ السداد
+                        <input type="number" min="0.01" step="0.01" max={payable.toFixed(2)} placeholder={`حتى ${payable.toFixed(2)}`}
+                          value={paymentAmounts[inv.id] ?? ''} onChange={(e) => setPaymentAmounts({ ...paymentAmounts, [inv.id]: e.target.value })} />
+                      </label>
+                      <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => void requestPayment(inv)}>طلب سداد (يُعتمد في الخزينة)</button>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      style={{ borderColor: '#2563eb', color: '#1d4ed8', fontWeight: 600, padding: '0.45rem 0.85rem' }}
+                      disabled={busy}
+                      onClick={() => setAllocatingInvoice(inv)}
+                    >
+                      🔗 تخصيص من دفعة معلقة
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn--secondary"
-                    style={{ borderColor: '#2563eb', color: '#1d4ed8', fontWeight: 600, padding: '0.45rem 0.85rem' }}
-                    disabled={busy}
-                    onClick={() => setAllocatingInvoice(inv)}
-                  >
-                    🔗 تخصيص من دفعة معلقة
+                )}
+                {canRequestFullBalance && inv.can_request_full_balance && (
+                  <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => void requestFullBalance(inv)}>
+                    طلب سداد كامل المستحق
                   </button>
-                </div>
-              )}
-              {canRequestFullBalance && inv.can_request_full_balance && (
-                <button type="button" className="btn btn--secondary" disabled={busy} onClick={() => void requestFullBalance(inv)}>
-                  طلب سداد كامل المستحق
-                </button>
-              )}
-              {!showMoney && inv.has_pending_payment_request && (
-                <span className="purchasing__status purchasing__status--part">طلب سداد مرسل · بانتظار اعتماد الخزينة</span>
-              )}
-              {showMoney && inv.status === 'received' && Number(inv.payable_balance || 0) <= 0.001 && pending <= 0 && (
-                <span className="purchasing__ok">✓ الفاتورة مستلمة ومسددة بالكامل</span>
-              )}
-            </footer>
+                )}
+                {!showMoney && inv.has_pending_payment_request && (
+                  <span className="purchasing__status purchasing__status--part">طلب سداد مرسل · بانتظار اعتماد الخزينة</span>
+                )}
+                {showMoney && inv.status === 'received' && Number(inv.payable_balance || 0) <= 0.001 && pending <= 0 && (
+                  <span className="purchasing__ok">✓ الفاتورة مستلمة ومسددة بالكامل</span>
+                )}
+              </footer>
             )}
 
             {inv.payments && inv.payments.length > 0 && showMoney && (

@@ -60,8 +60,8 @@ function NoticeBox({ notice, onClose }: { notice: Notice; onClose?: () => void }
     notice.kind === 'success'
       ? { bg: '#f0fdf4', bd: '#86efac', tx: '#166534' }
       : notice.kind === 'info'
-      ? { bg: '#eff6ff', bd: '#bfdbfe', tx: '#1e40af' }
-      : { bg: '#fff1f2', bd: '#fecdd3', tx: '#9f1239' };
+        ? { bg: '#eff6ff', bd: '#bfdbfe', tx: '#1e40af' }
+        : { bg: '#fff1f2', bd: '#fecdd3', tx: '#9f1239' };
   return (
     <div
       className="warehouse-alert"

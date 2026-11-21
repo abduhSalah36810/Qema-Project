@@ -134,13 +134,13 @@ EXPECTED_MATRIX = {
     ("POST", f"{API}/production/orders/{{order_id}}/defects"): {GM, PM},
     ("PATCH", f"{API}/production/orders/{{order_id}}/defects/{{defect_id}}"): {GM, PM},
     ("POST", f"{API}/production/orders/{{order_id}}/material-reconciliations"): {GM, PM},
-    # مرتجعات الورشة: المخزن يفحص ويستلم، والإنتاج أو المدير العام يسوّي العجز والمرفوض
+    # مرتجعات الورشة: المخزن يفحص ويستلم، والإنتاج يسوّي العجز والمرفوض
     ("POST", f"{API}/production/orders/{{order_id}}/returns/{{transfer_id}}/receive"): {GM, WH},
-    ("POST", f"{API}/production/orders/{{order_id}}/returns/{{transfer_id}}/resolve"): {GM, PM},
-    ("POST", f"{API}/production/orders/{{order_id}}/close"): {GM, PM},
-    # الخزينة والرواتب: المدير العام دور شامل، والاعتماد يبقى خاضعاً لمنع الاعتماد الذاتي
+    ("POST", f"{API}/production/orders/{{order_id}}/returns/{{transfer_id}}/resolve"): {PM},
+    ("POST", f"{API}/production/orders/{{order_id}}/close"): {PM},
+    # الخزينة والرواتب: المدير العام يسجل والسند يخضع لاعتماد المدير المالي
     ("POST", f"{API}/finance/cash-documents"): {GM, FM},
-    ("POST", f"{API}/finance/cash-documents/{{document_id}}/decision"): {GM, FM},
+    ("POST", f"{API}/finance/cash-documents/{{document_id}}/decision"): {FM},
     ("POST", f"{API}/finance/daily-expenses"): {GM, FM},
     ("POST", f"{API}/finance/petty-cash"): {GM, FM},
     ("POST", f"{API}/payroll/periods/{{period_id}}/calculate"): {GM, FM},
@@ -187,11 +187,16 @@ def test_treasury_decision_is_the_only_financial_approval_route():
     assert approval_routes == [("POST", f"{API}/finance/cash-documents/{{document_id}}/decision")]
 
 
-def test_general_manager_holds_every_declared_permission():
-    """المدير العام دور شامل: كل صلاحية معرّفة، بما فيها الإنشاء المالي والتحصيل والرواتب."""
-    assert ROLE_PERMISSIONS_MAP[GM] == set(PERMISSION_REGISTRY)
-    for perm in ("finance:cash:create", "finance:payments:manage", "finance:payroll:calculate",
-                 "finance:payroll:disburse", "finance:expenses:manage", "finance:cash:manage"):
+def test_general_manager_separated_from_operational_approvals():
+    """المدير العام دور إشرافي ورقابي: منفصل عن الاعتمادات التشغيلية الميدانية اليومية."""
+    assert "finance:cash:approve" not in ROLE_PERMISSIONS_MAP[GM]
+    assert "purchase_orders:approve" not in ROLE_PERMISSIONS_MAP[GM]
+    assert "catalog:item:approve" not in ROLE_PERMISSIONS_MAP[GM]
+    assert "inventory:stocktake:approve" not in ROLE_PERMISSIONS_MAP[GM]
+    assert "production:orders:close" not in ROLE_PERMISSIONS_MAP[GM]
+    # يملك صلاحيات المشاهدة والرقابة وإدارة البيانات
+    for perm in ("reports:view", "finance:reports:view", "finance:cash:view", "inventory:view",
+                 "customers:manage", "suppliers:manage", "pricing:manage"):
         assert perm in ROLE_PERMISSIONS_MAP[GM]
 
 
@@ -413,12 +418,11 @@ async def test_warehouse_dispatch_then_production_receipt_is_the_normal_path(ctx
 async def test_close_requires_business_conditions_for_permitted_roles(ctx):
     session, a, _ = ctx
     order_id, _ = await _dispatched_order(session, a, a[WH])
-    for role in (WH, FM):
+    for role in (WH, FM, GM):
         res = await a[role].post(f"{API}/production/orders/{order_id}/close", json={})
         assert res.status_code == 403
-    for role in (PM, GM):
-        res = await a[role].post(f"{API}/production/orders/{order_id}/close", json={})
-        assert res.status_code == 409, res.text  # المراحل غير مكتملة: التفويض لا يتجاوز شروط الإغلاق
+    res = await a[PM].post(f"{API}/production/orders/{order_id}/close", json={})
+    assert res.status_code == 409, res.text  # المراحل غير مكتملة: التفويض لا يتجاوز شروط الإغلاق
 
 
 @pytest.mark.asyncio
@@ -510,7 +514,7 @@ async def test_supplier_invoice_roles_and_general_manager_cannot_self_approve(ct
     res = await a["fm2"].post(f"{API}/finance/cash-documents/{funding['id']}/decision", json={"decision": "approve"})
     assert res.status_code == 409, "لا اعتماد مزدوج"
 
-    # المدير العام ينشئ سنداً نقدياً (دور شامل) لكنه لا يعتمده بنفسه
+    # المدير العام ينشئ سنداً نقدياً (دور شامل) لكن اعتماده للمدير المالي فقط
     res = await a[GM].post(f"{API}/finance/cash-documents", json={
         "document_type": "income", "to_account_id": CANONICAL_TREASURY_ID, "amount": "1.00",
         "description": "إيداع من المدير العام", "occurred_at": datetime.now(timezone.utc).isoformat(),
@@ -519,8 +523,8 @@ async def test_supplier_invoice_roles_and_general_manager_cannot_self_approve(ct
     gm_doc = res.json()
     assert gm_doc["status"] == "pending"
     res = await a[GM].post(f"{API}/finance/cash-documents/{gm_doc['id']}/decision", json={"decision": "approve"})
-    assert res.status_code == 409, "المدير العام لا يعتمد سنداً أنشأه"
-    res = await a["gm2"].post(f"{API}/finance/cash-documents/{gm_doc['id']}/decision", json={"decision": "approve"})
+    assert res.status_code == 403, "المدير العام منفصل عن اعتمادات الخزينة"
+    res = await a[FM].post(f"{API}/finance/cash-documents/{gm_doc['id']}/decision", json={"decision": "approve"})
     assert res.status_code == 200, res.text
 
     # لا يُنشأ سداد مورد مستقل من شاشة السندات العامة؛ السداد يمر عبر فاتورة المورد فقط
@@ -566,13 +570,13 @@ async def test_supplier_invoice_roles_and_general_manager_cannot_self_approve(ct
     res = await a[WH].post(f"{API}/finance/supplier-invoices/{invoice['id']}/payments", json={"amount": "50.00", "description": "طلب سداد من المخزن"})
     assert res.status_code == 403
 
-    # المدير العام يطلب السداد ثم يُمنع من اعتماد طلبه بنفسه
+    # المدير العام يطلب السداد ثم اعتماده للمدير المالي فقط
     res = await a[GM].post(f"{API}/finance/supplier-invoices/{invoice['id']}/payments", json={"amount": "100.00", "description": "سداد"})
     assert res.status_code == 201, res.text
     pay_doc = res.json()
     assert pay_doc["status"] == "pending"
     res = await a[GM].post(f"{API}/finance/cash-documents/{pay_doc['id']}/decision", json={"decision": "approve"})
-    assert res.status_code == 409, "المدير العام لا يعتمد مستنداً أنشأه"
+    assert res.status_code == 403, "المدير العام لا يعتمد مستندات الخزينة"
     res = await a[FM].post(f"{API}/finance/cash-documents/{pay_doc['id']}/decision", json={"decision": "approve"})
     assert res.status_code == 200, res.text
 
@@ -598,7 +602,7 @@ async def test_general_manager_collection_requires_another_approver(ctx):
     doc_id = res.json()["cash_document_id"]
     assert doc_id
     res = await a[GM].post(f"{API}/finance/cash-documents/{doc_id}/decision", json={"decision": "approve"})
-    assert res.status_code == 409, "المدير العام لا يعتمد تحصيلاً سجّله"
+    assert res.status_code == 403, "المدير العام لا يعتمد تحصيلاً نقدياً"
     res = await a[FM].post(f"{API}/finance/cash-documents/{doc_id}/decision", json={"decision": "approve"})
     assert res.status_code == 200, res.text
 

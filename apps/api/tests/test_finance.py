@@ -132,6 +132,38 @@ async def test_decide_cash_document_approves_when_balance_sufficient(mock_post_j
 
 
 @pytest.mark.asyncio
+@patch("app.modules.finance.service.post_journal_entry", new_callable=AsyncMock)
+async def test_finance_manager_can_approve_own_created_cash_document(mock_post_je):
+    """المدير المالي يعتمد أي حاجة مالية حتى لو هو اللي أنشأها ده الأساس."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    doc = CashDocument(
+        id="doc-own",
+        document_number="CSH-OWN-01",
+        document_type="expense",
+        from_account_id="acc-treasury",
+        to_account_id=None,
+        amount=Decimal("300.00"),
+        description="سند أنشأه المدير المالي",
+        occurred_at=datetime.now(timezone.utc),
+        status="pending",
+        created_by="fm-user",
+    )
+    account = CashAccount(id="acc-treasury", account_number="TR-01", name="الخزنة", account_type="treasury", is_active=True, created_by="fm-user")
+    session.scalar.side_effect = [doc, Decimal("1000.00")]
+    scalars_mock = MagicMock()
+    scalars_mock.all.return_value = [account]
+    session.scalars.return_value = scalars_mock
+
+    decision = CashDocumentDecision(decision="approve")
+    # Same user_id == created_by ("fm-user"), with finance_manager role
+    approved = await decide_cash_document(session, "doc-own", decision, user_id="fm-user", user_roles={"finance_manager"})
+    assert approved.status == "approved"
+    assert approved.approved_by == "fm-user"
+
+
+
+@pytest.mark.asyncio
 async def test_create_supplier_rejects_duplicate_code():
     session = AsyncMock()
     session.scalar.return_value = "existing-supp-id"

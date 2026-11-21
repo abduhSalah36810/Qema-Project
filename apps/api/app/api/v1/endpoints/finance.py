@@ -156,23 +156,30 @@ async def list_cash_documents(
             CashDocument.approved_by == CashDocument.created_by,
         )
     if approvable_by_me:
-        # نفس قواعد الخزينة: لا يظهر للمستخدم ما أنشأه، ولا سند صرف رواتب شارك في إعداد كشفه
-        from app.modules.production.models import PAYROLL_PREPARATION_ACTIONS, PayPeriodEvent
+        roles = await get_user_roles(current_user, db=db)
+        if "general_manager" in roles and "finance_manager" not in roles:
+            # المدير العام منفصل عن اعتمادات الخزينة التشغيلية
+            return []
+        if "finance_manager" in roles:
+            # المدير المالي هو السلطة المالية الأساسية؛ تظهر له كافة المستندات المعلقة لاعتمادها
+            stmt = stmt.where(CashDocument.status == "pending")
+        else:
+            from app.modules.production.models import PAYROLL_PREPARATION_ACTIONS, PayPeriodEvent
 
-        prepared_by_me = (
-            select(PayPeriodEvent.id)
-            .where(
-                PayPeriodEvent.period_id == CashDocument.source_reference,
-                PayPeriodEvent.actor_id == current_user.id,
-                PayPeriodEvent.action.in_(PAYROLL_PREPARATION_ACTIONS),
+            prepared_by_me = (
+                select(PayPeriodEvent.id)
+                .where(
+                    PayPeriodEvent.period_id == CashDocument.source_reference,
+                    PayPeriodEvent.actor_id == current_user.id,
+                    PayPeriodEvent.action.in_(PAYROLL_PREPARATION_ACTIONS),
+                )
+                .exists()
             )
-            .exists()
-        )
-        stmt = stmt.where(
-            CashDocument.status == "pending",
-            CashDocument.created_by != current_user.id,
-            ~((CashDocument.source_system == "payroll") & prepared_by_me),
-        )
+            stmt = stmt.where(
+                CashDocument.status == "pending",
+                CashDocument.created_by != current_user.id,
+                ~((CashDocument.source_system == "payroll") & prepared_by_me),
+            )
     docs = (await db.scalars(stmt)).all()
     results = []
     for d in docs:
@@ -225,7 +232,8 @@ async def decide_cash_document_route(
     db: AsyncSession = Depends(get_db),
 ):
     """نقطة الاعتماد المالي الوحيدة في النظام (شاشة الخزينة)."""
-    document = await decide_cash_document(db, document_id, data, current_user.id)
+    roles = await get_user_roles(current_user, db=db)
+    document = await decide_cash_document(db, document_id, data, current_user.id, user_roles=roles)
     return await _enrich_cash_document_read(db, document)
 
 
