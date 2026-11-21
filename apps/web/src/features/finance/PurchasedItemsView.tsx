@@ -3,12 +3,12 @@ import { ApiError } from '@/lib/api';
 import { fetchCatalogItems, type CatalogItem } from '@/features/production/productionApi';
 import { financeApi, type PurchasedItemRow, type PurchasedItemsResponse, type Supplier } from './financeApi';
 
+import { formatMoney, formatQuantity as qty } from '@/lib/formatters';
+
 const money = (v: string | number | null | undefined) => {
   if (v === null || v === undefined) return '—';
-  return `${Number(v).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م`;
+  return formatMoney(v);
 };
-
-const qty = (v: number | undefined) => Number(v || 0).toLocaleString('ar-EG', { maximumFractionDigits: 3 });
 
 const STATUS_LABELS: Record<string, { label: string; bg: string; color: string }> = {
   awaiting_receipt: { label: 'بانتظار الاستلام', bg: '#fffbeb', color: '#92400e' },

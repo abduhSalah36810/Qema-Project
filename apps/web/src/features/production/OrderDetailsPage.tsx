@@ -33,6 +33,7 @@ import {
   ORDER_STATUS_AR,
   REFRESH_FAILED_TEXT,
   parseApiError,
+  seasonAr,
   type SectionContext,
 } from './orderDetails/constants';
 import { OrderOverviewSection } from './orderDetails/OrderOverviewSection';
@@ -394,7 +395,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
           <div>
             <span style={{ color: 'var(--text-light, #64748b)', fontSize: '0.75rem', display: 'block' }}>الموسم / الإنشاء</span>
             <span style={{ fontSize: '0.85rem', color: '#334155' }}>
-              {order.season || '—'} · {order.created_at ? new Date(order.created_at).toLocaleDateString('ar-EG') : ''}
+              {seasonAr(order.season)} · {order.created_at ? new Date(order.created_at).toLocaleDateString('ar-EG') : ''}
             </span>
           </div>
         </div>

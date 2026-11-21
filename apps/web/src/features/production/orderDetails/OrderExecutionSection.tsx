@@ -378,10 +378,15 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
                 </div>
 
                 {(order.stage_history || []).filter((history) => history.stage_name === stageKey).map((history) => (
-                  <div className="stage-history-entry" key={history.id}>
-                    <strong>تغيير موثق:</strong> {STAGE_STATUS_AR[history.from_status] || history.from_status} ← {STAGE_STATUS_AR[history.to_status] || history.to_status} · {userLabel(history.actor_id || history.actor_name, user?.id)} · {new Date(history.timestamp).toLocaleString('ar-EG')}
-                    {history.previous_notes && <span>الملاحظة السابقة: {history.previous_notes}</span>}
-                    <span>السبب: {history.reason}</span>
+                  <div className="stage-history-entry" key={history.id} style={{ display: 'flex', flexDirection: 'column', gap: '3px', padding: '6px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', margin: '4px 0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                      <span>
+                        <strong>تغيير موثق:</strong> {STAGE_STATUS_AR[history.from_status] || history.from_status} ← {STAGE_STATUS_AR[history.to_status] || history.to_status} · بواسطة: <strong>{userLabel(history.actor_id || history.actor_name, null)}</strong>
+                      </span>
+                      <small style={{ color: '#64748b' }}>{new Date(history.timestamp).toLocaleString('ar-EG')}</small>
+                    </div>
+                    {history.reason && <div style={{ color: '#0369a1', fontSize: '0.875rem' }}>سبب الانتقال: <strong>{history.reason}</strong></div>}
+                    {history.previous_notes && <div style={{ color: '#64748b', fontSize: '0.8rem' }}>ملاحظات المرحلة السابقة: {history.previous_notes}</div>}
                   </div>
                 ))}
 
@@ -512,14 +517,81 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
       <section aria-labelledby="order-defects-title" style={{ marginTop: '24px' }}>
         <h3 id="order-defects-title" style={{ fontSize: '1.05rem', fontWeight: 600 }}>العيوب والإصلاحات</h3>
         {canReportDefects ? (
-          <form className="form-grid" onSubmit={(event) => void handleReportDefect(event)}>
-            <label>المرحلة<select value={defectForm.stage_name} onChange={(e) => setDefectForm({ ...defectForm, stage_name: e.target.value })}>{STAGE_SEQUENCE.map((key) => <option key={key} value={key}>{STAGE_TITLES_AR[key]}</option>)}</select></label>
-            <label>الكمية المتأثرة<input required type="number" min="0.001" step="0.001" value={defectForm.affected_quantity} onChange={(e) => setDefectForm({ ...defectForm, affected_quantity: e.target.value })} /></label>
-            <label>المسؤول أو القسم<input required value={defectForm.responsible} onChange={(e) => setDefectForm({ ...defectForm, responsible: e.target.value })} /></label>
-            <label>وصف العيب<input required value={defectForm.description} onChange={(e) => setDefectForm({ ...defectForm, description: e.target.value })} /></label>
-            <label>الإجراء المطلوب<input required value={defectForm.repair_action} onChange={(e) => setDefectForm({ ...defectForm, repair_action: e.target.value })} /></label>
-            <label>تكلفة الإصلاح (وصف فقط)<input value={defectForm.repair_cost_description} onChange={(e) => setDefectForm({ ...defectForm, repair_cost_description: e.target.value })} /></label>
-            <button className="btn btn--primary" disabled={isProcessing}>تسجيل العيب</button>
+          <form
+            onSubmit={(event) => void handleReportDefect(event)}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: '12px',
+              padding: '16px',
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px',
+              marginTop: '8px',
+            }}
+          >
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>المرحلة</span>
+              <select
+                className="form-input"
+                value={defectForm.stage_name}
+                onChange={(e) => setDefectForm({ ...defectForm, stage_name: e.target.value })}
+              >
+                {STAGE_SEQUENCE.map((key) => <option key={key} value={key}>{STAGE_TITLES_AR[key]}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>الكمية المتأثرة</span>
+              <input
+                className="form-input"
+                required
+                type="number"
+                min="0.001"
+                step="0.001"
+                value={defectForm.affected_quantity}
+                onChange={(e) => setDefectForm({ ...defectForm, affected_quantity: e.target.value })}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>المسؤول أو القسم</span>
+              <input
+                className="form-input"
+                required
+                value={defectForm.responsible}
+                onChange={(e) => setDefectForm({ ...defectForm, responsible: e.target.value })}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>وصف العيب</span>
+              <input
+                className="form-input"
+                required
+                value={defectForm.description}
+                onChange={(e) => setDefectForm({ ...defectForm, description: e.target.value })}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>الإجراء المطلوب</span>
+              <input
+                className="form-input"
+                required
+                value={defectForm.repair_action}
+                onChange={(e) => setDefectForm({ ...defectForm, repair_action: e.target.value })}
+              />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>تكلفة الإصلاح (وصف فقط)</span>
+              <input
+                className="form-input"
+                value={defectForm.repair_cost_description}
+                onChange={(e) => setDefectForm({ ...defectForm, repair_cost_description: e.target.value })}
+              />
+            </label>
+            <div style={{ gridColumn: '1 / -1', marginTop: '4px' }}>
+              <button className="btn btn--primary" disabled={isProcessing}>
+                {isProcessing ? 'جاري التسجيل...' : 'تسجيل العيب'}
+              </button>
+            </div>
           </form>
         ) : (
           <p className="provisional-hint">تسجيل العيوب من مهام مسؤول الإنتاج.</p>

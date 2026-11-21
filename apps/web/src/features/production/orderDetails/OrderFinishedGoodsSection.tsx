@@ -28,14 +28,16 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
   const canReceiveFinishedGoods = hasPermission('warehouse:finished_goods:receive');
   const isCmt = order.manufacturing_type === 'external';
 
+  const totalDefectsQty = (order.defects || []).reduce((sum: number, d) => sum + Number(d.affected_quantity || 0), 0);
+
   const [isProcessing, setIsProcessing] = useState(false);
-  const [fgLines, setFgLines] = useState<Record<string, FgLineInput>>(() => initialFgLines(order.items));
+  const [fgLines, setFgLines] = useState<Record<string, FgLineInput>>(() => initialFgLines(order.items, totalDefectsQty));
   const [fgNotes, setFgNotes] = useState('');
   const [fgIdempotencyKey, setFgIdempotencyKey] = useState<string>(() => newIdempotencyKey());
 
   useEffect(() => {
-    setFgLines(initialFgLines(order.items));
-  }, [order.id, order.items]);
+    setFgLines(initialFgLines(order.items, totalDefectsQty));
+  }, [order.id, order.items, totalDefectsQty]);
 
   /** المتبقي بعد هذا الاستلام: قد يكون سالباً ليكشف التجاوز مباشرة (أسلوب شاشة التسوية) */
   const itemRemainingAfter = (item: ProductionOrderItem): number => {
@@ -246,13 +248,14 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
             </tbody>
           </table>
 
-          <label style={{ display: 'block', margin: '1rem 0' }}>
-            ملاحظات الاستلام وفحص الجودة:
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', margin: '1rem 0' }}>
+            <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>ملاحظات الاستلام وفحص الجودة:</span>
             <input
+              className="form-input"
               value={fgNotes}
               onChange={(e) => setFgNotes(e.target.value)}
               placeholder="فحص المقاسات والكبسولات والخياطة..."
-              style={{ width: '100%', marginTop: '0.25rem' }}
+              style={{ width: '100%' }}
               disabled={!canSubmitFg || !canReceiveFinishedGoods}
             />
           </label>

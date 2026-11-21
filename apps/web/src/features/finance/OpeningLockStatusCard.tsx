@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
+import { useDialog } from '@/components/feedback/DialogProvider';
 import {
   financeApi,
   errorMessage,
@@ -13,6 +14,7 @@ interface OpeningLockStatusCardProps {
 
 export function OpeningLockStatusCard({ lockStatus, onReload }: OpeningLockStatusCardProps) {
   const { roles, user } = useAuth();
+  const dialog = useDialog();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -31,7 +33,14 @@ export function OpeningLockStatusCard({ lockStatus, onReload }: OpeningLockStatu
   const isRequester = Boolean(user?.id && requester && (user.id === requester || user.email === requester));
 
   const handleManualLock = async () => {
-    if (!window.confirm('هل أنت متأكد من قفل الأرصدة الافتتاحية يدويًا؟')) return;
+    const confirmed = await dialog.confirm({
+      title: 'قفل الأرصدة الافتتاحية يدوياً',
+      message: 'سيُقفل دفتر الأرصدة الافتتاحية ولن يُسمح بتسجيل أو اعتماد أو تعديل الأرصدة الافتتاحية بعد ذلك.',
+      confirmLabel: 'تأكيد القفل',
+      cancelLabel: 'تراجع',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
     setSubmitting(true);
     setError('');
     setSuccess('');
@@ -69,7 +78,14 @@ export function OpeningLockStatusCard({ lockStatus, onReload }: OpeningLockStatu
   };
 
   const handleApproveUnlock = async () => {
-    if (!window.confirm('هل أنت متأكد من اعتماد فك قفل الأرصدة الافتتاحية؟')) return;
+    const confirmed = await dialog.confirm({
+      title: 'اعتماد فك قفل الأرصدة الافتتاحية',
+      message: 'سيُفتح دفتر الأرصدة الافتتاحية وسيُسمح بتعديل الأرصدة الافتتاحية مرة أخرى.',
+      confirmLabel: 'اعتماد فك القفل',
+      cancelLabel: 'تراجع',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
     setSubmitting(true);
     setError('');
     setSuccess('');

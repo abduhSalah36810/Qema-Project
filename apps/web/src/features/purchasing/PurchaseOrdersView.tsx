@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
+import { useDialog } from '@/components/feedback/DialogProvider';
+import { formatMoney } from '@/lib/formatters';
 import { apiClient } from '@/lib/api';
 import {
   purchaseOrdersApi,
@@ -17,6 +19,7 @@ interface Supplier {
 
 export const PurchaseOrdersView: React.FC = () => {
   const { hasPermission } = useAuth();
+  const dialog = useDialog();
   const canApprove = hasPermission('purchase_orders:approve');
   const canManage = hasPermission('purchase_orders:manage');
   const canReceive = hasPermission('suppliers:receive');
@@ -98,7 +101,13 @@ export const PurchaseOrdersView: React.FC = () => {
   };
 
   const handleApprovePO = async (poId: string) => {
-    if (!window.confirm('هل أنت متأكد من اعتماد أمر الشراء للتوريد رسمياً؟')) return;
+    const approved = await dialog.confirm({
+      title: 'اعتماد أمر الشراء',
+      message: 'هل أنت متأكد من اعتماد أمر الشراء للتوريد رسمياً؟ بعد الاعتماد يصبح جاهزاً للتوريد والاستلام المخزني.',
+      confirmLabel: 'اعتماد الأمر',
+      cancelLabel: 'تراجع',
+    });
+    if (!approved) return;
     setDetailActionLoading(true);
     setDetailError(null);
     try {
@@ -115,7 +124,15 @@ export const PurchaseOrdersView: React.FC = () => {
   };
 
   const handleCancelPO = async (poId: string) => {
-    const reason = window.prompt('سبب إلغاء أمر الشراء (اختياري):');
+    const reason = await dialog.prompt({
+      title: 'إلغاء أمر الشراء',
+      message: 'سيُوثَّق الإلغاء في سجل أمر الشراء ولا يمكن الرجوع عنه من هذه الشاشة.',
+      label: 'سبب الإلغاء (اختياري)',
+      placeholder: 'مثال: تغيّر خطة التوريد أو توفر بديل أرخص',
+      confirmLabel: 'إلغاء الأمر',
+      cancelLabel: 'تراجع',
+      tone: 'danger',
+    });
     if (reason === null) return;
     setDetailActionLoading(true);
     setDetailError(null);
@@ -651,10 +668,10 @@ export const PurchaseOrdersView: React.FC = () => {
                         {selectedOrder.prices_visible && (
                           <>
                             <td style={{ padding: '0.6rem 0.75rem' }}>
-                              {l.unit_price !== null ? `${Number(l.unit_price).toFixed(2)} ج.م` : '—'}
+                              {l.unit_price !== null ? formatMoney(l.unit_price) : '—'}
                             </td>
                             <td style={{ padding: '0.6rem 0.75rem', fontWeight: 600 }}>
-                              {l.total_price !== null ? `${Number(l.total_price).toFixed(2)} ج.م` : '—'}
+                              {l.total_price !== null ? formatMoney(l.total_price) : '—'}
                             </td>
                           </>
                         )}

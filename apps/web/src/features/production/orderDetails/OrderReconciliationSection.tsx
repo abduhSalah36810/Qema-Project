@@ -317,9 +317,15 @@ export const OrderReconciliationSection: React.FC<OrderReconciliationSectionProp
             {canReconcile ? (
               canSubmitRecon && (
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                  <label style={{ flex: '1 1 240px' }}>
-                    ملاحظات التسوية
-                    <input value={reconNotes} onChange={(e) => setReconNotes(e.target.value)} style={{ width: '100%' }} />
+                  <label style={{ flex: '1 1 260px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>ملاحظات التسوية</span>
+                    <input
+                      className="form-input"
+                      value={reconNotes}
+                      onChange={(e) => setReconNotes(e.target.value)}
+                      placeholder="تفاصيل وقرارات تسوية خامات الورشة"
+                      style={{ width: '100%' }}
+                    />
                   </label>
                   <button
                     type="submit"

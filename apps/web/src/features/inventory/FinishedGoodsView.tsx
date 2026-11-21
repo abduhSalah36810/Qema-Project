@@ -31,6 +31,14 @@ function sizeLabel(row: FinishedGoodsBalance): string {
   return parts.length ? parts.join(' / ') : '—';
 }
 
+function formatVariantDisplay(row: FinishedGoodsBalance): { title: string; subtitle?: string; codeTooltip?: string } {
+  const modelName = row.product_name_ar || (row.item_name_ar && !row.item_name_ar.startsWith('FG-VAR-') ? row.item_name_ar : 'منتج تام');
+  const size = sizeLabel(row);
+  const title = modelName && size !== '—' ? `${modelName} - مقاس ${size}` : (modelName || row.item_name_ar || '—');
+  const codeTooltip = row.item_code || undefined;
+  return { title, subtitle: row.item_name_ar && row.item_name_ar !== title ? row.item_name_ar : undefined, codeTooltip };
+}
+
 function remainingOf(item: ProductionOrderItem): number {
   return Math.max(0, Math.round((item.target_quantity - (item.received_quantity ?? 0)) * 1e6) / 1e6);
 }
@@ -336,10 +344,17 @@ export function FinishedGoodsView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredBalances.map((b) => (
-                    <tr key={b.item_id}>
-                      <td><strong>{b.product_name_ar || b.item_name_ar || '—'}</strong></td>
-                      <td><span className="badge-tag">{sizeLabel(b)}</span></td>
+                  {filteredBalances.map((b) => {
+                    const variantDisplay = formatVariantDisplay(b);
+                    return (
+                      <tr key={b.item_id}>
+                        <td>
+                          <strong title={variantDisplay.codeTooltip}>{variantDisplay.title}</strong>
+                          {variantDisplay.subtitle && (
+                            <small style={{ display: 'block', color: '#64748b' }}>{variantDisplay.subtitle}</small>
+                          )}
+                        </td>
+                        <td><span className="badge-tag">{sizeLabel(b)}</span></td>
                       <td>{seasonLabel(b.season)}</td>
                       <td>
                         <strong style={{ color: b.available_factory_brand > 0 ? '#0d9488' : '#64748b' }}>
@@ -361,8 +376,9 @@ export function FinishedGoodsView() {
                         {b.unassigned ? <small style={{ display: 'block', color: '#92400e' }}>منها غير مصنف: {fmt(b.unassigned)}</small> : null}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
+                  );
+                })}
+              </tbody>
               </table>
             </div>
           )}
@@ -425,7 +441,15 @@ export function FinishedGoodsView() {
                                 const label = `${order.order_number} ${item.variant_info || item.product_name_ar}`;
                                 return (
                                   <tr key={item.id}>
-                                    <td><strong>{item.product_name_ar}</strong><br /><small>{item.variant_info || item.season}</small></td>
+                                    <td>
+                                      <strong>{item.product_name_ar}</strong>
+                                      <br />
+                                      <small>
+                                        {item.variant_info?.startsWith('FG-VAR-')
+                                          ? `${item.product_name_ar} - مقاس ${(item.variant_info || '').match(/\d{2,3}/)?.[0] ?? '—'}`
+                                          : item.variant_info || seasonLabel(item.season)}
+                                      </small>
+                                    </td>
                                     <td>{item.product_type === 'private_label' ? `تصنيع خاص: ${item.customer_name || 'عميل'}` : 'براند المصنع'}</td>
                                     <td>{item.target_quantity}</td>
                                     <td>{item.received_quantity ?? 0}</td>

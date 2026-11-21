@@ -2,7 +2,8 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
 import { apiClient, ApiError } from '@/lib/api';
 import { CatalogItem, fetchCatalogItems } from '@/features/production/productionApi';
-import { financeApi, UnallocatedPayment } from './financeApi';
+import { financeApi, UnallocatedPayment, Supplier } from './financeApi';
+import { SupplierAccountPage } from '@/features/purchasing/SupplierAccountPage';
 
 /**
  * المشتريات: فاتورة مورد ← استلام فعلي بالمخزن (كامل أو على دفعات) ← طلب سداد يُعتمد في الخزينة.
@@ -10,7 +11,6 @@ import { financeApi, UnallocatedPayment } from './financeApi';
  * حتى لا تختلف هذه الشاشة عن الخزينة وكشف حساب المورد.
  */
 
-type Supplier = { id: string; code: string; name: string; is_active: boolean };
 type InvoiceLine = {
   id: string;
   item_id: string;
@@ -93,6 +93,7 @@ export function SupplierPurchasingView() {
   const showMoney = !isWarehouseOnly;
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -292,6 +293,21 @@ export function SupplierPurchasingView() {
     (canRequestFullBalance && Boolean(inv.can_request_full_balance))
   );
 
+  if (selectedSupplier) {
+    return (
+      <SupplierAccountPage
+        supplier={selectedSupplier}
+        onBack={() => {
+          setSelectedSupplier(null);
+          void load();
+        }}
+        onSupplierUpdated={(updated) => {
+          setSuppliers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+        }}
+      />
+    );
+  }
+
   return (
     <section className="warehouse-draft purchasing" aria-labelledby="supplier-title">
       <h3 id="supplier-title" className="sr-only">فواتير الشراء واستلام الخامات</h3>
@@ -305,9 +321,25 @@ export function SupplierPurchasingView() {
       {success && <div className="purchasing__alert purchasing__alert--ok" role="status">✓ {success}</div>}
 
       {canCreateInvoices && !showNewInvoice && (
-        <div className="purchasing__new-toggle" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <div className="purchasing__new-toggle" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <button type="button" className="btn btn--primary" onClick={() => setShowNewInvoice(true)}>＋ تسجيل فاتورة شراء جديدة</button>
           <button type="button" className="btn btn--secondary" onClick={() => setShowOpeningModal(true)}>＋ إدخال رصيد افتتاحي لمورد</button>
+          <select
+            className="form-input"
+            style={{ width: 'auto', minWidth: '190px', padding: '6px 10px', fontSize: '0.875rem' }}
+            value=""
+            onChange={(e) => {
+              const sup = suppliers.find((s) => s.id === e.target.value);
+              if (sup) setSelectedSupplier(sup);
+            }}
+          >
+            <option value="">👤 عرض حساب مورد...</option>
+            {suppliers.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.code})
+              </option>
+            ))}
+          </select>
         </div>
       )}
 
@@ -465,7 +497,26 @@ export function SupplierPurchasingView() {
             <header className="purchasing__invoice-head">
               <div>
                 <strong>
-                  {inv.supplier_name}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sup = suppliers.find((s) => s.id === inv.supplier_id);
+                      if (sup) setSelectedSupplier(sup);
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      color: 'var(--teal-primary, #0d9488)',
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                      fontWeight: 700,
+                    }}
+                    title="فتح صفحة حساب المورد"
+                  >
+                    {inv.supplier_name}
+                  </button>
                   {inv.is_opening && (
                     <span
                       className="badge"

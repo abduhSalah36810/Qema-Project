@@ -760,7 +760,21 @@ function InventorySection() {
   type Wh = NonNullable<InventoryValuationReport['warehouses']>[string];
   type Item = NonNullable<Wh['items']>[number];
   const columns: Column<Item>[] = [
-    { key: 'item_code', label: 'الكود', kind: 'code' },
+    {
+      key: 'item_code',
+      label: 'الكود',
+      kind: 'code',
+      render: (r) => {
+        if (r.item_code?.startsWith('FG-VAR-')) {
+          return (
+            <span title={r.item_code} style={{ fontSize: '0.825rem', fontFamily: 'inherit' }}>
+              {`تام · ${r.item_code.slice(7, 15)}…`}
+            </span>
+          );
+        }
+        return <code>{r.item_code}</code>;
+      },
+    },
     { key: 'item_name_ar', label: 'الصنف', wrap: true },
     { key: 'quantity', label: 'الكمية', kind: 'number' },
     { key: 'unit_name_ar', label: 'الوحدة' },
@@ -854,7 +868,21 @@ function LossesSection({ period }: { period: Period }) {
   type Row = LossesReport['items'][number] & { _k: string };
   const columns: Column<Row>[] = [
     { key: 'type', label: 'النوع' },
-    { key: 'item_code', label: 'الكود', kind: 'code' },
+    {
+      key: 'item_code',
+      label: 'الكود',
+      kind: 'code',
+      render: (r) => {
+        if (r.item_code?.startsWith('FG-VAR-')) {
+          return (
+            <span title={r.item_code} style={{ fontSize: '0.825rem', fontFamily: 'inherit' }}>
+              {`تام · ${r.item_code.slice(7, 15)}…`}
+            </span>
+          );
+        }
+        return <code>{r.item_code}</code>;
+      },
+    },
     { key: 'item_name', label: 'الصنف', wrap: true },
     { key: 'quantity', label: 'الكمية', kind: 'number', render: (r) => `${fmtNum(r.quantity, 3)} ${r.unit}` },
     { key: 'value', label: 'القيمة', kind: 'money', sum: true },

@@ -499,7 +499,6 @@ button {
   font-size: 19px;
   font-weight: 700;
   color: var(--text-main);
-  letter-spacing: -0.01em;
   line-height: 1.3;
 }
 
@@ -841,7 +840,6 @@ button {
   font-weight: 700;
   color: var(--text-main);
   line-height: 1.15;
-  letter-spacing: -0.01em;
   margin-bottom: 8px;
 }
 
@@ -2547,7 +2545,7 @@ button {
 .order-detail-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .preview-table th,
@@ -3050,11 +3048,11 @@ button {
 .warehouse-search { flex: 1; }
 .warehouse-search input, .warehouse-filter select { min-height: 42px; border: 1px solid #d8e0e9; border-radius: 8px; background: #fff; color: #172238; padding: 0 12px; font: inherit; }
 .warehouse-filter select { min-width: 210px; }
-.warehouse-table-wrap { overflow: auto; border: 1px solid #e4e9f0; border-radius: 12px; background: #fff; }
-.warehouse-table { width: 100%; border-collapse: collapse; text-align: right; white-space: nowrap; }
-.warehouse-table th { background: #f4f7fa; color: #516176; font-size: 12px; font-weight: 700; }
+.warehouse-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid #e4e9f0; border-radius: 12px; background: #fff; }
+.warehouse-table { width: 100%; min-width: 600px; border-collapse: collapse; text-align: right; white-space: nowrap; }
+.warehouse-table th { background: #f4f7fa; color: #516176; font-size: 14px; font-weight: 700; }
 .warehouse-table th, .warehouse-table td { border-bottom: 1px solid #edf0f4; padding: 13px 15px; }
-.warehouse-table td { color: #536176; font-size: 13px; }
+.warehouse-table td { color: #536176; font-size: 14px; }
 .warehouse-table td strong { color: #172238; }
 .warehouse-table code { color: #0f817b; font-family: inherit; font-weight: 700; }
 .warehouse-item-status { border-radius: 999px; background: #eef9f2; color: #217748; padding: 4px 9px; font-size: 11px; }
@@ -3243,7 +3241,6 @@ td.cell-wrap, .warehouse-table td.cell-wrap { white-space: normal; min-width: 22
   font-weight: 800;
   line-height: 1.25;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
   margin-top: 2px;
 }
 
@@ -3364,7 +3361,6 @@ td.cell-wrap, .warehouse-table td.cell-wrap { white-space: normal; min-width: 22
   font-size: 0.82rem;
   padding: 13px 16px;
   border-bottom: 2px solid #e2e8f0;
-  letter-spacing: 0.01em;
 }
 
 .items-table tbody td {
@@ -3434,7 +3430,6 @@ td.cell-wrap, .warehouse-table td.cell-wrap { white-space: normal; min-width: 22
   font-size: 1.15rem;
   font-weight: 800;
   color: #0f172a;
-  letter-spacing: -0.01em;
 }
 
 .customer-return-card__meta-grid {

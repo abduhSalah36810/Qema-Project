@@ -9,10 +9,7 @@ import {
   type SoldItemsResponse,
 } from './customersApi';
 
-const money = (v: number | undefined) =>
-  `${Number(v || 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م`;
-
-const qty = (v: number | undefined) => Number(v || 0).toLocaleString('ar-EG', { maximumFractionDigits: 3 });
+import { formatMoney as money, formatQuantity as qty } from '@/lib/formatters';
 
 const ORDER_TYPE_LABELS: Record<string, string> = {
   ready_goods: 'مبيعات مخزون جاهز',

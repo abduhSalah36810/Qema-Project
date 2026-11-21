@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
+import { formatMoney } from '@/lib/formatters';
 import {
   ProductionOrder,
   Product,
@@ -426,7 +427,7 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
                           ) : null}
                           {ord.unit_manufacturing_cost && Number(ord.unit_manufacturing_cost) > 0 ? (
                             <span className="badge badge--info" style={{ fontSize: '0.75rem' }}>
-                              تكلفة: {Number(ord.unit_manufacturing_cost).toFixed(2)} ج/قطعة
+                              تكلفة: {formatMoney(ord.unit_manufacturing_cost)}/قطعة
                             </span>
                           ) : null}
                         </div>

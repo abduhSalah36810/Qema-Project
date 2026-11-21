@@ -103,11 +103,33 @@ export type ReconInput = { consumed: string; returned: string; scrapped: string;
 
 export const RETURN_CONDITION_LABELS: Record<ReturnCondition, string> = { good: 'سليمة', needs_inspection: 'تحتاج فحص', damaged: 'تالفة' };
 
-export function initialFgLines(items: ProductionOrderItem[] | undefined): Record<string, FgLineInput> {
+export const SEASON_AR: Record<string, string> = {
+  summer: 'صيفي',
+  winter: 'شتوي',
+  autumn: 'خريفي',
+  spring: 'ربيعي',
+};
+
+export const seasonAr = (s?: string | null) => (s ? SEASON_AR[s.toLowerCase()] || s : '—');
+
+export function initialFgLines(
+  items: ProductionOrderItem[] | undefined,
+  defectsCount?: number
+): Record<string, FgLineInput> {
   const result: Record<string, FgLineInput> = {};
+  const defectSuggestion = Math.max(0, defectsCount || 0);
+  let remainingDefects = defectSuggestion;
+
   (items || []).forEach((item) => {
-    // الافتراضي المقترح: المتبقي بعد حساب السليم والمرفوض السابقين (لا يتجاوز المستهدف أبداً)
-    result[item.id] = { accepted: String(Math.max(0, itemTotalRemaining(item))), rejected: '0' };
+    const totalRemaining = Math.max(0, itemTotalRemaining(item));
+    const rejectedAlloc = Math.min(remainingDefects, totalRemaining);
+    remainingDefects -= rejectedAlloc;
+    const acceptedAlloc = Math.max(0, totalRemaining - rejectedAlloc);
+
+    result[item.id] = {
+      accepted: String(acceptedAlloc),
+      rejected: String(rejectedAlloc),
+    };
   });
   return result;
 }

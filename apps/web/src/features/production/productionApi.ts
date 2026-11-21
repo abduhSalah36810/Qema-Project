@@ -247,6 +247,7 @@ export interface ProductionOrder {
   materials: OrderMaterialSnapshot[];
   stage_events: StageEvent[];
   stage_history?: StageHistoryEvent[];
+  defects?: ProductionDefect[];
 }
 
 export interface WarehouseTransferLine {

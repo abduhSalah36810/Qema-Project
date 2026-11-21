@@ -35,9 +35,7 @@ const blankLine = (): DraftLine => ({ product_id: '', variant_id: '', quantity: 
 
 const SEASON_AR: Record<string, string> = { summer: 'صيفي', autumn: 'خريفي', winter: 'شتوي' };
 
-function formatMoney(amount: number): string {
-  return new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 }).format(amount);
-}
+import { formatMoney } from '@/lib/formatters';
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString('ar-EG');

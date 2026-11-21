@@ -3,17 +3,7 @@ import { apiClient, ApiError } from '@/lib/api';
 /** التقارير أثقل من الشاشات العادية: مهلة أطول من الافتراضي (5 ثوانٍ) */
 export const REPORT_OPTIONS = { timeoutMs: 30000 };
 
-/** تحويل قيمة مالية (رقم أو نص عشري أو null) إلى رقم آمن دون NaN */
-export function toNumber(value: unknown): number {
-  if (value === null || value === undefined || value === '') return 0;
-  const n = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/** تنسيق مبلغ بالجنيه المصري مع معالجة القيم الفارغة */
-export function formatMoney(value: unknown): string {
-  return `${toNumber(value).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م`;
-}
+export { toNumber, formatMoney, formatQuantity, formatNumber } from '@/lib/formatters';
 
 /** استخراج رسالة الخطأ العربية القادمة من الخادم أو نص بديل */
 export function errorMessage(err: unknown, fallback: string): string {
@@ -150,6 +140,9 @@ export type SupplierInvoice = {
   received_value?: string | number;
   pending_payments_total?: string | number;
   payable_balance?: string | number;
+  is_opening?: boolean;
+  approved_at?: string | null;
+  approved_by?: string | null;
   status: 'awaiting_receipt' | 'partially_received' | 'received' | 'cancelled' | string;
   notes: string;
   created_by: string;

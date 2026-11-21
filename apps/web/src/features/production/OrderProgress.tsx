@@ -1,5 +1,5 @@
 import type { ProductionOrder } from './productionApi';
-import { nextStep, workflowSteps } from './orderWorkflow';
+import { workflowSteps, type nextStep } from './orderWorkflow';
 
 /**
  * شريط تقدم أمر التشغيل: ما تم، ما يجري الآن، ومن صاحب الخطوة التالية.
@@ -7,14 +7,13 @@ import { nextStep, workflowSteps } from './orderWorkflow';
  */
 interface Props {
   order: ProductionOrder;
-  hasPermission: (permission: string) => boolean;
+  hasPermission?: (permission: string) => boolean;
   userId?: string | null;
   onGoToStep?: (tab: NonNullable<ReturnType<typeof nextStep>>['tab']) => void;
 }
 
-export function OrderProgress({ order, hasPermission, userId, onGoToStep }: Props) {
+export function OrderProgress({ order }: Props) {
   const steps = workflowSteps(order);
-  const next = nextStep(order, hasPermission, userId);
   return (
     <section className="order-progress" aria-label="تقدم أمر التشغيل">
       <ol className="order-progress__steps">
@@ -26,23 +25,6 @@ export function OrderProgress({ order, hasPermission, userId, onGoToStep }: Prop
           </li>
         ))}
       </ol>
-      {order.status === 'closed' ? (
-        <p className="order-progress__next order-progress__next--done">✓ الأمر مغلق؛ لا توجد خطوات متبقية.</p>
-      ) : next ? (
-        <div className={`order-progress__next ${next.isMine ? 'order-progress__next--mine' : ''}`}>
-          <div>
-            <strong>{next.isMine ? 'الخطوة التالية عندك: ' : 'الخطوة التالية: '}</strong>
-            {next.label}
-            {!next.isMine && <span> — يقوم بها {next.role}</span>}
-            {next.blockedReason && <small className="order-progress__blocked">{next.blockedReason}</small>}
-          </div>
-          {next.isMine && onGoToStep && (
-            <button type="button" className="btn btn--primary btn--sm" onClick={() => onGoToStep(next.tab)}>
-              انتقل للخطوة
-            </button>
-          )}
-        </div>
-      ) : null}
     </section>
   );
 }

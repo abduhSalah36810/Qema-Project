@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { financeApi, SupplierInvoice, CashDocument } from './financeApi';
+import { formatMoney } from '@/lib/formatters';
 
 export function PaymentsCollectionsView() {
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
@@ -56,21 +57,21 @@ export function PaymentsCollectionsView() {
         <article>
           <span>إجمالي مسدد للموردين</span>
           <strong style={{ color: '#059669' }}>
-            {totalSupplierPaid.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+            {formatMoney(totalSupplierPaid)}
           </strong>
-          <small>من إجمالي فواتير: {totalSupplierInvoiced.toLocaleString('ar-EG')} ج.م</small>
+          <small>من إجمالي فواتير: {formatMoney(totalSupplierInvoiced)}</small>
         </article>
         <article>
           <span>مستحقات معلقة للموردين</span>
           <strong style={{ color: '#dc2626' }}>
-            {totalSupplierDue.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+            {formatMoney(totalSupplierDue)}
           </strong>
           <small>متبقي واجب السداد</small>
         </article>
         <article>
           <span>إجمالي التحصيلات المقبوضة</span>
           <strong style={{ color: '#0f766e' }}>
-            {approvedCollections.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+            {formatMoney(approvedCollections)}
           </strong>
           <small>مقبوضات الخزينة المعتمدة</small>
         </article>
@@ -125,15 +126,15 @@ export function PaymentsCollectionsView() {
                         <td>
                           <strong>{inv.supplier_name}</strong>
                         </td>
-                        <td>{Number(inv.invoice_total).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م</td>
+                        <td>{formatMoney(inv.invoice_total)}</td>
                         <td>
                           <span style={{ color: '#059669', fontWeight: 600 }}>
-                            {Number(inv.paid_total).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                            {formatMoney(inv.paid_total)}
                           </span>
                         </td>
                         <td>
                           <span style={{ color: Number(inv.balance_due) > 0 ? '#dc2626' : '#64748b', fontWeight: 600 }}>
-                            {Number(inv.balance_due).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                            {formatMoney(inv.balance_due)}
                           </span>
                         </td>
                         <td>
@@ -182,7 +183,7 @@ export function PaymentsCollectionsView() {
                         </td>
                         <td>
                           <strong style={{ color: '#059669' }}>
-                            +{Number(doc.amount).toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                            +{formatMoney(doc.amount)}
                           </strong>
                         </td>
                         <td className="cell-wrap">{doc.description}</td>
