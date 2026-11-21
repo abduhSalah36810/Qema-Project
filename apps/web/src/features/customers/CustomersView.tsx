@@ -98,8 +98,8 @@ export function CustomersView() {
 
       {error && <div className="customers-alert" role="alert">{error}</div>}
 
-      <div className="customers-layout">
-        <section className="customers-card" aria-label="قائمة العملاء">
+      <div className="customers-layout" style={{ width: '100%', display: 'block' }}>
+        <section className="customers-card" aria-label="قائمة العملاء" style={{ width: '100%', overflow: 'hidden' }}>
           <div className="customers-toolbar">
             <label className="customers-search">
               <span className="sr-only">البحث عن عميل</span>
@@ -116,16 +116,16 @@ export function CustomersView() {
 
           {loading ? <div className="customers-empty" role="status">جاري تحميل العملاء من قاعدة البيانات…</div> :
             visibleCustomers.length === 0 ? <div className="customers-empty">{search ? 'لا توجد نتائج مطابقة.' : 'لا يوجد عملاء مسجلون بعد.'}</div> : (
-              <div className="warehouse-table-wrap">
-                <table className="warehouse-table" aria-label="جدول العملاء">
+              <div className="warehouse-table-wrap" style={{ width: '100%', overflowX: 'auto' }}>
+                <table className="warehouse-table" aria-label="جدول العملاء" style={{ width: '100%', minWidth: '820px' }}>
                   <thead>
                     <tr>
-                      <th>كود العميل</th>
-                      <th>اسم العميل</th>
-                      <th>رقم الهاتف</th>
-                      <th>المدينة / العنوان</th>
-                      <th>الحالة</th>
-                      <th style={{ textAlign: 'center' }}>الإجراءات</th>
+                      <th style={{ width: '140px' }}>كود العميل</th>
+                      <th style={{ minWidth: '180px' }}>اسم العميل</th>
+                      <th style={{ width: '140px' }}>رقم الهاتف</th>
+                      <th style={{ minWidth: '180px' }}>المدينة / العنوان</th>
+                      <th style={{ width: '90px' }}>الحالة</th>
+                      <th style={{ width: '230px', textAlign: 'center' }}>الإجراءات</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -170,8 +170,8 @@ export function CustomersView() {
                             {customer.status === 'active' ? 'نشط' : 'موقوف'}
                           </span>
                         </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', justifyContent: 'center' }}>
+                        <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', justifyContent: 'center', flexWrap: 'nowrap' }}>
                             <button
                               type="button"
                               className="btn btn--secondary btn--sm"
@@ -197,7 +197,7 @@ export function CustomersView() {
                                 e.stopPropagation();
                                 openEdit(customer);
                               }}
-                              style={{ padding: '0.35rem 0.65rem' }}
+                              style={{ padding: '0.35rem 0.65rem', whiteSpace: 'nowrap' }}
                             >
                               تعديل
                             </button>
