@@ -26,6 +26,15 @@ export type AuthState =
 
 export type AuthMode = 'supabase' | 'local_dev' | 'none';
 
+/**
+ * شريط النسخة التجريبية يظهر في وضع التطوير المحلي فقط (بند 7 من تجربة المالك).
+ * في بناء الإنتاج (import.meta.env.DEV = false) لا يظهر إطلاقاً حتى لو استُعيد
+ * توكن تطوير قديم من التخزين المحلي، حتى لا يُخلط بين بيانات العرض وبيانات المصنع الفعلية.
+ */
+export function isDemoStripVisible(authMode: AuthMode, isDevBuild: boolean): boolean {
+  return isDevBuild && authMode === 'local_dev';
+}
+
 /** حالة تحميل الصلاحيات الخادمية من GET /api/v1/auth/me */
 export type PermissionsStatus = 'idle' | 'loading' | 'ready' | 'error';
 

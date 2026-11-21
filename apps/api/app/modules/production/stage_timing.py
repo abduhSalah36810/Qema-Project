@@ -273,6 +273,14 @@ async def adjust_stage_expected_duration(
     if stage_name not in ORDER_STAGES_SEQUENCE:
         raise HTTPException(status_code=400, detail="اسم المرحلة غير معتمد.")
 
+    # بند 8 من تجربة المالك: المدة المعيارية يجب أن تكون موجبة؛ الصفر والسالب يفسدان
+    # مقارنة الأداء وكشف الاختناقات (الصفر يعطل فحص التأخير لهذه المرحلة).
+    if expected_duration_minutes is None or expected_duration_minutes <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail="المدة المعيارية المتوقعة يجب أن تكون عدداً صحيحاً موجباً بالدقائق (1 دقيقة على الأقل).",
+        )
+
     order_stmt = (
         select(ProductionOrder)
         .options(selectinload(ProductionOrder.stage_events))

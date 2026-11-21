@@ -17,8 +17,11 @@ import {
 type OperationTab = 'expense' | 'income' | 'transfer' | 'log';
 
 export function ReceiptsDisbursementsView() {
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, roles, user } = useAuth();
   const canCreate = hasPermission('finance:cash:create');
+  // قرار FIN-DEC-01 (معتمد من المالك 2026-11-15): مستندات المدير المالي النقدية تُرحَّل وتُعتمد
+  // لحظة إنشائها (post_on_creation) لكافة الأنواع، والضابط التعويضي مراجعة لاحقة من المدير العام.
+  const isFinanceManager = roles.includes('finance_manager');
 
   const [accounts, setAccounts] = useState<CashAccount[]>([]);
   const [documents, setDocuments] = useState<CashDocument[]>([]);
@@ -216,7 +219,9 @@ export function ReceiptsDisbursementsView() {
           <span className="warehouse-page__eyebrow">الإدارة المالية التشغيلية · النقدية والسيولة</span>
           <h2 id="receipts-disbursements-title">القبض والصرف والحركات النقدية</h2>
           <p>
-            تسجيل سندات القبض والصرف والتحويل الداخلي. كل سند يُسجل بانتظار الاعتماد من شاشة الخزينة ولا يغير أي رصيد قبل اعتماده.
+            {isFinanceManager
+              ? 'تسجيل سندات القبض والصرف والتحويل الداخلي. بموجب قرار FIN-DEC-01، مستنداتك النقدية تُعتمد وتُرحَّل فوراً لحظة إنشائها وتتحرك الأرصدة مباشرة (الضابط التعويضي: مراجعة لاحقة من المدير العام).'
+              : 'تسجيل سندات القبض والصرف والتحويل الداخلي. كل سند يُسجل بانتظار الاعتماد من شاشة الخزينة ولا يغير أي رصيد قبل اعتماده.'}
           </p>
         </div>
         <button className="btn btn--secondary" onClick={() => void load()} disabled={loading}>

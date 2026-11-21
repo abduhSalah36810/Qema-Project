@@ -946,7 +946,8 @@ class StageSkipRequest(BaseModel):
 
 
 class StageDurationAdjustRequest(BaseModel):
-    expected_duration_minutes: int = Field(..., ge=0, description="المدة المعيارية المتوقعة بالدقائق")
+    # بند 8: الفحص الفعلي (<=0 يرفض 422 برسالة عربية) في adjust_stage_expected_duration
+    expected_duration_minutes: int = Field(..., description="المدة المعيارية المتوقعة بالدقائق (عدد صحيح موجب)")
 
 
 class FactoryCalendarConfigRead(BaseModel):

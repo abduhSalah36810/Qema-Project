@@ -25,6 +25,8 @@ interface PromptOptions extends ConfirmOptions {
   required?: boolean;
   minLength?: number;
   multiline?: boolean;
+  /** قيمة مبدئية تعبّئ الحقل (مثل المدة الحالية عند التعديل) */
+  initialValue?: string;
 }
 
 interface NotifyOptions {
@@ -49,9 +51,40 @@ type ActiveDialog =
 let enqueue: ((dialog: ActiveDialog) => void) | null = null;
 
 const dialogApi: DialogApi = {
-  confirm: (options) => new Promise<boolean>((resolve) => enqueue?.({ kind: 'confirm', options, resolve })),
-  prompt: (options) => new Promise<string | null>((resolve) => enqueue?.({ kind: 'prompt', options, resolve })),
-  notify: (options) => new Promise<void>((resolve) => enqueue?.({ kind: 'notify', options, resolve })),
+  confirm: (options) =>
+    new Promise<boolean>((resolve) => {
+      if (enqueue) {
+        enqueue({ kind: 'confirm', options, resolve });
+      } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
+        const msg = typeof options.message === 'string' ? options.message : options.title;
+        resolve(window.confirm(msg));
+      } else {
+        resolve(true);
+      }
+    }),
+  prompt: (options) =>
+    new Promise<string | null>((resolve) => {
+      if (enqueue) {
+        enqueue({ kind: 'prompt', options, resolve });
+      } else if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+        const msg = typeof options.message === 'string' ? options.message : options.title;
+        resolve(window.prompt(msg, options.initialValue));
+      } else {
+        resolve(options.initialValue ?? null);
+      }
+    }),
+  notify: (options) =>
+    new Promise<void>((resolve) => {
+      if (enqueue) {
+        enqueue({ kind: 'notify', options, resolve });
+      } else if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+        const msg = typeof options.message === 'string' ? options.message : options.title;
+        window.alert(msg);
+        resolve();
+      } else {
+        resolve();
+      }
+    }),
 };
 
 /** مضيف الحوارات: يُركّب مرة واحدة في جذر التطبيق. */
@@ -76,8 +109,13 @@ export function useDialog(): DialogApi {
 }
 
 function AppDialog({ dialog, onDone }: { dialog: ActiveDialog; onDone: () => void }) {
-  const [text, setText] = useState('');
+  const [text, setText] = useState(() => (dialog.kind === 'prompt' ? dialog.options.initialValue ?? '' : ''));
   const [error, setError] = useState('');
+  // كل حوار جديد يبدأ بحقل نظيف (أو بقيمته المبدئية) وليس بنص الحوار السابق
+  useEffect(() => {
+    setText(dialog.kind === 'prompt' ? dialog.options.initialValue ?? '' : '');
+    setError('');
+  }, [dialog]);
   const previousFocus = useRef<HTMLElement | null>(null);
   const primaryRef = useRef<HTMLButtonElement | null>(null);
   const inputRef = useRef<HTMLInputElement & HTMLTextAreaElement>(null);

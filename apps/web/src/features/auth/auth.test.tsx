@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import type { Session } from '@supabase/supabase-js';
 
-import { AuthProvider, useAuth } from './AuthContext';
+import { AuthProvider, isDemoStripVisible, useAuth } from './AuthContext';
 import { apiClient, ApiError, type UserIdentity } from '@/lib/api';
 import App from '@/App';
 
@@ -851,6 +851,23 @@ describe('Supabase Auth Integration & Token Handling', () => {
       expect(currentAuth?.hasPermission('catalog:item:approve')).toBe(false);
       // وتبقى فقط صلاحيات أمين المخزن
       expect(currentAuth?.hasPermission('inventory:stocktake:count')).toBe(true);
+    });
+  });
+
+  describe('Demo Strip Visibility (بند 7: شريط النسخة التجريبية لا يظهر في الإنتاج)', () => {
+    it('shows the demo strip only in a dev build running in local_dev mode', () => {
+      expect(isDemoStripVisible('local_dev', true)).toBe(true);
+    });
+
+    it('never shows the demo strip in a production build even with a restored local_dev session', () => {
+      // بناء الإنتاج (import.meta.env.DEV = false): حتى مع توكن تطوير قديم مستعاد
+      expect(isDemoStripVisible('local_dev', false)).toBe(false);
+    });
+
+    it('never shows the demo strip for supabase or signed-out modes', () => {
+      expect(isDemoStripVisible('supabase', true)).toBe(false);
+      expect(isDemoStripVisible('none', true)).toBe(false);
+      expect(isDemoStripVisible('supabase', false)).toBe(false);
     });
   });
 });

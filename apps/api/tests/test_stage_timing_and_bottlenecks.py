@@ -189,6 +189,50 @@ async def test_time_dec_01_expected_duration_snapshot_and_adjustment(session: As
 
 
 @pytest.mark.asyncio
+async def test_time_dec_01_duration_adjust_rejects_non_positive_values(session: AsyncSession, timing_test_data):
+    """
+    بند 8 من تجربة المالك: تعديل المدة المعيارية بقيمة غير موجبة (0 أو سالب) يُرفض 422
+    برسالة عربية واضحة، ولا يتغير أي شيء في لقطة المرحلة.
+    """
+    order = timing_test_data["order"]
+    gm = make_auth("gm-user", ROLE_GENERAL_MANAGER)
+
+    async def override_get_db():
+        yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = lambda: gm
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            before_res = await client.get(f"/api/v1/production/orders/{order.id}")
+            before = next(s for s in before_res.json()["stage_events"] if s["stage_name"] == "ironing")
+
+            for bad_value in (0, -30):
+                res = await client.put(
+                    f"/api/v1/production/orders/{order.id}/stages/ironing/duration",
+                    json={"expected_duration_minutes": bad_value},
+                )
+                assert res.status_code == 422, res.text
+                assert "موجباً" in res.json()["detail"]
+
+            after_res = await client.get(f"/api/v1/production/orders/{order.id}")
+            after = next(s for s in after_res.json()["stage_events"] if s["stage_name"] == "ironing")
+            assert after["expected_duration_minutes"] == before["expected_duration_minutes"]
+
+            # القيمة الصحيحة الموجبة تُقبل
+            ok_res = await client.put(
+                f"/api/v1/production/orders/{order.id}/stages/ironing/duration",
+                json={"expected_duration_minutes": 90},
+            )
+            assert ok_res.status_code == 200, ok_res.text
+            assert ok_res.json()["expected_duration_minutes"] == 90
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_time_dec_02_factory_calendar_and_dual_measurements(session: AsyncSession, timing_test_data):
     """
     اختبار TIME-DEC-02:

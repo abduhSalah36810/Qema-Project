@@ -5,6 +5,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
+import { useDialog } from '@/components/feedback/DialogProvider';
 import { userLabel } from '@/lib/userLabel';
 import {
   ProductionDefect,
@@ -34,6 +35,7 @@ interface OrderExecutionSectionProps {
 export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ctx }) => {
   const { order, onOrderUpdated, refreshOrder, reportFailure, setStatus, setBusy } = ctx;
   const { hasPermission, user } = useAuth();
+  const dialog = useDialog();
   const canManageStages = hasPermission('production:stages:manage');
   const canReportDefects = hasPermission('production:orders:manage');
 
@@ -140,8 +142,16 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
   };
 
   const handleSkipStage = async (stageName: string) => {
-    const reason = window.prompt(`سبب تخطي مرحلة (${STAGE_TITLES_AR[stageName]}):`, 'موديل بدون كبسول / أزرار');
-    if (!reason || !reason.trim()) return;
+    const reason = await dialog.prompt({
+      title: `تخطي مرحلة (${STAGE_TITLES_AR[stageName]})`,
+      message: 'سيُسجل التخطي في سجل المراحل باسمك مع السبب، ولا يمكن التراجع إلا بإعادة فتح المرحلة.',
+      label: 'سبب التخطي',
+      initialValue: 'موديل بدون كبسول / أزرار',
+      required: true,
+      minLength: 3,
+      confirmLabel: 'تأكيد التخطي',
+    });
+    if (!reason) return;
     setIsProcessing(true);
     setBusy(true);
     setStatus(null);
@@ -157,11 +167,18 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
   };
 
   const handleAdjustDuration = async (stageName: string, currentMins: number) => {
-    const input = window.prompt(`تعديل المدة المعيارية المتوقعة لمرحلة (${STAGE_TITLES_AR[stageName]}) بالدقائق:`, String(currentMins));
+    const input = await dialog.prompt({
+      title: `تعديل المدة المعيارية المتوقعة لمرحلة (${STAGE_TITLES_AR[stageName]})`,
+      message: 'أدخل المدة بالدقائق كعدد صحيح موجب (1 على الأقل). الصفر أو القيم السالبة غير مسموحة لأنها تعطل مقارنة الأداء وكشف الاختناقات.',
+      label: 'المدة المتوقعة (دقائق)',
+      initialValue: String(currentMins > 0 ? currentMins : ''),
+      required: true,
+      confirmLabel: 'حفظ المدة',
+    });
     if (input === null) return;
     const mins = Number(input);
-    if (isNaN(mins) || mins < 0) {
-      setStatus({ type: 'error', text: 'يرجى إدخال عدد صحيح موجب من الدقائق.' });
+    if (isNaN(mins) || !Number.isInteger(mins) || mins <= 0) {
+      setStatus({ type: 'error', text: 'يرجى إدخال عدد دقائق صحيح موجب (1 دقيقة على الأقل). الصفر أو القيم السالبة غير مسموحة لأنها تعطل مقارنة الأداء وكشف الاختناقات.' });
       return;
     }
     setIsProcessing(true);

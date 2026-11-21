@@ -78,7 +78,7 @@ export function BalanceSheetView() {
   const handleOpenConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isInputBalanced) {
-      setOpeningError(`القيد غير متزن بمقدار ${diffInput.toFixed(2)} ج.م. يجب أن تتساوى النقدية والبنوك تماماً مع رأس المال.`);
+      setOpeningError(`القيد غير متزن بمقدار ${formatMoney(diffInput)}. يجب أن تتساوى النقدية والبنوك تماماً مع رأس المال.`);
       return;
     }
     if (parseFloat(bankBal) > 0 && bankAccounts.length > 1 && !bankAccountId) {
@@ -478,7 +478,7 @@ export function BalanceSheetView() {
                           <input type="number" step="0.01" min="0" value={treasuryBal} onChange={(e) => setTreasuryBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
                         </label>
                         <label>
-                          <span style={{ display: 'block', fontSize: '0.85rem' }}>رصيد الحساب البنكي (1020):</span>
+                          <span style={{ display: 'block', fontSize: '0.85rem' }}>رصيد الحساب البنكي (1030):</span>
                           <input type="number" step="0.01" min="0" value={bankBal} onChange={(e) => setBankBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
                         </label>
                         {parseFloat(bankBal) > 0 && bankAccounts.length > 0 && (
@@ -501,7 +501,7 @@ export function BalanceSheetView() {
                           </label>
                         )}
                         <div style={{ marginTop: '0.5rem', fontWeight: 700, textAlign: 'left', color: '#0f172a' }}>
-                          إجمالي النقدية والبنوك: {totalAssetsInput.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                          إجمالي النقدية والبنوك: {formatMoney(totalAssetsInput)}
                         </div>
                       </div>
                     </fieldset>
@@ -515,12 +515,12 @@ export function BalanceSheetView() {
                           <input type="number" step="0.01" min="0" value={capitalBal} onChange={(e) => setCapitalBal(e.target.value)} className="form-input" style={{ width: '100%', padding: '6px' }} />
                         </label>
                         <div style={{ marginTop: '0.5rem', fontWeight: 700, textAlign: 'left', color: '#0f172a' }}>
-                          إجمالي رأس المال: {totalLiabEquityInput.toLocaleString('ar-EG', { minimumFractionDigits: 2 })} ج.م
+                          إجمالي رأس المال: {formatMoney(totalLiabEquityInput)}
                         </div>
 
                         <div style={{ marginTop: '1.5rem', padding: '1rem', background: isInputBalanced ? '#ecfdf5' : '#fef2f2', border: `1px solid ${isInputBalanced ? '#10b981' : '#ef4444'}`, borderRadius: '6px' }}>
                           <div style={{ fontWeight: 700, color: isInputBalanced ? '#047857' : '#b91c1c' }}>
-                            {isInputBalanced ? '✅ القيد متزن تماماً' : `⚠️ الفرق الحسابي: ${diffInput.toFixed(2)} ج.م`}
+                            {isInputBalanced ? '✅ القيد متزن تماماً' : `⚠️ الفرق الحسابي: ${formatMoney(diffInput)}`}
                           </div>
                           <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#475569' }}>
                             {isInputBalanced

@@ -67,7 +67,7 @@ const MasterDataView = lazy(() =>
 
 import { TaskInboxView } from '@/features/inbox/TaskInboxView';
 import { apiClient, ApiError } from '@/lib/api';
-import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
+import { AuthProvider, isDemoStripVisible, useAuth } from '@/features/auth/AuthContext';
 import { SignInModal } from '@/features/auth/SignInModal';
 import { DialogProvider } from '@/components/feedback/DialogProvider';
 import type { NavFocus } from '@/lib/navigation';
@@ -914,8 +914,8 @@ function AppContent() {
 
         {/* مساحة لوحة التشغيل الفسيحة (Spacious Dashboard Area) */}
         <main className="dashboard-canvas">
-          {/* نسخة العرض: تمييز واضح للبيانات التجريبية عن بيانات المصنع الفعلية */}
-          {authMode === 'local_dev' && (
+          {/* نسخة العرض: تمييز واضح للبيانات التجريبية عن بيانات المصنع الفعلية — بناء التطوير فقط، لا يظهر في الإنتاج */}
+          {isDemoStripVisible(authMode, import.meta.env.DEV) && (
             <div className="demo-strip" role="status">
               <span className="demo-strip__icon" aria-hidden>🧪</span>
               <span className="demo-strip__text">
