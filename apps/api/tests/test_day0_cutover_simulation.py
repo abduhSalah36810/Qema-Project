@@ -1236,3 +1236,71 @@ async def test_migration_0035_accounting_locks_immutability(ctx):
     await session.rollback()
     assert "accounting_locks is append-only" in str(exc_del.value) or "غير قابل للحذف" in str(exc_del.value)
 
+
+@pytest.mark.asyncio
+async def test_day0_warehouse_manager_forbidden_opening_balances(ctx):
+    """
+    البند 18 من مراجعة المالك (أمان الأرصدة الافتتاحية):
+    التحقق الصارم من أن أمين المخزن (warehouse_manager) لا يملك صلاحية إدخال:
+    1. فواتير الموردين الافتتاحية (403 Forbidden).
+    2. الأرصدة الافتتاحية للعملاء (403 Forbidden).
+    3. القيد الافتتاحي العام للنقدية ورأس المال (403 Forbidden).
+    تقتصر هذه العمليات حصراً على المدير المالي والمدير العام.
+    """
+    session, a = ctx
+    tag = _tag()
+
+    sup = Supplier(
+        id=str(uuid.uuid4()),
+        name=f"مورد فحص الأمان {tag}",
+        code=f"SUP-SEC-{tag[:6]}",
+        is_active=True,
+        created_by=a["gm"].user.id,
+    )
+    cust = Customer(
+        id=str(uuid.uuid4()),
+        name=f"عميل فحص الأمان {tag}",
+        code=f"CUST-SEC-{tag[:6]}",
+        status="active",
+    )
+    session.add_all([sup, cust])
+    await session.commit()
+
+    # 1. محاولة أمين المخزن تسجيل فاتورة مورد افتتاحية -> رفض 403
+    res_sup = await a["wh"].post(f"{API}/finance/supplier-invoices/opening", json={
+        "supplier_id": sup.id,
+        "invoice_number": f"INV-WH-{tag}",
+        "invoice_date": datetime.now(timezone.utc).isoformat(),
+        "amount": 5000.0,
+        "is_advance": False,
+        "notes": "محاولة غير مصرح بها من أمين المخزن",
+    })
+    assert res_sup.status_code == 403, (
+        f"المتوقع 403 لأمين المخزن على فاتورة المورد الافتتاحية، لكن الاستجابة كانت: {res_sup.status_code}"
+    )
+
+    # 2. محاولة أمين المخزن تسجيل رصيد عميل افتتاحي -> رفض 403
+    res_cust = await a["wh"].post(f"{API}/customers/{cust.id}/opening-balances", json={
+        "original_order_number": f"HIST-WH-{tag}",
+        "order_date": datetime.now(timezone.utc).isoformat(),
+        "amount": 5000.0,
+        "is_advance": False,
+        "notes": "محاولة غير مصرح بها من أمين المخزن",
+    })
+    assert res_cust.status_code == 403, (
+        f"المتوقع 403 لأمين المخزن على رصيد العميل الافتتاحي، لكن الاستجابة كانت: {res_cust.status_code}"
+    )
+
+    # 3. محاولة أمين المخزن تسجيل القيد الافتتاحي العام للنقدية ورأس المال -> رفض 403
+    res_ob = await a["wh"].post(f"{API}/finance/opening-balances", json={
+        "accounting_start_date": date.today().isoformat(),
+        "treasury_balance": 50000.0,
+        "bank_balance": 50000.0,
+        "paid_in_capital": 100000.0,
+        "notes": "محاولة غير مصرح بها من أمين المخزن",
+    })
+    assert res_ob.status_code == 403, (
+        f"المتوقع 403 لأمين المخزن على القيد الافتتاحي العام، لكن الاستجابة كانت: {res_ob.status_code}"
+    )
+
+
