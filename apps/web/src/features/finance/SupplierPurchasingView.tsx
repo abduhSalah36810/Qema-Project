@@ -833,7 +833,7 @@ function AllocateSupplierPaymentModal({ invoice, onClose, onSuccess }: AllocateS
         style={{
           backgroundColor: '#ffffff',
           borderRadius: '12px',
-          maxWidth: '580px',
+          maxWidth: '680px',
           width: '100%',
           boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
           overflow: 'hidden',

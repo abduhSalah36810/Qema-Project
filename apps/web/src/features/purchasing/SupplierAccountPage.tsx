@@ -181,7 +181,7 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
     <section className="customer-account" aria-labelledby="supplier-account-title" dir="rtl">
       <div className="customer-account__topline">
         <button className="customer-back" type="button" onClick={onBack}>
-          ‹ العودة إلى المشتريات
+          ‹ العودة إلى قائمة الموردين
         </button>
         <span className={`customer-status ${supplier.is_active ? 'customer-status--active' : 'customer-status--inactive'}`}>
           {supplier.is_active ? 'مورد نشط' : 'مورد موقوف'}
@@ -199,7 +199,25 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
             <p>{supplier.address || 'العنوان غير مسجل'} · {supplier.phone || 'الهاتف غير مسجل'}</p>
           </div>
         </div>
-        <div className="customer-account__actions">
+        <div className="customer-account__actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {canRequestPayment && invoices.some((inv) => Number(inv.payable_balance ?? 0) > 0.001) && (
+            <button
+              className="btn btn--primary"
+              type="button"
+              onClick={() => {
+                const firstOpen = invoices.find((inv) => Number(inv.payable_balance ?? 0) > 0.001);
+                if (firstOpen) {
+                  setPaymentInvoice(firstOpen);
+                  setPaymentAmount(String(Number(firstOpen.payable_balance ?? 0)));
+                  setPaymentDesc(`سداد دفعة للمورد ${supplier.name} عن فاتورة ${firstOpen.invoice_number}`);
+                }
+              }}
+              disabled={saving}
+              style={{ fontWeight: 600 }}
+            >
+              ＋ تسجيل دفعة مورد
+            </button>
+          )}
           {canCreateInvoices && (
             <button
               className="btn btn--secondary"
@@ -448,42 +466,255 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
 
       {/* Payment Request Modal */}
       {paymentInvoice && (
-        <div className="modal-backdrop" onClick={() => setPaymentInvoice(null)} role="dialog" aria-modal="true">
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} dir="rtl" style={{ maxWidth: '480px' }}>
-            <h3 style={{ margin: '0 0 1rem' }}>سداد دفعة على فاتورة المورد</h3>
-            <p className="form-hint" style={{ marginBottom: '1rem' }}>
-              فاتورة: <strong>{paymentInvoice.invoice_number}</strong> · المستحق حالياً:{' '}
-              <strong>{formatMoney(paymentInvoice.payable_balance ?? 0)}</strong>
-            </p>
-            <form onSubmit={(e) => void handlePaymentSubmit(e)} style={{ display: 'grid', gap: '0.85rem' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>مبلغ السداد المطلوب (ج.م) *</span>
-                <input
-                  className="form-input"
-                  required
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  max={Number(paymentInvoice.payable_balance ?? 0)}
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                />
-              </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>البيان / ملاحظات السداد</span>
+        <div className="modal-backdrop" onClick={() => setPaymentInvoice(null)} role="dialog" aria-modal="true" aria-labelledby="pay-modal-title">
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+            style={{
+              maxWidth: '680px',
+              width: '100%',
+              borderRadius: '14px',
+              boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)',
+              overflow: 'hidden',
+              border: '1px solid #e2e8f0',
+              background: '#ffffff',
+            }}
+          >
+            {/* Header */}
+            <header
+              style={{
+                padding: '1.25rem 1.75rem',
+                backgroundColor: '#f8fafc',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div>
+                <h3 id="pay-modal-title" style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, color: '#0f172a' }}>
+                  تسجيل دفعة مورد · طلب سداد
+                </h3>
+                <span style={{ fontSize: '0.875rem', color: '#64748b', display: 'block', marginTop: '0.25rem' }}>
+                  المورد: <strong style={{ color: '#0f172a' }}>{supplier.name}</strong> ({supplier.code})
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPaymentInvoice(null)}
+                disabled={saving}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  color: '#64748b',
+                  cursor: 'pointer',
+                  padding: '0.25rem 0.5rem',
+                  borderRadius: '6px',
+                }}
+                aria-label="إغلاق"
+              >
+                ✕
+              </button>
+            </header>
+
+            {/* Financial Details Bar */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                gap: '0.75rem',
+                padding: '1.25rem 1.75rem',
+                backgroundColor: '#f1f5f9',
+                borderBottom: '1px solid #e2e8f0',
+              }}
+            >
+              <div style={{ backgroundColor: '#ffffff', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: '0.8rem', color: '#64748b', display: 'block' }}>رقم الفاتورة</span>
+                <strong style={{ fontSize: '0.95rem', color: '#0f172a' }}>{paymentInvoice.invoice_number}</strong>
+                <small style={{ display: 'block', color: '#94a3b8', fontSize: '0.75rem' }}>{paymentInvoice.internal_number}</small>
+              </div>
+              <div style={{ backgroundColor: '#ffffff', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: '0.8rem', color: '#64748b', display: 'block' }}>إجمالي الفاتورة</span>
+                <strong style={{ fontSize: '1rem', color: '#0f172a' }}>{formatMoney(paymentInvoice.invoice_total)}</strong>
+              </div>
+              <div style={{ backgroundColor: '#ffffff', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <span style={{ fontSize: '0.8rem', color: '#64748b', display: 'block' }}>المسدد حتى الآن</span>
+                <strong style={{ fontSize: '1rem', color: '#16a34a' }}>{formatMoney(paymentInvoice.paid_total)}</strong>
+              </div>
+              <div style={{ backgroundColor: '#ecfdf5', padding: '0.75rem 1rem', borderRadius: '8px', border: '1px solid #6ee7b7' }}>
+                <span style={{ fontSize: '0.8rem', color: '#065f46', display: 'block', fontWeight: 600 }}>المستحق للسداد</span>
+                <strong style={{ fontSize: '1.15rem', color: '#047857' }}>
+                  {formatMoney(paymentInvoice.payable_balance ?? 0)}
+                </strong>
+              </div>
+            </div>
+
+            {/* Form */}
+            <form onSubmit={(e) => void handlePaymentSubmit(e)} style={{ padding: '1.5rem 1.75rem', display: 'grid', gap: '1.25rem' }}>
+              {invoices.filter((inv) => Number(inv.payable_balance ?? 0) > 0.001).length > 1 && (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>الفاتورة المحددة للسداد:</span>
+                  <select
+                    className="form-input"
+                    value={paymentInvoice.id}
+                    onChange={(e) => {
+                      const found = invoices.find((inv) => inv.id === e.target.value);
+                      if (found) {
+                        setPaymentInvoice(found);
+                        setPaymentAmount(String(Number(found.payable_balance ?? 0)));
+                        setPaymentDesc(`سداد دفعة للمورد ${supplier.name} عن فاتورة ${found.invoice_number}`);
+                      }
+                    }}
+                    style={{ fontSize: '0.95rem', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                  >
+                    {invoices.filter((inv) => Number(inv.payable_balance ?? 0) > 0.001).map((inv) => (
+                      <option key={inv.id} value={inv.id}>
+                        فاتورة {inv.invoice_number} · المستحق: {formatMoney(inv.payable_balance ?? 0)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {/* Amount input + Quick Buttons */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
+                  <label htmlFor="pay-amount-input" style={{ fontSize: '0.95rem', fontWeight: 600, color: '#1e293b' }}>
+                    مبلغ السداد المطلوب (ج.م) <span style={{ color: '#dc2626' }}>*</span>
+                  </label>
+                  {/* Quick percentage buttons */}
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.82rem', borderRadius: '6px', fontWeight: 600 }}
+                      onClick={() => setPaymentAmount(String(Number(paymentInvoice.payable_balance ?? 0)))}
+                    >
+                      كامل المستحق (100%)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.82rem', borderRadius: '6px' }}
+                      onClick={() => setPaymentAmount((Number(paymentInvoice.payable_balance ?? 0) / 2).toFixed(2))}
+                    >
+                      النصف (50%)
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--secondary"
+                      style={{ padding: '0.25rem 0.65rem', fontSize: '0.82rem', borderRadius: '6px' }}
+                      onClick={() => setPaymentAmount((Number(paymentInvoice.payable_balance ?? 0) / 4).toFixed(2))}
+                    >
+                      الربع (25%)
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <input
+                    id="pay-amount-input"
+                    className="form-input"
+                    required
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max={Number(paymentInvoice.payable_balance ?? 0)}
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    style={{
+                      fontSize: '1.25rem',
+                      fontWeight: 700,
+                      padding: '0.75rem 1rem',
+                      width: '100%',
+                      borderRadius: '8px',
+                      border: '2px solid #cbd5e1',
+                      color: '#0f172a',
+                    }}
+                    placeholder="0.00"
+                    autoFocus
+                  />
+                </div>
+
+                {/* Remaining preview */}
+                {Number(paymentAmount) > 0 && (
+                  <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '6px', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>
+                      المتبقي على الفاتورة بعد السداد:{' '}
+                      <strong style={{ color: '#0f172a' }}>
+                        {formatMoney(Math.max(0, Number(paymentInvoice.payable_balance ?? 0) - Number(paymentAmount)))}
+                      </strong>
+                    </span>
+                    {Number(paymentAmount) > Number(paymentInvoice.payable_balance ?? 0) && (
+                      <span style={{ color: '#dc2626', fontWeight: 600 }}>⚠️ المبلغ أكبر من المستحق!</span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Description / Notes */}
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>البيان وملاحظات السداد</span>
                 <input
                   className="form-input"
                   value={paymentDesc}
                   onChange={(e) => setPaymentDesc(e.target.value)}
                   placeholder="بيان سبب الصرف أو المرجع"
+                  style={{ fontSize: '0.95rem', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 />
               </label>
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                <button type="button" className="btn btn--secondary" onClick={() => setPaymentInvoice(null)} disabled={saving}>
+
+              {/* Status Notice */}
+              <div
+                style={{
+                  padding: '0.85rem 1rem',
+                  borderRadius: '8px',
+                  backgroundColor: roles.includes('finance_manager') ? '#f0fdf4' : '#eff6ff',
+                  border: `1px solid ${roles.includes('finance_manager') ? '#86efac' : '#bfdbfe'}`,
+                  fontSize: '0.85rem',
+                  color: roles.includes('finance_manager') ? '#166534' : '#1e40af',
+                }}
+              >
+                {roles.includes('finance_manager') ? (
+                  <span>
+                    ⚡ <strong>اعتماد فوري:</strong> بصفتك المدير المالي، سيتم اعتماد سند الصرف وترحيله فورياً في الخزينة وخصم المبلغ من مستحقات المورد.
+                  </span>
+                ) : (
+                  <span>
+                    ℹ️ سيتم تسجيل طلب السداد كإذن صرف معلق، ويتم خصم النقدية بعد اعتماد السند من شاشة الخزينة والاعتمادات.
+                  </span>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '12px',
+                  justifyContent: 'flex-end',
+                  paddingTop: '0.75rem',
+                  borderTop: '1px solid #f1f5f9',
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  onClick={() => setPaymentInvoice(null)}
+                  disabled={saving}
+                  style={{ padding: '0.65rem 1.35rem', fontSize: '0.95rem' }}
+                >
                   إلغاء
                 </button>
-                <button type="submit" className="btn btn--primary" disabled={saving}>
-                  {saving ? 'جاري التسجيل...' : 'تأكيد طلب السداد'}
+                <button
+                  type="submit"
+                  className="btn btn--primary"
+                  disabled={saving || !paymentAmount || Number(paymentAmount) <= 0 || Number(paymentAmount) > Number(paymentInvoice.payable_balance ?? 0) + 0.001}
+                  style={{ padding: '0.65rem 1.85rem', fontSize: '0.95rem', fontWeight: 600 }}
+                >
+                  {saving ? 'جاري التسجيل...' : '✓ تأكيد طلب السداد'}
                 </button>
               </div>
             </form>
@@ -493,21 +724,69 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
 
       {/* Allocation Modal */}
       {allocatingInvoice && (
-        <div className="modal-backdrop" onClick={() => setAllocatingInvoice(null)} role="dialog" aria-modal="true">
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} dir="rtl" style={{ maxWidth: '520px' }}>
-            <h3 style={{ margin: '0 0 1rem' }}>تخصيص دفعة معلقة على الفاتورة</h3>
-            <p className="form-hint" style={{ marginBottom: '1rem' }}>
-              فاتورة: <strong>{allocatingInvoice.invoice_number}</strong> · المستحق:{' '}
-              <strong>{formatMoney(allocatingInvoice.payable_balance ?? 0)}</strong>
-            </p>
-            <form onSubmit={(e) => void handleAllocateSubmit(e)} style={{ display: 'grid', gap: '0.85rem' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>اختر سند الصرف المعلق *</span>
+        <div className="modal-backdrop" onClick={() => setAllocatingInvoice(null)} role="dialog" aria-modal="true" aria-labelledby="alloc-modal-title">
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+            style={{
+              maxWidth: '680px',
+              width: '100%',
+              borderRadius: '14px',
+              boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)',
+              overflow: 'hidden',
+              border: '1px solid #e2e8f0',
+              background: '#ffffff',
+            }}
+          >
+            <header
+              style={{
+                padding: '1.25rem 1.75rem',
+                backgroundColor: '#f8fafc',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div>
+                <h3 id="alloc-modal-title" style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, color: '#0f172a' }}>
+                  تخصيص دفعة معلقة على الفاتورة
+                </h3>
+                <span style={{ fontSize: '0.875rem', color: '#64748b', display: 'block', marginTop: '0.25rem' }}>
+                  فاتورة: <strong style={{ color: '#0f172a' }}>{allocatingInvoice.invoice_number}</strong> · المستحق:{' '}
+                  <strong style={{ color: '#047857' }}>{formatMoney(allocatingInvoice.payable_balance ?? 0)}</strong>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAllocatingInvoice(null)}
+                disabled={saving}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  color: '#64748b',
+                  cursor: 'pointer',
+                  padding: '0.25rem 0.5rem',
+                  borderRadius: '6px',
+                }}
+                aria-label="إغلاق"
+              >
+                ✕
+              </button>
+            </header>
+
+            <form onSubmit={(e) => void handleAllocateSubmit(e)} style={{ padding: '1.5rem 1.75rem', display: 'grid', gap: '1.25rem' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>اختر سند الصرف المعلق *</span>
                 <select
                   className="form-input"
                   required
                   value={selectedPaymentId}
                   onChange={(e) => setSelectedPaymentId(e.target.value)}
+                  style={{ fontSize: '0.95rem', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 >
                   <option value="">اختر الدفعة غير المخصصة</option>
                   {unallocatedPayments.map((p) => (
@@ -517,8 +796,9 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
                   ))}
                 </select>
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>المبلغ المراد تخصيصه (ج.م) *</span>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>المبلغ المراد تخصيصه (ج.م) *</span>
                 <input
                   className="form-input"
                   required
@@ -527,22 +807,26 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
                   min="0.01"
                   value={allocateAmount}
                   onChange={(e) => setAllocateAmount(e.target.value)}
+                  style={{ fontSize: '1.15rem', fontWeight: 700, padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 />
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>ملاحظات التخصيص</span>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>ملاحظات التخصيص</span>
                 <input
                   className="form-input"
                   value={allocateNotes}
                   onChange={(e) => setAllocateNotes(e.target.value)}
                   placeholder="ملاحظات توثيق التخصيص"
+                  style={{ fontSize: '0.95rem', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 />
               </label>
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                <button type="button" className="btn btn--secondary" onClick={() => setAllocatingInvoice(null)} disabled={saving}>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '0.75rem', borderTop: '1px solid #f1f5f9' }}>
+                <button type="button" className="btn btn--secondary" onClick={() => setAllocatingInvoice(null)} disabled={saving} style={{ padding: '0.65rem 1.35rem', fontSize: '0.95rem' }}>
                   إلغاء
                 </button>
-                <button type="submit" className="btn btn--teal" disabled={saving || !selectedPaymentId} style={{ background: '#0d9488', color: '#fff' }}>
+                <button type="submit" className="btn btn--teal" disabled={saving || !selectedPaymentId} style={{ background: '#0d9488', color: '#fff', padding: '0.65rem 1.85rem', fontSize: '0.95rem', fontWeight: 600 }}>
                   {saving ? 'جاري التخصيص...' : 'تأكيد التخصيص'}
                 </button>
               </div>
@@ -553,35 +837,86 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
 
       {/* Opening Balance Invoice Modal */}
       {openingModalOpen && (
-        <div className="modal-backdrop" onClick={() => setOpeningModalOpen(false)} role="dialog" aria-modal="true">
-          <div className="modal-card" onClick={(e) => e.stopPropagation()} dir="rtl" style={{ maxWidth: '480px' }}>
-            <h3 style={{ margin: '0 0 1rem' }}>تسجيل رصيد افتتاحي للمورد</h3>
-            <p className="form-hint" style={{ marginBottom: '1rem' }}>
-              يُنشئ فاتورة افتتاحية للمورد. بعد الحفظ يعتمدها المدير العام أو المالي لتسجيل الرصيد محاسبياً.
-            </p>
-            <form onSubmit={(e) => void handleOpeningSubmit(e)} style={{ display: 'grid', gap: '0.85rem' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>رقم الفاتورة الافتتاحية *</span>
+        <div className="modal-backdrop" onClick={() => setOpeningModalOpen(false)} role="dialog" aria-modal="true" aria-labelledby="opening-modal-title">
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            dir="rtl"
+            style={{
+              maxWidth: '620px',
+              width: '100%',
+              borderRadius: '14px',
+              boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25)',
+              overflow: 'hidden',
+              border: '1px solid #e2e8f0',
+              background: '#ffffff',
+            }}
+          >
+            <header
+              style={{
+                padding: '1.25rem 1.75rem',
+                backgroundColor: '#f8fafc',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <div>
+                <h3 id="opening-modal-title" style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700, color: '#0f172a' }}>
+                  تسجيل رصيد افتتاحي للمورد
+                </h3>
+                <span style={{ fontSize: '0.85rem', color: '#64748b', display: 'block', marginTop: '0.25rem' }}>
+                  يُنشئ فاتورة افتتاحية للمورد. بعد الحفظ يعتمدها المدير المالي لتسجيل الرصيد محاسبياً.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpeningModalOpen(false)}
+                disabled={saving}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: '1.5rem',
+                  lineHeight: 1,
+                  color: '#64748b',
+                  cursor: 'pointer',
+                  padding: '0.25rem 0.5rem',
+                  borderRadius: '6px',
+                }}
+                aria-label="إغلاق"
+              >
+                ✕
+              </button>
+            </header>
+
+            <form onSubmit={(e) => void handleOpeningSubmit(e)} style={{ padding: '1.5rem 1.75rem', display: 'grid', gap: '1.25rem' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>رقم الفاتورة الافتتاحية *</span>
                 <input
                   className="form-input"
                   required
                   value={openingInvoiceNumber}
                   onChange={(e) => setOpeningInvoiceNumber(e.target.value)}
                   placeholder="مثال: OPEN-SUP-001"
+                  style={{ fontSize: '0.95rem', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 />
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>تاريخ الرصيد الافتتاحي *</span>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>تاريخ الرصيد الافتتاحي *</span>
                 <input
                   className="form-input"
                   required
                   type="date"
                   value={openingDate}
                   onChange={(e) => setOpeningDate(e.target.value)}
+                  style={{ fontSize: '0.95rem', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 />
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>إجمالي الرصيد المستحق (ج.م) *</span>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>إجمالي الرصيد المستحق (ج.م) *</span>
                 <input
                   className="form-input"
                   required
@@ -591,22 +926,26 @@ export function SupplierAccountPage({ supplier, onBack, onSupplierUpdated: _onSu
                   value={openingTotal}
                   onChange={(e) => setOpeningTotal(e.target.value)}
                   placeholder="0.00"
+                  style={{ fontSize: '1.15rem', fontWeight: 700, padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 />
               </label>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>ملاحظات</span>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#1e293b' }}>ملاحظات</span>
                 <input
                   className="form-input"
                   value={openingNotes}
                   onChange={(e) => setOpeningNotes(e.target.value)}
                   placeholder="رصيد افتتاحي مستحق قبل بدء النظام"
+                  style={{ fontSize: '0.95rem', padding: '0.65rem 0.85rem', borderRadius: '8px', border: '1px solid #cbd5e1' }}
                 />
               </label>
-              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                <button type="button" className="btn btn--secondary" onClick={() => setOpeningModalOpen(false)} disabled={saving}>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '0.75rem', borderTop: '1px solid #f1f5f9' }}>
+                <button type="button" className="btn btn--secondary" onClick={() => setOpeningModalOpen(false)} disabled={saving} style={{ padding: '0.65rem 1.35rem', fontSize: '0.95rem' }}>
                   إلغاء
                 </button>
-                <button type="submit" className="btn btn--primary" disabled={saving}>
+                <button type="submit" className="btn btn--primary" disabled={saving} style={{ padding: '0.65rem 1.85rem', fontSize: '0.95rem', fontWeight: 600 }}>
                   {saving ? 'جاري الحفظ...' : 'حفظ الفاتورة الافتتاحية'}
                 </button>
               </div>
