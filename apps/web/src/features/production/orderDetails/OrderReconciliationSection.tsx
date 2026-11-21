@@ -235,7 +235,8 @@ export const OrderReconciliationSection: React.FC<OrderReconciliationSectionProp
           )}
 
           <form onSubmit={(e) => void handleReconcile(e)}>
-            <table className="order-detail-table" aria-label="تسوية خامات الورشة">
+            <div className="order-table-wrap" style={{ overflowX: 'auto', marginBottom: '16px' }}>
+              <table className="order-detail-table" aria-label="تسوية خامات الورشة" style={{ width: '100%', minWidth: '950px', fontSize: '14px' }}>
               <thead>
                 <tr>
                   <th>الخامة</th>
@@ -313,6 +314,7 @@ export const OrderReconciliationSection: React.FC<OrderReconciliationSectionProp
                 })}
               </tbody>
             </table>
+            </div>
             <p className="form-hint">إجمالي رصيد خامات الورشة لهذا الأمر: <strong>{wipSummary.net_wip_balance}</strong></p>
             {canReconcile ? (
               canSubmitRecon && (

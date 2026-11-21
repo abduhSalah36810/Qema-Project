@@ -123,29 +123,30 @@ export const OrderClosureSection: React.FC<OrderClosureSectionProps> = ({
                 />
               </label>
               {blockingReasons.length > 0 && (
-                <div className="modal-alert modal-alert--warning close-blockers" role="note" id="close-blockers" style={{ margin: '0.5rem 0' }}>
+                <div className="modal-alert modal-alert--warning close-blockers" role="note" id="close-blockers" style={{ margin: '0.5rem 0', fontSize: '14px' }}>
                   <div className="modal-alert__content" style={{ display: 'block' }}>
-                    <strong>لا يمكن إغلاق الأمر الآن (موانع الإغلاق):</strong>
+                    <strong style={{ fontSize: '14px' }}>لا يمكن إغلاق الأمر الآن (موانع الإغلاق):</strong>
                     <ul style={{ margin: '0.35rem 0 0', paddingInlineStart: '1.25rem' }}>
-                      {blockingReasons.map((reason) => <li key={reason}>{reason}</li>)}
+                      {blockingReasons.map((reason) => <li key={reason} style={{ fontSize: '14px', lineHeight: '1.6' }}>{reason}</li>)}
                     </ul>
                   </div>
                 </div>
               )}
               {blockingReasons.length === 0 && (
-                wipSummary && <p className="form-hint" style={{ color: '#166534' }}>✓ استوفت متطلبات الإغلاق والأمر جاهز للإغلاق النهائي.</p>
+                wipSummary && <p className="form-hint" style={{ color: '#166534', fontSize: '14px' }}>✓ استوفت متطلبات الإغلاق والأمر جاهز للإغلاق النهائي.</p>
               )}
               {blockingReasons.length === 0 && hasDiscrepancies && !closeForm.discrepancy_signoff && (
-                <p className="form-hint" role="note" id="close-blockers" style={{ color: '#b91c1c' }}>فعّل إقرار فروقات الاستلام أعلاه ليصبح الإغلاق متاحاً.</p>
+                <p className="form-hint" role="note" id="close-blockers" style={{ color: '#b91c1c', fontSize: '14px' }}>فعّل إقرار فروقات الاستلام أعلاه ليصبح الإغلاق متاحاً.</p>
               )}
               {blockingReasons.length === 0 && isUnderProduced && closeForm.under_production_reason.trim().length === 0 && (
-                <p className="form-hint" role="note" id="close-blockers" style={{ color: '#b91c1c' }}>اكتب سبب نقص الإنتاج أعلاه ليصبح الإغلاق متاحاً.</p>
+                <p className="form-hint" role="note" id="close-blockers" style={{ color: '#b91c1c', fontSize: '14px' }}>اكتب سبب نقص الإنتاج أعلاه ليصبح الإغلاق متاحاً.</p>
               )}
               <div>
                 <button
                   type="submit"
                   className="btn btn--primary"
                   aria-describedby="close-blockers"
+                  style={{ minWidth: '200px', height: '42px', fontSize: '14px', fontWeight: 600 }}
                   disabled={
                     busy ||
                     blockingReasons.length > 0 ||

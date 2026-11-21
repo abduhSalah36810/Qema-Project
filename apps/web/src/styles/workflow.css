@@ -361,8 +361,9 @@ th {
 .order-progress__step--done .order-progress__dot { background: var(--status-green); border-color: var(--status-green); color: #fff; }
 .order-progress__step--current { color: var(--text-main); font-weight: 600; }
 .order-progress__step--current .order-progress__dot { border-color: var(--teal-primary); color: var(--teal-primary); box-shadow: 0 0 0 4px var(--teal-glow); }
-.order-progress__label { line-height: 1.3; }
-.order-progress__role { color: var(--text-light); font-size: 0.72rem; font-weight: 400; }
+.order-progress__label { line-height: 1.3; font-size: 14px; }
+.order-progress__role { color: var(--text-light); font-size: 12px; font-weight: 500; }
+
 .order-progress__next {
   margin-top: 12px;
   display: flex;

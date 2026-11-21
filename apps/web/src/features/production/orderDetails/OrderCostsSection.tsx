@@ -273,55 +273,55 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '24px' }}>
         {/* 1. تكلفة خامات المصنع */}
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#64748b' }}>خامات المصنع المباشرة</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>خامات المصنع المباشرة</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
             {canViewPrices ? `${Number(costSheet?.factory_materials_cost ?? order.actual_material_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+          <div style={{ fontSize: '12px', color: '#94a3b8' }}>
             {isCmt ? 'مستلزمات وإضافات المصنع فقط' : 'إجمالي الأقمشة والمستلزمات'}
           </div>
         </div>
 
         {/* 2. أجور العمالة المباشرة */}
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#64748b' }}>أجور التشغيل المباشرة</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>أجور التشغيل المباشرة</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
             {canViewPrices ? `${Number(costSheet?.labor_detail.total_cost ?? order.actual_labor_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+          <div style={{ fontSize: '12px', color: '#94a3b8' }}>
             {order.labor_costing_method === 'time_based' ? 'حسب ساعات العمل' : 'حسب القطع المنتجة'}
           </div>
         </div>
 
         {/* 3. التكاليف غير المباشرة */}
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#64748b' }}>المصاريف غير المباشرة الموزعة</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>المصاريف غير المباشرة الموزعة</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
             {canViewPrices ? `${Number(costSheet?.overhead_detail.total_cost ?? order.actual_overhead_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+          <div style={{ fontSize: '12px', color: '#94a3b8' }}>
             {costSheet?.overhead_detail.basis_label_ar || 'بدون تحميل إضافي'}
           </div>
         </div>
 
         {/* 4. إجمالي تكلفة أمر التشغيل وتكلفة القطعة */}
         <div style={{ padding: '14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #cbd5e1', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#475569', fontWeight: 600 }}>إجمالي تكلفة أمر التشغيل</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>إجمالي تكلفة أمر التشغيل</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
             {canViewPrices ? `${Number(costSheet?.total_factory_manufacturing_cost ?? order.total_actual_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#475569' }}>
+          <div style={{ fontSize: '12px', color: '#475569' }}>
             تكلفة القطعة: {canViewPrices ? `${Number(costSheet?.unit_factory_cost ?? order.unit_manufacturing_cost ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
         </div>
 
         {/* 5. سعر الخدمة / الإيراد المتوقع */}
         <div style={{ padding: '14px', background: '#eff6ff', borderRadius: '8px', border: '1px solid #bfdbfe', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#1e40af' }}>{isCmt ? 'أتعاب التشغيل المستهدفة' : 'سعر البيع المستهدف'}</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#1e3a8a', margin: '4px 0' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#1e40af' }}>{isCmt ? 'أتعاب التشغيل المستهدفة' : 'سعر البيع المستهدف'}</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#1e3a8a', margin: '4px 0' }}>
             {canViewPrices ? `${Number(costSheet?.expected_revenue ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#3b82f6' }}>
+          <div style={{ fontSize: '12px', color: '#3b82f6' }}>
             {canViewPrices ? `@ ${Number(costSheet?.agreed_service_price ?? order.agreed_service_price ?? 0).toFixed(2)} ج.م / قطعة` : '—'}
           </div>
         </div>
@@ -336,13 +336,13 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
             boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
           }}
         >
-          <div style={{ fontSize: '0.8rem', color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#047857' : '#b91c1c' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#047857' : '#b91c1c' }}>
             مجمل الربح والنسبة
           </div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#065f46' : '#991b1b', margin: '4px 0' }}>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#065f46' : '#991b1b', margin: '4px 0' }}>
             {canViewPrices ? `${Number(costSheet?.gross_margin_amount ?? 0).toFixed(2)} ج.م` : '—'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#059669' : '#dc2626' }}>
+          <div style={{ fontSize: '12px', color: (costSheet?.gross_margin_amount ?? 0) >= 0 ? '#059669' : '#dc2626' }}>
             هامش الربح: {canViewPrices ? `${Number(costSheet?.gross_margin_pct ?? 0).toFixed(1)}%` : '—'}
           </div>
         </div>
@@ -363,8 +363,8 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
             <span className="badge badge--success">0.00 ج.م على المصنع</span>
           </div>
 
-          <div className="table-responsive">
-            <table className="preview-table table--compact">
+          <div className="table-responsive" style={{ overflowX: 'auto', marginBottom: '16px' }}>
+            <table className="preview-table table--compact" style={{ width: '100%', minWidth: '750px', fontSize: '14px' }}>
               <thead>
                 <tr>
                   <th>الصنف / الخامة</th>
@@ -424,8 +424,8 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
             )}
           </div>
 
-          <div className="table-responsive">
-            <table className="preview-table table--compact">
+          <div className="table-responsive" style={{ overflowX: 'auto', marginBottom: '16px' }}>
+            <table className="preview-table table--compact" style={{ width: '100%', minWidth: '750px', fontSize: '14px' }}>
               <thead>
                 <tr>
                   <th>الصنف / الخامة</th>
@@ -705,8 +705,8 @@ export const OrderCostsSection: React.FC<OrderCostsSectionProps> = ({ ctx }) => 
           )}
         </div>
 
-        <div className="table-responsive">
-          <table className="preview-table table--compact">
+        <div className="table-responsive" style={{ overflowX: 'auto', marginBottom: '16px' }}>
+          <table className="preview-table table--compact" style={{ width: '100%', minWidth: '750px', fontSize: '14px' }}>
             <thead>
               <tr>
                 <th>الخامة</th>

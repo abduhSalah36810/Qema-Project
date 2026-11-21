@@ -62,8 +62,8 @@ function OrderBomSnapshot({ order, orderItems }: { order: SectionContext['order'
                   {it.bom_version_number ? <span className="status-badge status-badge--action">إصدار المستلزمات {it.bom_version_number}</span> : <span className="status-badge status-badge--muted">رقم الإصدار غير متاح</span>}
                 </span>
               </header>
-              <div className="payroll-table-wrap">
-                <table className="md-table order-bom__table">
+              <div className="payroll-table-wrap" style={{ overflowX: 'auto', marginBottom: '12px' }}>
+                <table className="md-table order-bom__table" style={{ width: '100%', minWidth: '650px', fontSize: '14px' }}>
                   <thead><tr><th>الصنف</th><th>الوحدة</th><th>الكمية للقطعة</th><th>إجمالي السطر</th></tr></thead>
                   <tbody>
                     {(it.bom_lines ?? []).map((b) => (
@@ -87,8 +87,8 @@ function OrderBomSnapshot({ order, orderItems }: { order: SectionContext['order'
           )}
 
           <h4 style={{ margin: '16px 0 6px', fontWeight: 600 }}>إجمالي احتياجات الأمر (مجمعة حسب الصنف)</h4>
-          <div className="payroll-table-wrap">
-            <table className="md-table order-bom__table">
+          <div className="payroll-table-wrap" style={{ overflowX: 'auto', marginBottom: '12px' }}>
+            <table className="md-table order-bom__table" style={{ width: '100%', minWidth: '750px', fontSize: '14px' }}>
               <thead>
                 <tr><th>الصنف</th><th>الوحدة</th><th>المطلوب حسب المستلزمات</th><th>المخطط في الأمر</th><th>المنصرف</th><th>المستلم بالورشة</th></tr>
               </thead>
@@ -140,7 +140,7 @@ export const OrderOverviewSection: React.FC<OrderOverviewSectionProps> = ({
   orderItems,
   demands,
   claims = [],
-  wipSummary,
+  wipSummary: _wipSummary,
   onGoToPageTab,
   onOpenProcurementModal,
 }) => {
@@ -260,23 +260,17 @@ export const OrderOverviewSection: React.FC<OrderOverviewSectionProps> = ({
               )}
 
               {pendingReturns > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', color: '#0369a1' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.9rem', color: '#0369a1' }}>
                   <span>🔄</span>
                   <span>يوجد <strong>{pendingReturns} مرتجع ورشة</strong> بانتظار الاستلام أو التسوية الإدارية.</span>
                   <button
                     type="button"
                     className="btn btn--sm btn--secondary"
                     onClick={() => onGoToPageTab('reconcile')}
-                    style={{ padding: '2px 8px', fontSize: '0.78rem' }}
+                    style={{ padding: '2px 8px', fontSize: '12px' }}
                   >
                     تسوية المرتجعات ←
                   </button>
-                </div>
-              )}
-
-              {wipSummary && wipSummary.blocking_reasons.length > 0 && order.status !== 'closed' && (
-                <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: '4px' }}>
-                  🔒 شروط تمنع الإغلاق النهائي حالياً: {wipSummary.blocking_reasons.join(' · ')}
                 </div>
               )}
             </div>
@@ -320,46 +314,46 @@ export const OrderOverviewSection: React.FC<OrderOverviewSectionProps> = ({
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '20px' }}>
         {/* المستهدف الإجمالي */}
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#64748b' }}>🎯 الكمية المستهدفة للدفعة</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
-            {targetQty.toLocaleString('ar-EG')} <small style={{ fontSize: '0.85rem' }}>قطعة</small>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>🎯 الكمية المستهدفة للدفعة</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 700, color: '#0f172a', margin: '4px 0' }}>
+            {targetQty.toLocaleString('ar-EG')} <small style={{ fontSize: '0.9rem' }}>قطعة</small>
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+          <div style={{ fontSize: '12px', color: '#94a3b8' }}>
             {orderItems.length} مقاسات / موديلات مسجلة
           </div>
         </div>
 
         {/* المستلم سليم في مخزن التام */}
         <div style={{ padding: '14px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #bbf7d0', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#166534' }}>📦 المستلم سليم (مخزن التام)</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#15803d', margin: '4px 0' }}>
-            {totalReceived.toLocaleString('ar-EG')} <small style={{ fontSize: '0.85rem' }}>قطعة</small>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#166534' }}>📦 المستلم سليم (مخزن التام)</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 700, color: '#15803d', margin: '4px 0' }}>
+            {totalReceived.toLocaleString('ar-EG')} <small style={{ fontSize: '0.9rem' }}>قطعة</small>
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#166534' }}>
+          <div style={{ fontSize: '12px', color: '#166534', fontWeight: 600 }}>
             نسبة الإنجاز: {progressPct}%
           </div>
         </div>
 
         {/* المتبقي قيد التشغيل في الورشة */}
         <div style={{ padding: '14px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '0.8rem', color: '#64748b' }}>⏳ المتبقي قيد التشغيل (WIP)</div>
-          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: remainingQty > 0 ? '#d97706' : '#64748b', margin: '4px 0' }}>
-            {remainingQty.toLocaleString('ar-EG')} <small style={{ fontSize: '0.85rem' }}>قطعة</small>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>⏳ المتبقي قيد التشغيل (WIP)</div>
+          <div style={{ fontSize: '1.45rem', fontWeight: 700, color: remainingQty > 0 ? '#d97706' : '#64748b', margin: '4px 0' }}>
+            {remainingQty.toLocaleString('ar-EG')} <small style={{ fontSize: '0.9rem' }}>قطعة</small>
           </div>
-          <div style={{ fontSize: '0.75rem', color: totalRejected > 0 ? '#b91c1c' : '#64748b' }}>
+          <div style={{ fontSize: '12px', color: totalRejected > 0 ? '#b91c1c' : '#64748b' }}>
             {totalRejected > 0 ? `مرفوض: ${totalRejected} قطعة · ` : ''}المراحل المنجزة: {completedStagesCount} من 5 {inProgressStage ? `(قيد العمل: ${inProgressStage.stage_name})` : ''}
           </div>
         </div>
 
         {/* نمط التصنيع والمسؤولية */}
         <div style={{ padding: '14px', background: isCmt ? '#fffbeb' : '#f8fafc', borderRadius: '8px', border: isCmt ? '1px solid #fde68a' : '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.03)' }}>
-          <div style={{ fontSize: '0.8rem', color: isCmt ? '#92400e' : '#475569' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: isCmt ? '#92400e' : '#475569' }}>
             {isCmt ? '🧵 نمط تشغيل للغير (CMT)' : '🏭 نمط تصنيع داخلي'}
           </div>
-          <div style={{ fontSize: '1.05rem', fontWeight: 700, color: isCmt ? '#92400e' : '#0f172a', margin: '4px 0' }}>
+          <div style={{ fontSize: '1.15rem', fontWeight: 700, color: isCmt ? '#92400e' : '#0f172a', margin: '4px 0' }}>
             {isCmt ? (order.customer_name || 'عميل محدد') : 'براند المصنع'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: isCmt ? '#a16207' : '#64748b' }}>
+          <div style={{ fontSize: '12px', color: isCmt ? '#a16207' : '#64748b' }}>
             {isCmt ? `سقف الهالك: ${order.allowed_waste_pct ?? '1.5'}% أمانة` : `خط التشغيل: ${order.assigned_to || 'الرئيسي'}`}
           </div>
         </div>
@@ -400,8 +394,8 @@ export const OrderOverviewSection: React.FC<OrderOverviewSectionProps> = ({
               استيفاء الحصص ←
             </button>
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="preview-table table--compact" aria-label="تخصيصات طلبات العملاء">
+          <div className="order-table-wrap" style={{ overflowX: 'auto', marginBottom: '8px' }}>
+            <table className="preview-table table--compact" aria-label="تخصيصات طلبات العملاء" style={{ width: '100%', minWidth: '700px', fontSize: '14px' }}>
               <thead>
                 <tr>
                   <th>العميل</th>
@@ -436,26 +430,17 @@ export const OrderOverviewSection: React.FC<OrderOverviewSectionProps> = ({
       {/* ─── 5. جدول موديلات ومقاسات الدفعة ────────────────────────────── */}
       {orderItems.length > 0 && (
         <section style={{ background: '#fff', padding: '16px', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-            <div>
-              <h3 style={{ fontSize: '1.05rem', fontWeight: 600, margin: 0 }}>
-                أصناف وموديلات أمر التشغيل ({orderItems.length})
-              </h3>
-              <p style={{ color: '#64748b', fontSize: '0.85rem', margin: '2px 0 0' }}>
-                المقاسات والمواصفات الفنية المعتمدة للقص والتشغيل في هذا الأمر.
-              </p>
-            </div>
-            <button
-              type="button"
-              className="btn btn--sm btn--secondary"
-              onClick={() => onGoToPageTab('finished')}
-            >
-              استلام المنتج التام ←
-            </button>
+          <div style={{ marginBottom: '12px' }}>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: 600, margin: 0 }}>
+              أصناف وموديلات أمر التشغيل ({orderItems.length})
+            </h3>
+            <p style={{ color: '#64748b', fontSize: '13px', margin: '2px 0 0' }}>
+              المقاسات والمواصفات الفنية المعتمدة للقص والتشغيل في هذا الأمر.
+            </p>
           </div>
 
-          <div style={{ overflowX: 'auto' }}>
-            <table className="preview-table table--compact" style={{ width: '100%' }}>
+          <div className="order-table-wrap" style={{ overflowX: 'auto', marginBottom: '8px' }}>
+            <table className="preview-table table--compact" style={{ width: '100%', minWidth: '850px', fontSize: '14px' }}>
               <thead>
                 <tr>
                   <th>#</th>

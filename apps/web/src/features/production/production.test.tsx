@@ -204,7 +204,7 @@ describe('Production Orders Feature — Frontend Tests', () => {
     );
 
     // الأمر قيد التصنيع: الشاشة تفتح على خطوة المستخدم (المراحل)، وتبويب الخامات متاح بنقرة
-    fireEvent.click(screen.getByText(/الخامات: الصرف والاستلام/i));
+    fireEvent.click(screen.getByRole('button', { name: /^الخامات/i }));
     expect(screen.getByText('قماش قطن مصري فاخر')).toBeInTheDocument();
     expect(screen.getByText('أزرار صدفية طبيعية')).toBeInTheDocument();
 
@@ -340,7 +340,7 @@ describe('Production Orders Feature — Frontend Tests', () => {
     });
     vi.spyOn(productionApi, 'fetchProductionOrderById').mockResolvedValue(multiItemOrder);
     render(<OrderDetailModal order={multiItemOrder} isOpen={true} onClose={vi.fn()} onOrderUpdated={vi.fn()} />);
-    fireEvent.click(screen.getByRole('button', { name: /التسوية والمرتجعات والإغلاق/ }));
+    fireEvent.click(screen.getByRole('button', { name: /التسوية والإغلاق/ }));
 
     const consumed = await screen.findByLabelText('مستهلك قماش قطن');
     fireEvent.change(consumed, { target: { value: '40' } });

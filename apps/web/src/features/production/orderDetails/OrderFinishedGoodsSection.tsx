@@ -175,7 +175,8 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
         <p className="form-hint">هذا الأمر لا يحتوي على بنود منتجات؛ لا يمكن استلام منتج تام له.</p>
       ) : (
         <form className="warehouse-draft" onSubmit={(e) => void handleReceiveFinishedGoods(e)} style={{ background: '#f8fafc', padding: '1.25rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-          <table className="order-detail-table" aria-label="بنود استلام المنتج التام">
+          <div className="order-table-wrap" style={{ overflowX: 'auto', marginBottom: '16px' }}>
+            <table className="order-detail-table" aria-label="بنود استلام المنتج التام" style={{ width: '100%', minWidth: '780px', fontSize: '14px' }}>
             <thead>
               <tr>
                 <th>البند / المقاس</th>
@@ -247,6 +248,7 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
               })}
             </tbody>
           </table>
+          </div>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', margin: '1rem 0' }}>
             <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>ملاحظات الاستلام وفحص الجودة:</span>
@@ -282,8 +284,8 @@ export const OrderFinishedGoodsSection: React.FC<OrderFinishedGoodsSectionProps>
         <section aria-labelledby="fg-fulfillment-title" style={{ marginTop: '24px' }}>
           <h3 id="fg-fulfillment-title" style={{ fontSize: '1.05rem', fontWeight: 600 }}>استيفاء حصص طلبات العملاء</h3>
           <p style={{ color: '#64748b', fontSize: '0.875rem' }}>المستوفى من كل حصة يتحدث تلقائياً مع استلام المنتج التام من الخادم.</p>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="order-detail-table" aria-label="استيفاء حصص طلبات العملاء">
+          <div className="order-table-wrap" style={{ overflowX: 'auto', marginBottom: '16px' }}>
+            <table className="order-detail-table" aria-label="استيفاء حصص طلبات العملاء" style={{ width: '100%', minWidth: '650px', fontSize: '14px' }}>
               <thead>
                 <tr>
                   <th>العميل</th>

@@ -332,7 +332,8 @@ export const OrderMaterialsSection: React.FC<OrderMaterialsSectionProps> = ({
       )}
       {order.status !== 'draft' && <p className="provisional-hint">تم إيقاف تعديل الخامات بعد بدء الصرف للحفاظ على سجل الحركة. لإضافة خامة، استخدم الصرف الإضافي أدناه أو إجراء معتمداً لتعديل الأمر.</p>}
 
-      <table className="order-detail-table">
+      <div className="order-table-wrap" style={{ overflowX: 'auto', marginBottom: '16px' }}>
+        <table className="order-detail-table" style={{ width: '100%', minWidth: isCmt ? '950px' : '850px', fontSize: '14px' }}>
         <thead>
           <tr>
             <th>الصنف</th>
@@ -457,6 +458,7 @@ export const OrderMaterialsSection: React.FC<OrderMaterialsSectionProps> = ({
           })}
         </tbody>
       </table>
+      </div>
 
       {/* مطالبات عجز استلام الخامات (Phase 4.5 T2) في موضع حدوث الفارق */}
       {onOpenClaim && onRetryClaims && (

@@ -181,10 +181,10 @@ export const DemandPoolView: React.FC<DemandPoolViewProps> = ({ onOpenOrder }) =
   }
 
   return (
-    <div className="production-view-container" dir="rtl">
+    <div className="warehouse-page production-view-container" dir="rtl" style={{ padding: '16px 20px' }}>
       {/* ── شريط التحكم ────────────────────────────────────────────── */}
-      <div className="prod-toolbar">
-        <div className="prod-toolbar__filters" aria-label="تصفية السلة بالموديل">
+      <div className="prod-toolbar" style={{ marginBottom: '16px', background: '#ffffff', padding: '14px 18px', borderRadius: '10px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <div className="prod-toolbar__filters" aria-label="تصفية السلة بالموديل" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
           <button className={`tool ${productFilter === 'all' ? 'tool--active' : ''}`} onClick={() => setProductFilter('all')}>
             كل الموديلات ({pool.length})
           </button>
@@ -203,9 +203,9 @@ export const DemandPoolView: React.FC<DemandPoolViewProps> = ({ onOpenOrder }) =
         </button>
       </div>
 
-      {isLoading && <p className="form-hint">جاري تحميل سلة طلبات العملاء…</p>}
+      {isLoading && <p className="form-hint" style={{ fontSize: '14px', padding: '12px' }}>جاري تحميل سلة طلبات العملاء…</p>}
       {loadError && (
-        <div className="modal-alert modal-alert--danger" role="alert">
+        <div className="modal-alert modal-alert--danger" role="alert" style={{ marginBottom: '16px' }}>
           <div className="modal-alert__content">
             <span>{loadError}</span>
             <button type="button" className="modal-alert__resync-btn" onClick={() => void loadPool(true)}>إعادة المحاولة</button>
@@ -214,25 +214,27 @@ export const DemandPoolView: React.FC<DemandPoolViewProps> = ({ onOpenOrder }) =
       )}
 
       {!isLoading && !loadError && filteredPool.length === 0 && (
-        <p className="form-hint">لا توجد بنود غير مخططة في السلة حالياً؛ كل بنود الطلبات المفتوحة مغطاة بأوامر تشغيل.</p>
+        <div className="warehouse-empty" style={{ padding: '32px 20px', textAlign: 'center', background: '#fff', borderRadius: '10px', border: '1px solid #e2e8f0' }}>
+          <p className="form-hint" style={{ fontSize: '14px', margin: 0 }}>لا توجد بنود غير مخططة في السلة حالياً؛ كل بنود الطلبات المفتوحة مغطاة بأوامر تشغيل.</p>
+        </div>
       )}
 
       {!isLoading && filteredPool.length > 0 && (
-        <div style={{ overflowX: 'auto' }}>
-          <table className="order-detail-table" aria-label="سلة طلبات العملاء غير المخططة">
+        <div className="warehouse-table-wrap" style={{ marginBottom: '16px', border: '1px solid #e2e8f0', borderRadius: '10px', background: '#ffffff', overflowX: 'auto' }}>
+          <table className="warehouse-table order-detail-table" aria-label="سلة طلبات العملاء غير المخططة" style={{ width: '100%', minWidth: '850px', borderCollapse: 'collapse', fontSize: '14px' }}>
             <thead>
-              <tr>
-                <th>طلب العميل</th>
-                <th>العميل</th>
-                <th>الموديل</th>
-                <th>المقاس</th>
-                <th>الموسم</th>
-                <th>الكمية المطلوبة</th>
-                <th>المخطط لها</th>
-                <th>المتبقي غير المخطط</th>
-                <th>تاريخ الطلب</th>
-                <th>التسليم المتوقع</th>
-                <th>تخصيص للأمر المجمع</th>
+              <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>طلب العميل</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>العميل</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>الموديل</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>المقاس</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>الموسم</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>الكمية المطلوبة</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>المخطط لها</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>المتبقي غير المخطط</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>تاريخ الطلب</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>التسليم المتوقع</th>
+                <th style={{ padding: '12px 14px', fontWeight: 700, color: '#334155' }}>تخصيص للأمر المجمع</th>
               </tr>
             </thead>
             <tbody>
@@ -240,34 +242,37 @@ export const DemandPoolView: React.FC<DemandPoolViewProps> = ({ onOpenOrder }) =
                 const incompatible = isIncompatible(item);
                 const isSelected = selectedKeys.has(item.customer_order_line_id);
                 return (
-                  <tr key={item.customer_order_line_id} style={incompatible ? { opacity: 0.45 } : undefined}>
-                    <td>{item.customer_order_number}</td>
-                    <td>{item.customer_name}</td>
-                    <td>{item.product_name}</td>
-                    <td>{item.variant_label || item.numeric_size || item.letter_size || '—'}</td>
-                    <td>{SEASON_AR[item.season] || item.season}</td>
-                    <td>{fmtQty(item.ordered_quantity)}</td>
-                    <td>{fmtQty(item.planned_quantity)}</td>
-                    <td style={{ fontWeight: 700, color: 'var(--teal-primary, #0f766e)' }}>{fmtQty(item.unplanned_quantity)}</td>
-                    <td>{fmtDate(item.order_date)}</td>
-                    <td>{fmtDate(item.expected_delivery_at)}</td>
-                    <td>
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        max={item.unplanned_quantity}
-                        aria-label={`تخصيص من ${item.customer_order_number}`}
-                        disabled={incompatible || item.unplanned_quantity <= 0}
-                        value={allocations[item.customer_order_line_id] ?? ''}
-                        onChange={(e) => setAllocation(item, e.target.value)}
-                        placeholder={`≤ ${fmtQty(item.unplanned_quantity)}`}
-                        style={{ width: '110px' }}
-                      />
-                      {isSelected && <span style={{ color: 'var(--teal-primary, #0f766e)', fontSize: '10px' }}> مختار</span>}
-                      {incompatible && (
-                        <span style={{ color: 'var(--text-light)', fontSize: '10px' }}> غير متوافق مع الاختيار</span>
-                      )}
+                  <tr key={item.customer_order_line_id} style={{ borderBottom: '1px solid #f1f5f9', ...(incompatible ? { opacity: 0.45, background: '#fafafa' } : isSelected ? { background: '#f0fdf4' } : {}) }}>
+                    <td style={{ padding: '12px 14px', fontWeight: 600 }}>{item.customer_order_number}</td>
+                    <td style={{ padding: '12px 14px' }}>{item.customer_name}</td>
+                    <td style={{ padding: '12px 14px' }}>{item.product_name}</td>
+                    <td style={{ padding: '12px 14px' }}>{item.variant_label || item.numeric_size || item.letter_size || '—'}</td>
+                    <td style={{ padding: '12px 14px' }}>{SEASON_AR[item.season] || item.season}</td>
+                    <td style={{ padding: '12px 14px' }}>{fmtQty(item.ordered_quantity)}</td>
+                    <td style={{ padding: '12px 14px' }}>{fmtQty(item.planned_quantity)}</td>
+                    <td style={{ padding: '12px 14px', fontWeight: 700, color: '#0f766e', fontSize: '15px' }}>{fmtQty(item.unplanned_quantity)}</td>
+                    <td style={{ padding: '12px 14px' }}>{fmtDate(item.order_date)}</td>
+                    <td style={{ padding: '12px 14px' }}>{fmtDate(item.expected_delivery_at)}</td>
+                    <td style={{ padding: '12px 14px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <input
+                          type="number"
+                          className="form-input"
+                          min="0"
+                          step="1"
+                          max={item.unplanned_quantity}
+                          aria-label={`تخصيص من ${item.customer_order_number}`}
+                          disabled={incompatible || item.unplanned_quantity <= 0}
+                          value={allocations[item.customer_order_line_id] ?? ''}
+                          onChange={(e) => setAllocation(item, e.target.value)}
+                          placeholder={`≤ ${fmtQty(item.unplanned_quantity)}`}
+                          style={{ width: '105px', height: '36px', fontSize: '13.5px', textAlign: 'center', padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                        />
+                        {isSelected && <span style={{ color: '#0f766e', fontWeight: 700, fontSize: '12px', background: '#ccfbf1', padding: '2px 8px', borderRadius: '999px' }}>مختار</span>}
+                        {incompatible && (
+                          <span style={{ color: '#94a3b8', fontSize: '11.5px' }}>غير متوافق مع الاختيار</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -278,147 +283,165 @@ export const DemandPoolView: React.FC<DemandPoolViewProps> = ({ onOpenOrder }) =
       )}
 
       {/* ── منطقة الإجراءات: المعاينة والإنشاء ──────────────────────── */}
-      <div className="claims-summary" aria-label="ملخص الاختيار">
-        <span>بنود مختارة: <strong>{selection.length}</strong></span>
-        <span>إجمالي الكمية المجمععة: <strong>{fmtQty(totalAllocated)}</strong></span>
-        {selectionOrigin && (
-          <span>
-            مجموعة متوافقة: <strong>{selectionOrigin.product_name} · {selectionOrigin.variant_label}</strong>
-          </span>
-        )}
+      <div className="claims-summary" aria-label="ملخص الاختيار" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '14px 20px', margin: '16px 0', fontSize: '14px' }}>
+        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <span>بنود مختارة: <strong style={{ fontSize: '15px', color: '#0f172a' }}>{selection.length}</strong></span>
+          <span>إجمالي الكمية المجمعة: <strong style={{ fontSize: '16px', color: '#0f766e' }}>{fmtQty(totalAllocated)} قطعة</strong></span>
+          {selectionOrigin && (
+            <span>
+              المجموعة المتوافقة: <strong style={{ color: '#0369a1' }}>{selectionOrigin.product_name} · {selectionOrigin.variant_label}</strong>
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="tool"
+            style={{ height: '38px', padding: '0 18px', fontSize: '13.5px' }}
+            disabled={selection.length === 0 || isPreviewing || Boolean(successInfo)}
+            onClick={() => void handlePreview()}
+          >
+            {isPreviewing ? 'جاري المعاينة…' : '🔍 معاينة الخامات والحصص'}
+          </button>
+          {canCreate && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              style={{ height: '38px', padding: '0 20px', fontSize: '13.5px', background: '#0f766e', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, cursor: selection.length === 0 || isCreating || Boolean(successInfo) ? 'not-allowed' : 'pointer', opacity: selection.length === 0 || isCreating || Boolean(successInfo) ? 0.5 : 1 }}
+              disabled={selection.length === 0 || isCreating || Boolean(successInfo)}
+              title="إنشاء أمر تشغيل موحد للبنود المتوافقة (نفس الموديل والمقاس)"
+              onClick={() => void handleCreate()}
+            >
+              {isCreating ? 'جاري الإنشاء…' : '➕ إنشاء أمر تشغيل مجمع'}
+            </button>
+          )}
+        </div>
       </div>
 
       {actionError && (
-        <div className="modal-alert modal-alert--danger" role="alert">
+        <div className="modal-alert modal-alert--danger" role="alert" style={{ marginBottom: '16px' }}>
           <div className="modal-alert__content">{actionError}</div>
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className="tool"
-          disabled={selection.length === 0 || isPreviewing || Boolean(successInfo)}
-          onClick={() => void handlePreview()}
-        >
-          {isPreviewing ? 'جاري المعاينة…' : '🔍 معاينة الخامات والحصص'}
-        </button>
-        {canCreate && (
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={selection.length === 0 || isCreating || Boolean(successInfo)}
-            title="إنشاء أمر تشغيل موحد للبنود المتوافقة (نفس الموديل والمقاس)"
-            onClick={() => void handleCreate()}
-          >
-            {isCreating ? 'جاري الإنشاء…' : '➕ إنشاء أمر تشغيل مجمع'}
-          </button>
-        )}
-      </div>
-
       {/* ── المعاينة: حصص العملاء والخامات والعجز ──────────────────── */}
       {preview && (
-        <section aria-labelledby="pool-preview-title" style={{ marginTop: '8px' }}>
-          <h3 id="pool-preview-title" style={{ fontSize: '1.05rem', fontWeight: 600 }}>
+        <section aria-labelledby="pool-preview-title" style={{ marginTop: '20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+          <h3 id="pool-preview-title" style={{ fontSize: '1.15rem', fontWeight: 700, margin: '0 0 16px', color: '#0f172a' }}>
             معاينة التجميع: {preview.product_name} · {preview.variant_label} · إجمالي {fmtQty(preview.total_target_quantity)} قطعة
           </h3>
           {!preview.all_materials_available && (
-            <div className="modal-alert modal-alert--warning" role="alert">
-              <div className="modal-alert__content">يوجد عجز في خامات الأمر المجمع — راجع جدول الاحتياجات قبل الإنشاء.</div>
+            <div className="modal-alert modal-alert--warning" role="alert" style={{ marginBottom: '16px' }}>
+              <div className="modal-alert__content">⚠️ يوجد عجز في خامات الأمر المجمع — راجع جدول الاحتياجات أدناه قبل الإنشاء.</div>
             </div>
           )}
           {preview.all_materials_available && (
-            <p className="form-hint" style={{ color: '#166534' }}>جميع الخامات المطلوبة متاحة بمخزن الخامات الرئيسي.</p>
+            <p className="form-hint" style={{ color: '#166534', fontWeight: 600, fontSize: '14px', marginBottom: '16px' }}>✅ جميع الخامات المطلوبة متاحة بمخزن الخامات الرئيسي.</p>
           )}
 
-          <table className="order-detail-table" aria-label="حصص العملاء في الأمر المجمع">
-            <thead>
-              <tr>
-                <th>العميل</th>
-                <th>طلب العميل</th>
-                <th>الكمية المخصصة</th>
-                <th>النسبة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.customer_shares.map((s) => (
-                <tr key={s.customer_order_line_id}>
-                  <td>{s.customer_name}</td>
-                  <td>{s.customer_order_number}</td>
-                  <td>{fmtQty(s.allocated_quantity)}</td>
-                  <td>{fmtPct(s.percentage)}</td>
+          <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '14px 0 8px', color: '#334155' }}>حصص العملاء في الأمر المجمع:</h4>
+          <div className="warehouse-table-wrap" style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflowX: 'auto', marginBottom: '18px' }}>
+            <table className="warehouse-table order-detail-table" aria-label="حصص العملاء في الأمر المجمع" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>العميل</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>طلب العميل</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>الكمية المخصصة</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>النسبة</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {preview.customer_shares.map((s) => (
+                  <tr key={s.customer_order_line_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '10px 14px' }}>{s.customer_name}</td>
+                    <td style={{ padding: '10px 14px', fontWeight: 600 }}>{s.customer_order_number}</td>
+                    <td style={{ padding: '10px 14px', fontWeight: 700, color: '#0f766e' }}>{fmtQty(s.allocated_quantity)}</td>
+                    <td style={{ padding: '10px 14px' }}>{fmtPct(s.percentage)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-          <table className="order-detail-table" aria-label="احتياج الخامات للأمر المجمع">
-            <thead>
-              <tr>
-                <th>الخامة</th>
-                <th>الوحدة</th>
-                <th>لكل قطعة</th>
-                <th>الاحتياج الكلي</th>
-                <th>المتاح بالمخزن</th>
-                <th>العجز</th>
-                <th>الحالة</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.materials.map((m) => (
-                <tr key={m.item_id}>
-                  <td>{m.item_name_ar} <span style={{ color: 'var(--text-light)' }}>({m.item_code})</span></td>
-                  <td>{m.unit_name_ar}</td>
-                  <td>{fmtQty(m.quantity_per_piece)}</td>
-                  <td>{fmtQty(m.required_quantity)}</td>
-                  <td>{fmtQty(m.available_quantity)}</td>
-                  <td style={{ color: m.shortage_quantity > 0 ? 'var(--color-danger, #b91c1c)' : undefined, fontWeight: m.shortage_quantity > 0 ? 700 : undefined }}>
-                    {fmtQty(m.shortage_quantity)}
-                  </td>
-                  <td>{m.is_sufficient ? 'متاح' : 'عجز'}</td>
+          <h4 style={{ fontSize: '14px', fontWeight: 700, margin: '14px 0 8px', color: '#334155' }}>احتياج الخامات المقدر للأمر المجمع:</h4>
+          <div className="warehouse-table-wrap" style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflowX: 'auto' }}>
+            <table className="warehouse-table order-detail-table" aria-label="احتياج الخامات للأمر المجمع" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>الخامة</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>الوحدة</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>لكل قطعة</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>الاحتياج الكلي</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>المتاح بالمخزن</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>العجز</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>الحالة</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {preview.materials.map((m) => (
+                  <tr key={m.item_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '10px 14px', fontWeight: 600 }}>{m.item_name_ar} <span style={{ color: '#94a3b8', fontWeight: 400 }}>({m.item_code})</span></td>
+                    <td style={{ padding: '10px 14px' }}>{m.unit_name_ar}</td>
+                    <td style={{ padding: '10px 14px' }}>{fmtQty(m.quantity_per_piece)}</td>
+                    <td style={{ padding: '10px 14px' }}>{fmtQty(m.required_quantity)}</td>
+                    <td style={{ padding: '10px 14px' }}>{fmtQty(m.available_quantity)}</td>
+                    <td style={{ padding: '10px 14px', color: m.shortage_quantity > 0 ? '#dc2626' : undefined, fontWeight: m.shortage_quantity > 0 ? 700 : undefined }}>
+                      {fmtQty(m.shortage_quantity)}
+                    </td>
+                    <td style={{ padding: '10px 14px' }}>
+                      <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, background: m.is_sufficient ? '#dcfce7' : '#fee2e2', color: m.is_sufficient ? '#15803d' : '#b91c1c' }}>
+                        {m.is_sufficient ? 'متاح' : 'عجز'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 
       {/* ── نجاح الإنشاء: الأمر المنشأ وتخصيصات عملائه ─────────────── */}
       {successInfo && (
-        <section aria-labelledby="pool-success-title" className="claims-summary" style={{ alignItems: 'flex-start', flexDirection: 'column', gap: '8px' }}>
-          <h3 id="pool-success-title" style={{ fontSize: '1.05rem', fontWeight: 600 }}>
+        <section aria-labelledby="pool-success-title" style={{ marginTop: '20px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '20px' }}>
+          <h3 id="pool-success-title" style={{ fontSize: '1.15rem', fontWeight: 700, margin: '0 0 14px', color: '#166534' }}>
             ✅ تم إنشاء أمر التشغيل المجمع {successInfo.order.order_number} ({fmtQty(successInfo.order.target_quantity)} قطعة)
           </h3>
-          <table className="order-detail-table" aria-label="تخصيصات العملاء للأمر المنشأ">
-            <thead>
-              <tr>
-                <th>العميل</th>
-                <th>طلب العميل</th>
-                <th>المخصص</th>
-                <th>المستوفى</th>
-                <th>المتبقي</th>
-                <th>نسبة الاستيفاء</th>
-              </tr>
-            </thead>
-            <tbody>
-              {successInfo.demands.map((d) => (
-                <tr key={d.id}>
-                  <td>{d.customer_name}</td>
-                  <td>{d.customer_order_number}</td>
-                  <td>{fmtQty(d.allocated_quantity)}</td>
-                  <td>{fmtQty(d.fulfilled_quantity)}</td>
-                  <td>{fmtQty(d.remaining_quantity)}</td>
-                  <td>{fmtPct(d.fulfillment_pct)}</td>
+          <div className="warehouse-table-wrap" style={{ border: '1px solid #bbf7d0', borderRadius: '8px', overflowX: 'auto', marginBottom: '16px', background: '#fff' }}>
+            <table className="warehouse-table order-detail-table" aria-label="تخصيصات العملاء للأمر المنشأ" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>العميل</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>طلب العميل</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>المخصص</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>المستوفى</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>المتبقي</th>
+                  <th style={{ padding: '10px 14px', color: '#475569' }}>نسبة الاستيفاء</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {onOpenOrder && (
-            <button type="button" className="tool" onClick={() => onOpenOrder(successInfo.order.id)}>
-              فتح أمر التشغيل ↗
-            </button>
-          )}
-          <button type="button" className="tool" onClick={() => setSuccessInfo(null)}>بدء تجميع جديد</button>
+              </thead>
+              <tbody>
+                {successInfo.demands.map((d) => (
+                  <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '10px 14px' }}>{d.customer_name}</td>
+                    <td style={{ padding: '10px 14px', fontWeight: 600 }}>{d.customer_order_number}</td>
+                    <td style={{ padding: '10px 14px', fontWeight: 700, color: '#0f766e' }}>{fmtQty(d.allocated_quantity)}</td>
+                    <td style={{ padding: '10px 14px' }}>{fmtQty(d.fulfilled_quantity)}</td>
+                    <td style={{ padding: '10px 14px' }}>{fmtQty(d.remaining_quantity)}</td>
+                    <td style={{ padding: '10px 14px' }}>{fmtPct(d.fulfillment_pct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            {onOpenOrder && (
+              <button type="button" className="btn btn--primary" style={{ height: '38px', padding: '0 18px', background: '#0f766e', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }} onClick={() => onOpenOrder(successInfo.order.id)}>
+                فتح أمر التشغيل ↗
+              </button>
+            )}
+            <button type="button" className="tool" style={{ height: '38px', padding: '0 18px' }} onClick={() => setSuccessInfo(null)}>بدء تجميع جديد</button>
+          </div>
         </section>
       )}
     </div>

@@ -41,12 +41,12 @@ import { OrderMaterialsSection } from './orderDetails/OrderMaterialsSection';
 import { OrderExecutionSection } from './orderDetails/OrderExecutionSection';
 import { OrderFinishedGoodsSection } from './orderDetails/OrderFinishedGoodsSection';
 import { OrderReconciliationSection } from './orderDetails/OrderReconciliationSection';
-import { OrderClosureSection, type CloseFormState } from './orderDetails/OrderClosureSection';
+import { type CloseFormState } from './orderDetails/OrderClosureSection';
 import { OrderCostsSection } from './orderDetails/OrderCostsSection';
 import { OrderShortageProcurementModal } from './orderDetails/OrderShortageProcurementModal';
 import { DiscrepancyClaimDetailModal } from './DiscrepancyClaims';
 
-export type PageTab = 'overview' | 'materials' | 'execution' | 'finished' | 'costing' | 'reconcile' | 'closure';
+export type PageTab = 'overview' | 'materials' | 'execution' | 'finished' | 'costing' | 'reconcile';
 
 export interface OrderDetailsPageProps {
   order: ProductionOrder;
@@ -68,8 +68,7 @@ function mapInitialTab(tab?: OrderDetailTab | PageTab): PageTab {
   if (tab === 'stages' || tab === 'defects' || tab === 'execution') return 'execution';
   if (tab === 'fg_receipt' || tab === 'finished') return 'finished';
   if (tab === 'costing') return 'costing';
-  if (tab === 'wip' || tab === 'reconcile') return 'reconcile';
-  if (tab === 'closure') return 'closure';
+  if (tab === 'wip' || tab === 'reconcile' || tab === 'closure') return 'reconcile';
   return 'overview';
 }
 
@@ -169,7 +168,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
   }, [order.id]);
 
   useEffect(() => {
-    if (activeTab === 'reconcile' || activeTab === 'closure') {
+    if (activeTab === 'reconcile') {
       void loadWipSummary();
     }
   }, [activeTab, loadWipSummary]);
@@ -213,7 +212,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
       const freshOrder = await fetchProductionOrderById(order.id);
       onOrderUpdated(freshOrder);
       setStatusMessage({ type: 'success', text: successText });
-      if (activeTab === 'reconcile' || activeTab === 'closure') {
+      if (activeTab === 'reconcile') {
         void loadWipSummary();
       }
       void loadClaims();
@@ -234,7 +233,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
       const freshOrder = await fetchProductionOrderById(order.id);
       onOrderUpdated(freshOrder);
       setStatusMessage({ type: 'success', text: 'تمت مزامنة بيانات أمر التشغيل من الخادم وتحديث الشاشة.' });
-      if (activeTab === 'reconcile' || activeTab === 'closure') {
+      if (activeTab === 'reconcile') {
         void loadWipSummary();
       }
       void loadClaims();
@@ -261,11 +260,6 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
   };
 
   const orderItems: ProductionOrderItem[] = order.items && order.items.length > 0 ? order.items : [];
-  const targetQty = Number(order.target_quantity || 0);
-  const totalReceived = orderItems.reduce((sum, it) => sum + (it.received_quantity ?? 0), 0);
-  const remainingQty = Math.max(0, targetQty - totalReceived);
-  const progressPct = targetQty > 0 ? Math.min(100, Math.round((totalReceived / targetQty) * 100)) : 0;
-  const currentStep = nextStep(order, hasPermission, user?.id);
 
   return (
     <div className={`production-order-workspace ${isModalWrapper ? 'production-order-workspace--modal' : ''}`} dir="rtl">
@@ -291,33 +285,16 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
             <h1 className="modal-title" style={{ fontSize: '1.35rem', margin: '6px 0 2px' }}>
               {order.product_name_ar} — كمية: {order.target_quantity} قطعة
             </h1>
-            <p className="modal-subtitle" style={{ margin: 0, color: 'var(--text-light, #64748b)' }}>
+            <p className="modal-subtitle" style={{ margin: 0, color: 'var(--text-light, #64748b)', fontSize: '13px' }}>
+              الموسم: {seasonAr(order.season)} · تاريخ الإنشاء: {order.created_at ? new Date(order.created_at).toLocaleDateString('ar-EG') : '—'}
               {(order.items && order.items.length > 0
-                ? order.items.map((it) => `مقاس ${(it.variant_info || '').match(/\d{2,3}/)?.[0] ?? '—'}: ${Number(it.target_quantity)}`).join('، ')
-                : order.variant_info)}
+                ? ` · ${order.items.map((it) => `مقاس ${(it.variant_info || '').match(/\d{2,3}/)?.[0] ?? '—'}: ${Number(it.target_quantity)}`).join('، ')}`
+                : order.variant_info ? ` · ${order.variant_info}` : '')}
               {order.assigned_to ? ` · خط التشغيل: ${order.assigned_to}` : ''}
             </p>
           </div>
 
           <div className="order-details-header__actions" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            {currentStep && currentStep.isMine && (
-              <button
-                type="button"
-                className="btn btn--sm btn--primary"
-                onClick={() => {
-                  if (currentStep.tab === 'materials') setActiveTab('materials');
-                  else if (currentStep.tab === 'stages' || currentStep.tab === 'defects') setActiveTab('execution');
-                  else if (currentStep.tab === 'fg_receipt') setActiveTab('finished');
-                  else if (currentStep.tab === 'wip') setActiveTab('reconcile');
-                  else setActiveTab('overview');
-                }}
-                title={`تنفيذ الإجراء التالي: ${currentStep.label} (${currentStep.role})`}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
-              >
-                <span>⚡</span> {currentStep.label} ←
-              </button>
-            )}
-
             <button
               type="button"
               className="btn btn--sm btn--secondary"
@@ -355,49 +332,6 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
           ) : (
             <span>🏭 تصنيع داخلي · الخامات والمنتج التام ملك المصنع</span>
           )}
-        </div>
-
-        {/* شريط المؤشرات التشغيلية ونسبة الإنجاز */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
-            gap: '8px',
-            marginTop: '10px',
-            padding: '10px 14px',
-            background: 'var(--surface-white, #fff)',
-            border: '1px solid var(--border-subtle, #e2e8f0)',
-            borderRadius: '8px',
-            fontSize: '0.85rem',
-          }}
-        >
-          <div>
-            <span style={{ color: 'var(--text-light, #64748b)', fontSize: '0.75rem', display: 'block' }}>المستهدف</span>
-            <strong style={{ fontSize: '1.05rem', color: '#0f172a' }}>{targetQty.toLocaleString('ar-EG')} قطعة</strong>
-          </div>
-          <div>
-            <span style={{ color: '#166534', fontSize: '0.75rem', display: 'block' }}>المستلم سليم</span>
-            <strong style={{ fontSize: '1.05rem', color: '#15803d' }}>{totalReceived.toLocaleString('ar-EG')} قطعة</strong>
-          </div>
-          <div>
-            <span style={{ color: remainingQty > 0 ? '#b45309' : '#64748b', fontSize: '0.75rem', display: 'block' }}>المتبقي بالورشة</span>
-            <strong style={{ fontSize: '1.05rem', color: remainingQty > 0 ? '#d97706' : '#64748b' }}>{remainingQty.toLocaleString('ar-EG')} قطعة</strong>
-          </div>
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-              <span style={{ color: 'var(--text-light, #64748b)', fontSize: '0.75rem' }}>الإنجاز</span>
-              <strong style={{ fontSize: '0.85rem', color: '#0f172a' }}>{progressPct}%</strong>
-            </div>
-            <div style={{ width: '100%', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
-              <div style={{ width: `${progressPct}%`, height: '100%', background: progressPct >= 100 ? '#10b981' : 'var(--teal-primary, #0d9488)', borderRadius: '3px' }} />
-            </div>
-          </div>
-          <div>
-            <span style={{ color: 'var(--text-light, #64748b)', fontSize: '0.75rem', display: 'block' }}>الموسم / الإنشاء</span>
-            <span style={{ fontSize: '0.85rem', color: '#334155' }}>
-              {seasonAr(order.season)} · {order.created_at ? new Date(order.created_at).toLocaleDateString('ar-EG') : ''}
-            </span>
-          </div>
         </div>
 
         {/* شريط رسائل الحالة وإعادة المزامنة */}
@@ -445,7 +379,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
           className={`tab-btn ${activeTab === 'materials' ? 'tab-btn--active' : ''}`}
           onClick={() => setActiveTab('materials')}
         >
-          الخامات: الصرف والاستلام ({order.materials.length})
+          الخامات ({order.materials.length})
         </button>
 
         {showStagesTab && (
@@ -479,15 +413,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
           className={`tab-btn ${activeTab === 'reconcile' ? 'tab-btn--active' : ''}`}
           onClick={() => setActiveTab('reconcile')}
         >
-          التسوية والمرتجعات والإغلاق
-        </button>
-
-        <button
-          type="button"
-          className={`tab-btn ${activeTab === 'closure' ? 'tab-btn--active' : ''}`}
-          onClick={() => setActiveTab('closure')}
-        >
-          الإغلاق والتكاليف
+          التسوية والإغلاق
         </button>
       </nav>
 
@@ -505,8 +431,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
               else if (targetTab === 'execution') setActiveTab('execution');
               else if (targetTab === 'finished') setActiveTab('finished');
               else if (targetTab === 'costing') setActiveTab('costing');
-              else if (targetTab === 'reconcile') setActiveTab('reconcile');
-              else if (targetTab === 'closure') setActiveTab('closure');
+              else if (targetTab === 'reconcile' || (targetTab as string) === 'closure') setActiveTab('reconcile');
               else setActiveTab('overview');
             }}
             onOpenProcurementModal={() => setIsProcurementModalOpen(true)}
@@ -563,36 +488,6 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
             onCloseSubmit={handleCloseSubmit}
             busy={isProcessing}
           />
-        )}
-
-        {activeTab === 'closure' && (
-          <div className="tab-pane">
-            <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h3 style={{ fontSize: '1.05rem', fontWeight: 600 }}>إغلاق أمر التشغيل النهائي</h3>
-                <p style={{ color: '#64748b', fontSize: '0.875rem', margin: 0 }}>
-                  المراجعة الشاملة لمتطلبات إغلاق الأمر، واعتماد الفروقات والعجز، والتحقق من بطاقة التكلفة قبل الإغلاق.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn btn--secondary btn--sm"
-                onClick={() => setActiveTab('costing')}
-                title="عرض وتحديث بطاقة التكلفة والربحية"
-              >
-                📊 بطاقة التكلفة والربحية ←
-              </button>
-            </div>
-
-            <OrderClosureSection
-              ctx={ctx}
-              wipSummary={wipSummary}
-              closeForm={closeForm}
-              onCloseFormChange={handleCloseFormChange}
-              onCloseSubmit={handleCloseSubmit}
-              busy={isProcessing}
-            />
-          </div>
         )}
       </main>
 

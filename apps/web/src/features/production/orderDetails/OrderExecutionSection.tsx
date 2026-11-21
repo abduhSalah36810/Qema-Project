@@ -235,41 +235,41 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
         }}
       >
         <div style={{ padding: '12px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: '0.78rem', color: '#64748b' }}>إنجاز المراحل</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0f172a' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>إنجاز المراحل</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0f172a' }}>
             {completedCount} من 5 مراحل
           </div>
-          <div style={{ fontSize: '0.75rem', color: completedCount === 5 ? '#166534' : '#64748b' }}>
+          <div style={{ fontSize: '12px', color: completedCount === 5 ? '#166534' : '#64748b' }}>
             {completedCount === 5 ? '✓ كافة المراحل مكتملة' : `${5 - completedCount} مراحل متبقية`}
           </div>
         </div>
 
         <div style={{ padding: '12px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: '0.78rem', color: '#64748b' }}>المرحلة قيد التشغيل</div>
-          <div style={{ fontSize: '1.05rem', fontWeight: 700, color: inProgressEvent ? '#0d9488' : '#64748b' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>المرحلة قيد التشغيل</div>
+          <div style={{ fontSize: '1.15rem', fontWeight: 700, color: inProgressEvent ? '#0d9488' : '#64748b' }}>
             {inProgressEvent ? STAGE_TITLES_AR[inProgressEvent.stage_name] : (completedCount === 5 ? 'اكتملت المراحل' : 'لا توجد مرحلة جارية')}
           </div>
-          <div style={{ fontSize: '0.75rem', color: inProgressEvent ? '#0d9488' : '#94a3b8' }}>
+          <div style={{ fontSize: '12px', color: inProgressEvent ? '#0d9488' : '#94a3b8' }}>
             {inProgressEvent?.started_at ? `بدأت: ${new Date(inProgressEvent.started_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}` : ''}
           </div>
         </div>
 
         <div style={{ padding: '12px 14px', background: bottlenecksCount > 0 ? '#fef2f2' : '#f8fafc', borderRadius: '8px', border: bottlenecksCount > 0 ? '1px solid #fecaca' : '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: '0.78rem', color: bottlenecksCount > 0 ? '#b91c1c' : '#64748b' }}>الاختناقات والتأخيرات</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: bottlenecksCount > 0 ? '#dc2626' : '#166534' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: bottlenecksCount > 0 ? '#b91c1c' : '#64748b' }}>الاختناقات والتأخيرات</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: bottlenecksCount > 0 ? '#dc2626' : '#166534' }}>
             {bottlenecksCount > 0 ? `${bottlenecksCount} اختناق مسجل` : 'لا توجد اختناقات'}
           </div>
-          <div style={{ fontSize: '0.75rem', color: bottlenecksCount > 0 ? '#b91c1c' : '#166534' }}>
+          <div style={{ fontSize: '12px', color: bottlenecksCount > 0 ? '#b91c1c' : '#166534' }}>
             {bottlenecksCount > 0 ? 'يتطلب متابعة أسباب التأخير' : 'سير العمل منتظم'}
           </div>
         </div>
 
         <div style={{ padding: '12px 14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: '0.78rem', color: '#64748b' }}>سجل عيوب الجودة</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: defects.length > 0 ? '#d97706' : '#0f172a' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#64748b' }}>سجل عيوب الجودة</div>
+          <div style={{ fontSize: '1.35rem', fontWeight: 700, color: defects.length > 0 ? '#d97706' : '#0f172a' }}>
             {defects.length} عيوب مسجلة
           </div>
-          <div style={{ fontSize: '0.75rem', color: '#64748b' }}>
+          <div style={{ fontSize: '12px', color: '#64748b' }}>
             {defects.filter((d) => d.status === 'reported').length > 0 ? `${defects.filter((d) => d.status === 'reported').length} عيب قيد المعالجة` : 'كافة العيوب مسجلة ومتابعة'}
           </div>
         </div>
@@ -324,7 +324,7 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
                 </div>
 
                 {/* مؤشرات التوقيت واللقطة المجمدة (TIME-DEC-01 & TIME-DEC-02) */}
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', margin: '6px 0', fontSize: '0.825rem', color: '#475569', background: '#f8fafc', padding: '6px 10px', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', margin: '6px 0', fontSize: '14px', color: '#475569', background: '#f8fafc', padding: '8px 12px', borderRadius: '6px' }}>
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                     <span>المدة المتوقعة (لقطة معتمدة):</span>
                     <strong style={{ color: '#0f172a' }}>{event?.expected_duration_minutes || 0} دقيقة</strong>
@@ -332,7 +332,7 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
                       <button
                         type="button"
                         onClick={() => void handleAdjustDuration(stageKey, event?.expected_duration_minutes || 0)}
-                        style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: '0.75rem', padding: '0 2px', textDecoration: 'underline' }}
+                        style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: '12px', padding: '0 2px', textDecoration: 'underline' }}
                         title="تعديل المدة المعيارية المحفوظة لهذا الأمر"
                       >
                         ✏️ تعديل
@@ -345,7 +345,7 @@ export const OrderExecutionSection: React.FC<OrderExecutionSectionProps> = ({ ct
                       <div>
                         <span>زمن الوردية الفعلي: </span>
                         <strong style={{ color: '#047857' }}>{event?.working_minutes || 0} دقيقة</strong>
-                        <span style={{ fontSize: '0.75rem', marginRight: '4px', color: event?.is_working_time_provisional ? '#d97706' : '#059669' }}>
+                        <span style={{ fontSize: '12px', marginRight: '4px', color: event?.is_working_time_provisional ? '#d97706' : '#059669' }}>
                           ({event?.is_working_time_provisional ? 'تقديري' : 'معتمد'})
                         </span>
                       </div>

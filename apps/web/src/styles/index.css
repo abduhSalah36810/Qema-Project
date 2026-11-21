@@ -32,6 +32,10 @@
   --text-muted:        #64748b;    /* نصوص مساعدة وميتاداتا */
   --text-light:        #94a3b8;
 
+  /* قواعد الطباعة المعيارية لشاشات المصنع */
+  --font-content-min:  14px;       /* الحد الأدنى للنص العادي ومحتوى الجداول */
+  --font-helper-min:   12px;       /* الحد الأدنى للتسميات المساعدة والشارات */
+
   /* هوية الإجراء الرئيسي — تيل بترولي وقور */
   --teal-primary:      #0f766e;    /* لون التيل الأساسي للزر والإبراز */
   --teal-hover:        #115e59;
@@ -2051,10 +2055,41 @@ button {
   gap: 10px;
 }
 
+.tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #334155;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.tool:hover:not(:disabled) {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.tool:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .tool--active {
-  background: var(--sidebar-bg) !important;
+  background: #0f766e !important;
   color: #fff !important;
-  border-color: var(--sidebar-bg) !important;
+  border-color: #0f766e !important;
+  box-shadow: 0 2px 4px rgba(15, 118, 110, 0.25) !important;
 }
 
 .tool--details {
@@ -2294,9 +2329,9 @@ button {
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
-  padding: 12px 16px;
+  padding: 10px 18px;
   font-weight: 700;
-  font-size: 11.5px;
+  font-size: 14px;
   color: var(--text-muted);
   cursor: pointer;
 }
@@ -2546,22 +2581,56 @@ button {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+  line-height: 1.5;
 }
 
 .preview-table th,
 .preview-table td,
 .order-detail-table th,
 .order-detail-table td {
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid #eef2f6;
   text-align: right;
+  font-size: 14px;
+  vertical-align: middle;
 }
 
 .preview-table th,
 .order-detail-table th {
   background: #f1f5f9;
   font-weight: 700;
-  color: var(--text-secondary);
+  color: var(--text-main);
+  border-bottom: 2px solid #e2e8f0;
+}
+
+.preview-table td strong,
+.order-detail-table td strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.preview-table td small,
+.order-detail-table td small {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.order-detail-table input.table-input,
+.order-detail-table input[type="text"],
+.order-detail-table input[type="number"],
+.order-detail-table select {
+  font-size: 14px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+}
+
+.order-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 16px;
 }
 
 /* Production orders: readable component hierarchy and matching JSX selectors. */
