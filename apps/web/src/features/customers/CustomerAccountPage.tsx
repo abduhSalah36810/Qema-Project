@@ -35,11 +35,7 @@ const blankLine = (): DraftLine => ({ product_id: '', variant_id: '', quantity: 
 
 const SEASON_AR: Record<string, string> = { summer: 'صيفي', autumn: 'خريفي', winter: 'شتوي' };
 
-import { formatMoney } from '@/lib/formatters';
-
-function formatDate(date: string): string {
-  return new Date(date).toLocaleDateString('ar-EG');
-}
+import { formatMoney, formatDate } from '@/lib/formatters';
 
 function apiError(error: unknown): string {
   return error instanceof ApiError ? error.message : 'حدث خطأ غير متوقع. حاول مرة أخرى.';

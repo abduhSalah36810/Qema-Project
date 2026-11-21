@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { financeApi, SupplierInvoice, CashDocument } from './financeApi';
-import { formatMoney } from '@/lib/formatters';
+import { formatMoney, formatDate } from '@/lib/formatters';
 
 export function PaymentsCollectionsView() {
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
@@ -187,7 +187,7 @@ export function PaymentsCollectionsView() {
                           </strong>
                         </td>
                         <td className="cell-wrap">{doc.description}</td>
-                        <td>{new Date(doc.occurred_at).toLocaleDateString('ar-EG')}</td>
+                        <td>{formatDate(doc.occurred_at)}</td>
                         <td>
                           <span
                             style={{

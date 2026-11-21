@@ -11,6 +11,7 @@ import {
 } from './payrollApi';
 import { EMPTY_PAY_VALUES, PayTypeFields, payPayload, payTypeSummary, validatePay, type PayFormValues } from './PayTypeFields';
 import { PayrollSheet } from './PayrollSheet';
+import { formatDate } from '@/lib/formatters';
 
 type PayrollTab = 'employees' | 'attendance' | 'periods';
 type Notice = { kind: 'success' | 'error' | 'info'; text: string } | null;
@@ -42,11 +43,7 @@ function fmtMoney(value: number | string | null | undefined): string {
   return (Number.isFinite(n) ? n : 0).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function fmtDate(value: string | null | undefined): string {
-  if (!value) return '—';
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString('ar-EG');
-}
+const fmtDate = (value: string | null | undefined): string => formatDate(value);
 
 function errorText(err: unknown, fallback: string): string {
   if (err instanceof ApiError || err instanceof Error) return err.message || fallback;

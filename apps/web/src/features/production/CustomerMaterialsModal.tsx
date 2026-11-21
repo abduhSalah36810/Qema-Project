@@ -11,6 +11,7 @@ import {
   createCustomerMaterialReturn,
   CatalogItem,
 } from './productionApi';
+import { formatDate } from '@/lib/formatters';
 
 interface CustomerMaterialsModalProps {
   isOpen: boolean;
@@ -407,7 +408,7 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                             <span className="badge badge--secondary">{r.status}</span>
                           </div>
                           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                            تاريخ الاستلام: {new Date(r.received_date).toLocaleDateString('ar-EG')} · المستلم: {r.received_by}
+                            تاريخ الاستلام: {formatDate(r.received_date)} · المستلم: {r.received_by}
                           </span>
                         </div>
                         {r.notes && (

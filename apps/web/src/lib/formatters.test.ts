@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatMoney, formatQuantity, formatNumber, toNumber } from './formatters';
+import { formatMoney, formatQuantity, formatNumber, toNumber, formatDate, formatDateTime } from './formatters';
 
 describe('formatters — توحيد تنسيق الأرقام والعملات (بند 11)', () => {
   describe('formatMoney', () => {
@@ -71,6 +71,46 @@ describe('formatters — توحيد تنسيق الأرقام والعملات (
       expect(toNumber('١٢٣٫٤٥')).toBe(123.45);
       expect(toNumber(null)).toBe(0);
       expect(toNumber(undefined)).toBe(0);
+    });
+  });
+
+  describe('formatDate (تنسيق يوم / شهر / سنة المصري)', () => {
+    it('formats date-only strings strictly as DD/MM/YYYY with LTR mark isolation', () => {
+      const res = formatDate('2026-05-11');
+      expect(res).toBe('\u200E11/05/2026\u200E');
+    });
+
+    it('formats ISO timestamps with day first DD/MM/YYYY', () => {
+      const d = new Date(2026, 4, 11, 14, 30); // 11 May 2026
+      const res = formatDate(d);
+      expect(res).toBe('\u200E11/05/2026\u200E');
+    });
+
+    it('handles null, undefined, and invalid date strings safely', () => {
+      expect(formatDate(null)).toBe('—');
+      expect(formatDate(undefined)).toBe('—');
+      expect(formatDate('')).toBe('—');
+      expect(formatDate('invalid-date')).toBe('—');
+    });
+  });
+
+  describe('formatDateTime (تنسيق التاريخ والوقت)', () => {
+    it('formats date and time with 12-hour period in Arabic', () => {
+      const d = new Date(2026, 4, 11, 14, 30); // 11 May 2026 2:30 PM
+      const res = formatDateTime(d);
+      expect(res).toBe('\u200E11/05/2026\u200E 2:30 م');
+    });
+
+    it('formats morning times with ص period', () => {
+      const d = new Date(2026, 4, 11, 9, 5); // 11 May 2026 9:05 AM
+      const res = formatDateTime(d);
+      expect(res).toBe('\u200E11/05/2026\u200E 9:05 ص');
+    });
+
+    it('handles null, undefined, and empty values safely', () => {
+      expect(formatDateTime(null)).toBe('—');
+      expect(formatDateTime(undefined)).toBe('—');
+      expect(formatDateTime('')).toBe('—');
     });
   });
 });

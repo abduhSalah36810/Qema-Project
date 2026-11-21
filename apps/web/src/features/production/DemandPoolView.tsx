@@ -20,12 +20,12 @@ import {
   createAggregatedOrderApi,
   fetchOrderDemands,
 } from './productionApi';
+import { formatDate } from '@/lib/formatters';
 
 const fmtQty = (n: number | string): string =>
   Number(n || 0).toLocaleString('ar-EG', { maximumFractionDigits: 3 });
 
-const fmtDate = (value?: string | null): string =>
-  value ? new Date(value).toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+const fmtDate = (value?: string | null): string => formatDate(value);
 
 const SEASON_AR: Record<string, string> = { summer: 'صيفي', autumn: 'خريفي', winter: 'شتوي' };
 

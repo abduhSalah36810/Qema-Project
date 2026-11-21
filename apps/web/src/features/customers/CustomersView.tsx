@@ -138,7 +138,18 @@ export function CustomersView() {
         <form className="customer-modal" onSubmit={(event) => void saveCustomer(event)} aria-labelledby="customer-form-title">
           <header><div><span>ملف العميل</span><h3 id="customer-form-title">{editing ? 'تعديل بيانات العميل' : 'تسجيل عميل جديد'}</h3></div><button type="button" aria-label="إغلاق" onClick={() => setFormOpen(false)}>×</button></header>
           {error && <div className="customers-alert" role="alert">{error}</div>}
-          <label>كود العميل<input required maxLength={64} value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} /></label>
+          <label>
+            كود العميل
+            <input
+              placeholder="اتركه فارغاً لتوليد كود تلقائي"
+              maxLength={64}
+              value={form.code}
+              onChange={(event) => setForm({ ...form, code: event.target.value })}
+            />
+          </label>
+          <small style={{ color: 'var(--text-muted, #64748b)', fontSize: '12px', display: 'block', marginTop: '-0.5rem', marginBottom: '0.75rem' }}>
+            (تلقائي فريد إذا تُرِك فارغاً)
+          </small>
           <label>اسم العميل<input required maxLength={128} autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
           <div className="customer-form-grid"><label>رقم الهاتف<input maxLength={32} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><label>المدينة<input maxLength={64} value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} /></label></div>
           <label>العنوان<textarea rows={3} maxLength={4000} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>

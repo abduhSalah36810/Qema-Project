@@ -45,6 +45,7 @@ import { type CloseFormState } from './orderDetails/OrderClosureSection';
 import { OrderCostsSection } from './orderDetails/OrderCostsSection';
 import { OrderShortageProcurementModal } from './orderDetails/OrderShortageProcurementModal';
 import { DiscrepancyClaimDetailModal } from './DiscrepancyClaims';
+import { formatDate } from '@/lib/formatters';
 
 export type PageTab = 'overview' | 'materials' | 'execution' | 'finished' | 'costing' | 'reconcile';
 
@@ -286,7 +287,7 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
               {order.product_name_ar} — كمية: {order.target_quantity} قطعة
             </h1>
             <p className="modal-subtitle" style={{ margin: 0, color: 'var(--text-light, #64748b)', fontSize: '13px' }}>
-              الموسم: {seasonAr(order.season)} · تاريخ الإنشاء: {order.created_at ? new Date(order.created_at).toLocaleDateString('ar-EG') : '—'}
+              الموسم: {seasonAr(order.season)} · تاريخ الإنشاء: {formatDate(order.created_at)}
               {(order.items && order.items.length > 0
                 ? ` · ${order.items.map((it) => `مقاس ${(it.variant_info || '').match(/\d{2,3}/)?.[0] ?? '—'}: ${Number(it.target_quantity)}`).join('، ')}`
                 : order.variant_info ? ` · ${order.variant_info}` : '')}
@@ -338,13 +339,12 @@ export const OrderDetailsPage: React.FC<OrderDetailsPageProps> = ({
         {statusMessage && (
           <div
             role={statusMessage.type === 'error' ? 'alert' : 'status'}
-            className={`modal-alert modal-alert--${
-              statusMessage.type === 'success'
-                ? 'success'
-                : statusMessage.type === 'warning'
+            className={`modal-alert modal-alert--${statusMessage.type === 'success'
+              ? 'success'
+              : statusMessage.type === 'warning'
                 ? 'warning'
                 : 'danger'
-            }`}
+              }`}
             style={{ marginTop: '10px' }}
           >
             <div className="modal-alert__content" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

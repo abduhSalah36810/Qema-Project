@@ -9,7 +9,7 @@ import {
   type SoldItemsResponse,
 } from './customersApi';
 
-import { formatMoney as money, formatQuantity as qty } from '@/lib/formatters';
+import { formatMoney as money, formatQuantity as qty, formatDate } from '@/lib/formatters';
 
 const ORDER_TYPE_LABELS: Record<string, string> = {
   ready_goods: 'مبيعات مخزون جاهز',
@@ -202,7 +202,7 @@ export function SoldItemsView() {
                 (data?.items ?? []).map((row) => (
                   <tr key={row.delivery_line_id}>
                     <td style={{ color: '#64748b', fontSize: '0.84rem' }}>
-                      {new Date(row.delivered_at).toLocaleDateString('ar-EG')}
+                      {formatDate(row.delivered_at)}
                     </td>
                     <td className="is-wrap">
                       <div style={{ fontWeight: 700, color: '#0f172a' }}>{row.delivery_number}</div>

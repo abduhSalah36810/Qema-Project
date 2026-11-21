@@ -11,6 +11,7 @@ import {
   formatMoney,
   toNumber,
 } from './financeApi';
+import { formatDate } from '@/lib/formatters';
 
 const modalBackdrop: CSSProperties = {
   position: 'fixed',
@@ -956,7 +957,7 @@ export function CustodyView() {
                         {SETTLEMENT_STATUS_LABELS[s.status] ?? s.status}
                       </span>
                     </td>
-                    <td style={{ fontSize: '0.82rem', color: '#64748b' }}>{new Date(s.created_at).toLocaleDateString('ar-EG')}</td>
+                    <td style={{ fontSize: '0.82rem', color: '#64748b' }}>{formatDate(s.created_at)}</td>
                   </tr>
                 ))}
               </tbody>

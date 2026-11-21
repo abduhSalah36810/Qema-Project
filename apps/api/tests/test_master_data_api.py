@@ -184,3 +184,22 @@ async def test_inventory_report_excludes_transfer_discrepancies_from_warehouse_s
     report = (await actors["gm"].request("GET", "/api/v1/reports/inventory")).json()
     assert all(row["warehouse_id"] for row in report["items"]), "لا صفوف بدون مخزن في أرصدة المخازن"
     assert any(d["item_id"] == item.id and d["quantity"] >= 2.0 for d in report["transfer_discrepancies"])
+
+
+@pytest.mark.asyncio
+async def test_supplier_code_auto_generated_when_omitted(actors):
+    res = await actors["wh"].request("POST", "/api/v1/finance/suppliers", json={"name": f"مورد تلقائي {_tag()}"})
+    assert res.status_code == 201, res.text
+    supplier = res.json()
+    assert supplier["code"].startswith("SUP-")
+    assert len(supplier["code"]) > 4
+
+
+@pytest.mark.asyncio
+async def test_customer_code_auto_generated_when_omitted(actors):
+    res = await actors["gm"].request("POST", "/api/v1/customers", json={"name": f"عميل تلقائي {_tag()}"})
+    assert res.status_code == 201, res.text
+    customer = res.json()
+    assert customer["code"].startswith("CUST-")
+    assert len(customer["code"]) > 5
+

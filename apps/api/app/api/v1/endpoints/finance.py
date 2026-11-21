@@ -342,10 +342,18 @@ async def create_supplier(
     current_user: AuthenticatedUser = Depends(require_permission("suppliers:manage")),
     db: AsyncSession = Depends(get_db),
 ):
-    if await db.scalar(select(Supplier.id).where(Supplier.code == data.code.strip())):
-        raise HTTPException(409, "كود المورد مستخدم بالفعل.")
+    code = data.code.strip() if data.code and data.code.strip() else None
+    if not code:
+        while True:
+            candidate = f"SUP-{uuid.uuid4().hex[:8].upper()}"
+            if not await db.scalar(select(Supplier.id).where(Supplier.code == candidate)):
+                code = candidate
+                break
+    else:
+        if await db.scalar(select(Supplier.id).where(Supplier.code == code)):
+            raise HTTPException(409, "كود المورد مستخدم بالفعل.")
     row = Supplier(
-        id=str(uuid.uuid4()), code=data.code.strip(), name=data.name.strip(),
+        id=str(uuid.uuid4()), code=code, name=data.name.strip(),
         phone=data.phone.strip(), address=data.address.strip(), created_by=current_user.id,
     )
     db.add(row)

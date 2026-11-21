@@ -674,10 +674,25 @@ async def get_customer_account(customer_id: str, current_user: CustomerViewer, d
 @router.post("", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)
 async def create_customer(data: CustomerCreate, current_user: CustomerManager, db: Database):
     del current_user
-    existing = await db.execute(select(Customer.id).where(Customer.code == data.code))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="كود العميل مسجل بالفعل.")
-    customer = Customer(**data.model_dump(), status="active")
+    code = data.code.strip() if data.code and data.code.strip() else None
+    if not code:
+        while True:
+            candidate = f"CUST-{uuid.uuid4().hex[:8].upper()}"
+            if not await db.scalar(select(Customer.id).where(Customer.code == candidate)):
+                code = candidate
+                break
+    else:
+        existing = await db.execute(select(Customer.id).where(Customer.code == code))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="كود العميل مسجل بالفعل.")
+    customer = Customer(
+        code=code,
+        name=data.name,
+        phone=data.phone,
+        city=data.city,
+        address=data.address,
+        status="active",
+    )
     db.add(customer)
     await db.commit()
     await db.refresh(customer)

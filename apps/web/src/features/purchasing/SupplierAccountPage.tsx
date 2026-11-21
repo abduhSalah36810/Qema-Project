@@ -9,17 +9,12 @@ import {
   UnallocatedPayment,
   SUPPLIER_INVOICE_STATUS_LABELS,
 } from '@/features/finance/financeApi';
-import { formatMoney } from '@/lib/formatters';
+import { formatMoney, formatDate } from '@/lib/formatters';
 
 interface SupplierAccountPageProps {
   supplier: Supplier;
   onBack: () => void;
   onSupplierUpdated?: (supplier: Supplier) => void;
-}
-
-function formatDate(date: string): string {
-  if (!date) return '—';
-  return new Date(date).toLocaleDateString('ar-EG');
 }
 
 function apiError(error: unknown): string {

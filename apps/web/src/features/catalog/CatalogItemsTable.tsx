@@ -7,6 +7,7 @@ import {
 } from './catalogApi';
 import { ClassificationBadge } from './ClassificationBadge';
 import { ApprovalStatusBadge } from './ApprovalStatusBadge';
+import { formatDate } from '@/lib/formatters';
 
 interface Props {
   items: CatalogItem[];
@@ -307,7 +308,7 @@ export const CatalogItemsTable: React.FC<Props> = ({
                         <strong className="catalog-table__name">{item.name_ar}</strong>
                         {item.created_at && (
                           <small style={{ color: '#64748b', fontSize: '0.75rem' }}>
-                            أضيف في: {new Date(item.created_at).toLocaleDateString('ar-EG')}
+                            أضيف في: {formatDate(item.created_at)}
                           </small>
                         )}
                         {isFinishedGood && (

@@ -31,6 +31,7 @@ import { ClassificationBadge } from './ClassificationBadge';
 import { ApprovalStatusBadge } from './ApprovalStatusBadge';
 import { ApiError } from '@/lib/api';
 import { useDialog } from '@/components/feedback/DialogProvider';
+import { formatDate } from '@/lib/formatters';
 
 interface Props {
   itemId: string | null;
@@ -1295,7 +1296,7 @@ export const ItemDetailDrawer: React.FC<Props> = ({
                             </span>
                           </div>
                           <span className="catalog-rev-item__meta">
-                            {new Date(rev.submitted_at).toLocaleDateString('ar-EG')} · قدمه: {rev.submitted_by}
+                            {formatDate(rev.submitted_at)} · قدمه: {rev.submitted_by}
                           </span>
                         </div>
 

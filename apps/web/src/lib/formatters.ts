@@ -81,3 +81,61 @@ export function formatNumber(value: unknown, decimals: number = 2): string {
   });
   return isNegative ? `− ${formatted}` : formatted;
 }
+
+/**
+ * تنسيق التاريخ القياسي في مصر: يوم / شهر / سنة (DD/MM/YYYY)
+ * يستخدم علامة LTR Mark (\u200E) لضمان عدم عكس المتصفح لترتيب اليوم والشهر
+ * داخل سياقات النصوص والواجهات العربية (RTL).
+ * مثال:
+ * 2026-05-11 -> "‎11/05/2026‎" (اليوم 11، الشهر 05، السنة 2026)
+ */
+export function formatDate(value: unknown): string {
+  if (!value) return '—';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    // Fast path for date-only string YYYY-MM-DD avoiding any timezone shifts
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (m) {
+      const [, year, month, day] = m;
+      return `\u200E${day}/${month}/${year}\u200E`;
+    }
+  }
+  const d =
+    typeof value === 'string' || typeof value === 'number'
+      ? new Date(value)
+      : value instanceof Date
+        ? value
+        : null;
+  if (!d || Number.isNaN(d.getTime())) return '—';
+
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+
+  return `\u200E${day}/${month}/${year}\u200E`;
+}
+
+/**
+ * تنسيق التاريخ والوقت القياسي: يوم / شهر / سنة مع الوقت (12 ساعة)
+ * مثال: "‎11/05/2026‎ 2:30 م"
+ */
+export function formatDateTime(value: unknown): string {
+  if (!value) return '—';
+  const d =
+    typeof value === 'string' || typeof value === 'number'
+      ? new Date(value)
+      : value instanceof Date
+        ? value
+        : null;
+  if (!d || Number.isNaN(d.getTime())) return '—';
+
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const period = hours >= 12 ? 'م' : 'ص';
+  hours = hours % 12 || 12;
+
+  return `\u200E${day}/${month}/${year}\u200E ${hours}:${minutes} ${period}`;
+}

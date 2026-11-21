@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/features/auth/AuthContext';
 import { useDialog } from '@/components/feedback/DialogProvider';
-import { formatMoney } from '@/lib/formatters';
+import { formatMoney, formatDate } from '@/lib/formatters';
 import { apiClient } from '@/lib/api';
 import {
   purchaseOrdersApi,
@@ -375,7 +375,7 @@ export const PurchaseOrdersView: React.FC = () => {
                       )}
                     </td>
                     <td style={{ padding: '0.75rem 1rem', fontSize: '0.82rem', color: '#64748b' }}>
-                      {po.created_at ? new Date(po.created_at).toLocaleDateString('ar-EG') : '—'}
+                      {formatDate(po.created_at)}
                     </td>
                     <td style={{ padding: '0.75rem 1rem' }}>
                       <span
@@ -470,9 +470,7 @@ export const PurchaseOrdersView: React.FC = () => {
                 <div>
                   <div style={{ fontSize: '0.78rem', color: '#64748b' }}>تاريخ التسليم المتوقع</div>
                   <div style={{ fontWeight: 600 }}>
-                    {selectedOrder.expected_delivery_date
-                      ? new Date(selectedOrder.expected_delivery_date).toLocaleDateString('ar-EG')
-                      : 'غير محدد'}
+                    {formatDate(selectedOrder.expected_delivery_date)}
                   </div>
                 </div>
                 {selectedOrder.prices_visible && selectedOrder.total_amount !== null ? (

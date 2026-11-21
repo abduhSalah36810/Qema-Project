@@ -13,6 +13,7 @@ import {
   type PayrollRun,
 } from './payrollApi';
 import { payTypeSummary } from './PayTypeFields';
+import { formatDate } from '@/lib/formatters';
 
 /**
  * كشف رواتب الفترة للمدير المالي:
@@ -284,7 +285,7 @@ export function PayrollSheet({ period, detail, detailLoading, detailError, emplo
         <div>
           <h3 id="payroll-sheet-title">كشف الفترة: {period.period_name}</h3>
           <p>
-            {new Date(period.start_date).toLocaleDateString('ar-EG')} — {new Date(period.end_date).toLocaleDateString('ar-EG')} ·{' '}
+            {formatDate(period.start_date)} — {formatDate(period.end_date)} ·{' '}
             <span className={`status-badge status-badge--${status === 'paid' ? 'done' : status === 'submitted' ? 'waiting' : 'action'}`}>
               {PERIOD_STATUS_LABELS[status] ?? status}
             </span>
@@ -589,7 +590,7 @@ export function PayrollSheet({ period, detail, detailLoading, detailError, emplo
       {printRunId !== undefined && detail && (
         <div className="payroll-print" aria-hidden>
           <h1>{printRunId ? 'قسيمة راتب' : 'كشف رواتب'} — {period.period_name}</h1>
-          <p>من {new Date(period.start_date).toLocaleDateString('ar-EG')} إلى {new Date(period.end_date).toLocaleDateString('ar-EG')} · {PERIOD_STATUS_LABELS[status] ?? status}</p>
+          <p>من {formatDate(period.start_date)} إلى {formatDate(period.end_date)} · {PERIOD_STATUS_LABELS[status] ?? status}</p>
           {!printRunId && (
             <table>
               <thead><tr><th>الكود</th><th>الموظف</th><th>نظام الأجر</th><th>الأساسي</th><th>الحوافز</th><th>الخصومات</th><th>الصافي</th></tr></thead>

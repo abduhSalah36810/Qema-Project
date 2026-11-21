@@ -13,6 +13,7 @@ import {
   formatMoney,
   toNumber,
 } from './financeApi';
+import { formatDate } from '@/lib/formatters';
 
 type OperationTab = 'expense' | 'income' | 'transfer' | 'log';
 
@@ -722,7 +723,7 @@ export function ReceiptsDisbursementsView() {
                       <tr key={doc.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: '12px 14px' }}><code style={{ fontWeight: 700, color: '#0f766e', fontSize: '13.5px' }}>{doc.document_number}</code></td>
                         <td style={{ padding: '12px 14px', fontSize: '13.5px' }}>
-                          {doc.occurred_at ? new Date(doc.occurred_at).toLocaleDateString('ar-EG') : '—'}
+                          {formatDate(doc.occurred_at)}
                         </td>
                         <td style={{ padding: '12px 14px' }}>
                           <span

@@ -3,6 +3,7 @@ import { StocktakeSession, fetchStocktakeSessions } from './stocktakeApi';
 import { fetchWarehouses, Warehouse } from '@/features/production/productionApi';
 import { useAuth } from '@/features/auth/AuthContext';
 import { ApiError } from '@/lib/api';
+import { formatDate } from '@/lib/formatters';
 
 interface StocktakeListViewProps {
   onSelectSession: (sessionId: string) => void;
@@ -272,7 +273,7 @@ export const StocktakeListView: React.FC<StocktakeListViewProps> = ({
                       </div>
                     </td>
                     <td style={{ fontSize: '0.85rem', color: '#475569' }}>
-                      {new Date(st.created_at).toLocaleDateString('ar-EG')}
+                      {formatDate(st.created_at)}
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       <button

@@ -3,6 +3,7 @@ import { ApiError } from '@/lib/api';
 import { useDialog } from '@/components/feedback/DialogProvider';
 import { fetchCatalogItems, type CatalogItem } from './productionApi';
 import { fetchProductBoms, saveVariantBom, type ProductBoms, type VariantBom } from './bomApi';
+import { formatDate } from '@/lib/formatters';
 
 /**
  * مستلزمات التصنيع لموديل: لكل مقاس قائمة أصناف من دليل الأصناف وكمية القطعة الواحدة.
@@ -35,12 +36,6 @@ const ITEM_TYPE_GROUPS: Array<[string, string]> = [
 
 function errorText(err: unknown, fallback: string): string {
   return err instanceof ApiError || err instanceof Error ? err.message || fallback : fallback;
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return '';
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('ar-EG', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 let keySeq = 0;

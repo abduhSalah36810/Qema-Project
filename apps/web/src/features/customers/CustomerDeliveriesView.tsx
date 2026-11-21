@@ -6,20 +6,10 @@ import {
   recordCustomerDelivery,
 } from './customersApi';
 
+import { formatDate } from '@/lib/formatters';
+
 function formatQuantity(qty: number): string {
   return new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 2 }).format(qty);
-}
-
-function formatDate(dateStr: string): string {
-  try {
-    return new Date(dateStr).toLocaleDateString('ar-EG', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  } catch {
-    return dateStr;
-  }
 }
 
 export function CustomerDeliveriesView() {

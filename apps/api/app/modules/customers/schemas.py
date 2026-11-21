@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class CustomerCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
+    code: str | None = Field(default=None, max_length=64)
     name: str = Field(min_length=1, max_length=128)
     phone: str = Field(default="", max_length=32)
     city: str = Field(default="", max_length=64)
@@ -14,8 +14,8 @@ class CustomerCreate(BaseModel):
 
     @field_validator("code", "name", "phone", "city", "address")
     @classmethod
-    def trim_text(cls, value: str) -> str:
-        return value.strip()
+    def trim_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
 
 
 class CustomerUpdate(BaseModel):

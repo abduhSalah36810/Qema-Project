@@ -3,6 +3,7 @@
  */
 import { apiClient } from '@/lib/api';
 import { REPORT_OPTIONS } from '../financeApi';
+import { formatDate } from '@/lib/formatters';
 
 export interface Period {
   from: string; // YYYY-MM-DD
@@ -85,7 +86,7 @@ export function formatPeriod(p: { date_from: string; date_to: string } | Period 
   if (!p) return '—';
   const from = 'from' in p ? p.from : p.date_from;
   const to = 'to' in p ? p.to : p.date_to;
-  const f = (s: string) => new Date(`${s}T00:00:00`).toLocaleDateString('ar-EG', { day: 'numeric', month: 'short', year: 'numeric' });
+  const f = (s: string) => formatDate(s);
   return from === to ? f(from) : `${f(from)} – ${f(to)}`;
 }
 

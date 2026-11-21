@@ -6,6 +6,7 @@ import { financeApi } from '@/features/finance/financeApi';
 import { useDialog } from '@/components/feedback/DialogProvider';
 import { ApiError } from '@/lib/api';
 import type { NavigateFn } from '@/lib/navigation';
+import { formatDate } from '@/lib/formatters';
 
 /**
  * الصفحة الرئيسية لكل دور: ثلاثة أسئلة فقط
@@ -92,11 +93,6 @@ const CATEGORY_LABELS: Record<TaskItem['category'], string> = {
   finance: 'مالية',
   governance: 'اعتمادات',
 };
-
-function formatDate(value: string): string {
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' });
-}
 
 export const TaskInboxView: React.FC<TaskInboxViewProps> = ({ onNavigate }) => {
   const { roles, permissions, hasPermission, user } = useAuth();

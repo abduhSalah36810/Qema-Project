@@ -12,6 +12,7 @@ import {
   CatalogItem,
   fetchCatalogItems,
 } from '@/features/production/productionApi';
+import { formatDate } from '@/lib/formatters';
 
 export const CustomerMaterialsView: React.FC = () => {
   const { hasPermission } = useAuth();
@@ -52,11 +53,11 @@ export const CustomerMaterialsView: React.FC = () => {
   useEffect(() => {
     void fetchCustomers().then((data) => {
       setCustomers(data.filter((c) => c.status === 'active'));
-    }).catch(() => {});
+    }).catch(() => { });
 
     void fetchCatalogItems().then((items) => {
       setCatalogItems(items);
-    }).catch(() => {});
+    }).catch(() => { });
   }, []);
 
   // تحميل الأرصدة والسندات
@@ -397,7 +398,7 @@ export const CustomerMaterialsView: React.FC = () => {
                           <span className="badge badge--secondary">{r.status}</span>
                         </div>
                         <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                          تاريخ الاستلام: {new Date(r.received_date).toLocaleDateString('ar-EG')} · المستلم: {r.received_by}
+                          تاريخ الاستلام: {formatDate(r.received_date)} · المستلم: {r.received_by}
                         </span>
                       </div>
                       {r.notes && (

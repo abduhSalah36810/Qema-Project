@@ -149,8 +149,17 @@ function SuppliersTab({ canManage }: { canManage: boolean }) {
           <form className="customer-modal" onSubmit={(e) => void save(e)} aria-labelledby="supplier-form-title">
             <header><div><span>ملف المورد</span><h3 id="supplier-form-title">{editing === 'new' ? 'إضافة مورد جديد' : 'تعديل بيانات المورد'}</h3></div><button type="button" aria-label="إغلاق" onClick={() => setEditing(null)}>×</button></header>
             {formError && <div className="customers-alert" role="alert">{formError}</div>}
-            <label>كود المورد{editing !== 'new' && <small className="md-hint"> (ثابت)</small>}
-              <input required maxLength={64} value={form.code} disabled={editing !== 'new'} placeholder="مثال: SUP-010" onChange={(e) => setForm({ ...form, code: e.target.value })} />
+            <label>
+              كود المورد
+              {editing !== 'new' && <small className="md-hint"> (ثابت)</small>}
+              {editing === 'new' && <small className="md-hint"> (تلقائي فريد إذا تُرِك فارغاً)</small>}
+              <input
+                maxLength={64}
+                value={form.code}
+                disabled={editing !== 'new'}
+                placeholder={editing === 'new' ? 'اتركه فارغاً لتوليد كود تلقائي' : 'مثال: SUP-010'}
+                onChange={(e) => setForm({ ...form, code: e.target.value })}
+              />
             </label>
             <label>اسم المورد<input required maxLength={128} autoFocus value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
             <label>رقم الهاتف<input maxLength={32} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>

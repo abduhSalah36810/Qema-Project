@@ -41,4 +41,13 @@ describe('CustomersView', () => {
     await waitFor(() => expect(createCustomer).toHaveBeenCalledWith(expect.objectContaining({ code: 'CUS-002', name: 'عميل جديد' })));
     expect(fetchCustomers).toHaveBeenCalledTimes(2);
   });
+
+  it('creates a customer without code (leaving it blank for auto-generation)', async () => {
+    vi.mocked(createCustomer).mockResolvedValue(rows[0]);
+    render(<CustomersView />);
+    fireEvent.click(await screen.findByRole('button', { name: /تسجيل عميل/i }));
+    fireEvent.change(screen.getByLabelText('اسم العميل'), { target: { value: 'عميل بكود تلقائي' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ بيانات العميل' }));
+    await waitFor(() => expect(createCustomer).toHaveBeenCalledWith(expect.objectContaining({ name: 'عميل بكود تلقائي' })));
+  });
 });

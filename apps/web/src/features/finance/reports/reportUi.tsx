@@ -1,5 +1,6 @@
 import { ReactNode, useMemo, useState } from 'react';
 import { formatMoney, toNumber } from '../financeApi';
+import { formatDate } from '@/lib/formatters';
 import { PRESET_LABELS, presetPeriod, monthLabel, type Period, type PeriodPreset } from './analyticsApi';
 import '@/styles/reports.css';
 
@@ -143,7 +144,7 @@ function formatCell(kind: ColumnKind | undefined, v: unknown): ReactNode {
     case 'money': return formatMoney(v);
     case 'number': return fmtNum(v, 3);
     case 'pct': return v === null || v === undefined ? '—' : fmtPct(toNumber(v));
-    case 'date': return v ? new Date(String(v)).toLocaleDateString('ar-EG') : '—';
+    case 'date': return formatDate(v);
     case 'code': return <code>{String(v ?? '')}</code>;
     default: return v === null || v === undefined || v === '' ? '—' : String(v);
   }

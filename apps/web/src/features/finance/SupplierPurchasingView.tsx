@@ -4,6 +4,7 @@ import { apiClient, ApiError } from '@/lib/api';
 import { CatalogItem, fetchCatalogItems } from '@/features/production/productionApi';
 import { financeApi, UnallocatedPayment, Supplier } from './financeApi';
 import { SupplierAccountPage } from '@/features/purchasing/SupplierAccountPage';
+import { formatDate } from '@/lib/formatters';
 
 /**
  * المشتريات: فاتورة مورد ← استلام فعلي بالمخزن (كامل أو على دفعات) ← طلب سداد يُعتمد في الخزينة.
@@ -550,7 +551,7 @@ export function SupplierPurchasingView() {
                     </span>
                   )}
                 </strong>
-                <small>فاتورة المورد {inv.invoice_number} · مرجع النظام {inv.internal_number} · {new Date(inv.invoice_date).toLocaleDateString('ar-EG')}</small>
+                <small>فاتورة المورد {inv.invoice_number} · مرجع النظام {inv.internal_number} · {formatDate(inv.invoice_date)}</small>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span className={`purchasing__status purchasing__status--${st.tone}`}>
@@ -687,7 +688,7 @@ export function SupplierPurchasingView() {
               <ul className="purchasing__payments" aria-label="دفعات الفاتورة">
                 {inv.payments.map((p) => (
                   <li key={p.id}>
-                    <span>{money(p.amount)} · {new Date(p.created_at).toLocaleDateString('ar-EG')}</span>
+                    <span>{money(p.amount)} · {formatDate(p.created_at)}</span>
                     <span className={`purchasing__status purchasing__status--${p.status === 'approved' ? 'done' : p.status === 'rejected' ? 'wait' : 'part'}`}>
                       {p.status === 'approved' ? 'معتمد وخُصم من الخزنة' : p.status === 'rejected' ? 'مرفوض' : 'بانتظار اعتماد الخزينة'}
                     </span>
@@ -922,7 +923,7 @@ function AllocateSupplierPaymentModal({ invoice, onClose, onSuccess }: AllocateS
                         <div>
                           <strong><code>{d.document_number}</code></strong>
                           <span style={{ fontSize: '0.78rem', color: '#64748b', display: 'block' }}>
-                            {new Date(d.occurred_at).toLocaleDateString('ar-EG')} · إجمالي: {money(d.total_amount)}
+                            {formatDate(d.occurred_at)} · إجمالي: {money(d.total_amount)}
                           </span>
                         </div>
                       </div>

@@ -3,7 +3,7 @@ import { ApiError } from '@/lib/api';
 import { fetchCatalogItems, type CatalogItem } from '@/features/production/productionApi';
 import { financeApi, type PurchasedItemRow, type PurchasedItemsResponse, type Supplier } from './financeApi';
 
-import { formatMoney, formatQuantity as qty } from '@/lib/formatters';
+import { formatMoney, formatQuantity as qty, formatDate } from '@/lib/formatters';
 
 const money = (v: string | number | null | undefined) => {
   if (v === null || v === undefined) return '—';
@@ -265,7 +265,7 @@ export function PurchasedItemsView() {
                   return (
                     <tr key={row.line_id}>
                       <td style={{ color: '#64748b', fontSize: '0.84rem' }}>
-                        {new Date(row.invoice_date).toLocaleDateString('ar-EG')}
+                        {formatDate(row.invoice_date)}
                       </td>
                       <td className="is-wrap">
                         <div style={{ fontWeight: 700, color: '#0f172a' }}>{row.internal_number}</div>

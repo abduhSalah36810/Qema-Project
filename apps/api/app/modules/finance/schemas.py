@@ -119,7 +119,7 @@ class UnallocatedPaymentRead(BaseModel):
 
 
 class SupplierCreate(BaseModel):
-    code: str = Field(min_length=1, max_length=64)
+    code: Optional[str] = Field(default=None, max_length=64)
     name: str = Field(min_length=1, max_length=128)
     phone: str = Field(default="", max_length=32)
     address: str = Field(default="", max_length=2000)

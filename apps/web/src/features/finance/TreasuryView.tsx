@@ -11,6 +11,7 @@ import {
   formatMoney,
   toNumber,
 } from './financeApi';
+import { formatDateTime as fmtDateTime } from '@/lib/formatters';
 
 interface RejectModalProps {
   document: CashDocument;
@@ -441,21 +442,7 @@ export function TreasuryView() {
     );
   };
 
-  const formatDateTime = (isoDate: string | null) => {
-    if (!isoDate) return '—';
-    try {
-      const d = new Date(isoDate);
-      return d.toLocaleDateString('ar-EG', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return isoDate;
-    }
-  };
+  const formatDateTime = (isoDate: string | null) => fmtDateTime(isoDate);
 
   return (
     <section className="warehouse-page" dir="rtl" aria-labelledby="treasury-title">
