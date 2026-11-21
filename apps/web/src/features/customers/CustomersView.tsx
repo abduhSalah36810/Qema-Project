@@ -116,17 +116,96 @@ export function CustomersView() {
 
           {loading ? <div className="customers-empty" role="status">جاري تحميل العملاء من قاعدة البيانات…</div> :
             visibleCustomers.length === 0 ? <div className="customers-empty">{search ? 'لا توجد نتائج مطابقة.' : 'لا يوجد عملاء مسجلون بعد.'}</div> : (
-              <div className="customers-table-wrap">
-                <table className="customers-table">
-                  <thead><tr><th>العميل</th><th>الهاتف</th><th>المدينة</th><th>الحالة</th><th>إجراء</th></tr></thead>
-                  <tbody>{visibleCustomers.map((customer) => (
-                    <tr key={customer.id}>
-                      <td><button className="customer-name-button" type="button" onClick={() => setSelected(customer)}><strong>{customer.name}</strong><small>{customer.code}</small></button></td>
-                      <td>{customer.phone || '—'}</td><td>{customer.city || '—'}</td>
-                      <td><span className={`customer-status customer-status--${customer.status}`}>{customer.status === 'active' ? 'نشط' : 'موقوف'}</span></td>
-                      <td><button className="customer-action" type="button" onClick={() => openEdit(customer)}>تعديل</button></td>
+              <div className="warehouse-table-wrap">
+                <table className="warehouse-table" aria-label="جدول العملاء">
+                  <thead>
+                    <tr>
+                      <th>كود العميل</th>
+                      <th>اسم العميل</th>
+                      <th>رقم الهاتف</th>
+                      <th>المدينة / العنوان</th>
+                      <th>الحالة</th>
+                      <th style={{ textAlign: 'center' }}>الإجراءات</th>
                     </tr>
-                  ))}</tbody>
+                  </thead>
+                  <tbody>
+                    {visibleCustomers.map((customer) => (
+                      <tr
+                        key={customer.id}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setSelected(customer)}
+                        title="اضغط لعرض كشف الحساب وتفاصيل التعامل"
+                      >
+                        <td>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#0f766e', fontSize: '0.95rem' }}>
+                            {customer.code}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="customer-name-button"
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelected(customer);
+                            }}
+                            style={{ background: 'none', border: 'none', padding: 0, textAlign: 'right', cursor: 'pointer' }}
+                          >
+                            <strong style={{ fontSize: '1rem', color: '#0f172a' }}>{customer.name}</strong>
+                          </button>
+                        </td>
+                        <td>
+                          <span dir="ltr" style={{ fontSize: '0.92rem', color: '#334155' }}>
+                            {customer.phone || '—'}
+                          </span>
+                        </td>
+                        <td style={{ color: '#475569', fontSize: '0.92rem' }}>
+                          {customer.city ? `${customer.city}${customer.address ? ` · ${customer.address}` : ''}` : customer.address || '—'}
+                        </td>
+                        <td>
+                          <span
+                            className={`customer-status customer-status--${customer.status}`}
+                            style={{ fontSize: '0.82rem' }}
+                          >
+                            {customer.status === 'active' ? 'نشط' : 'موقوف'}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <div style={{ display: 'inline-flex', gap: '8px', alignItems: 'center', justifyContent: 'center' }}>
+                            <button
+                              type="button"
+                              className="btn btn--secondary btn--sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelected(customer);
+                              }}
+                              style={{
+                                padding: '0.35rem 0.85rem',
+                                fontSize: '0.88rem',
+                                fontWeight: 600,
+                                borderColor: '#0f766e',
+                                color: '#0f766e',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              📄 كشف الحساب والتفاصيل ‹
+                            </button>
+                            <button
+                              type="button"
+                              className="customer-action"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEdit(customer);
+                              }}
+                              style={{ padding: '0.35rem 0.65rem' }}
+                            >
+                              تعديل
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
             )}
@@ -139,7 +218,7 @@ export function CustomersView() {
           <header><div><span>ملف العميل</span><h3 id="customer-form-title">{editing ? 'تعديل بيانات العميل' : 'تسجيل عميل جديد'}</h3></div><button type="button" aria-label="إغلاق" onClick={() => setFormOpen(false)}>×</button></header>
           {error && <div className="customers-alert" role="alert">{error}</div>}
           <label>
-            <span>كود العميل <small style={{ color: 'var(--text-muted, #64748b)', fontWeight: 'normal' }}>(تلقائي فريد إذا تُرِك فارغاً)</small></span>
+            كود العميل
             <input
               placeholder="اتركه فارغاً لتوليد كود تلقائي"
               maxLength={64}
@@ -147,6 +226,9 @@ export function CustomersView() {
               onChange={(event) => setForm({ ...form, code: event.target.value })}
             />
           </label>
+          <small style={{ color: 'var(--text-muted, #64748b)', fontSize: '12px', display: 'block', marginTop: '-0.5rem', marginBottom: '0.75rem' }}>
+            (تلقائي فريد إذا تُرِك فارغاً)
+          </small>
           <label>اسم العميل<input required maxLength={128} autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
           <div className="customer-form-grid"><label>رقم الهاتف<input maxLength={32} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><label>المدينة<input maxLength={64} value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} /></label></div>
           <label>العنوان<textarea rows={3} maxLength={4000} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></label>

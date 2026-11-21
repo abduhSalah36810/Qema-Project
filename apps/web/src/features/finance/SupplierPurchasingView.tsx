@@ -325,22 +325,6 @@ export function SupplierPurchasingView() {
         <div className="purchasing__new-toggle" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <button type="button" className="btn btn--primary" onClick={() => setShowNewInvoice(true)}>＋ تسجيل فاتورة شراء جديدة</button>
           <button type="button" className="btn btn--secondary" onClick={() => setShowOpeningModal(true)}>＋ إدخال رصيد افتتاحي لمورد</button>
-          <select
-            className="form-input"
-            style={{ width: 'auto', minWidth: '190px', padding: '6px 10px', fontSize: '0.875rem' }}
-            value=""
-            onChange={(e) => {
-              const sup = suppliers.find((s) => s.id === e.target.value);
-              if (sup) setSelectedSupplier(sup);
-            }}
-          >
-            <option value="">👤 عرض حساب مورد...</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.code})
-              </option>
-            ))}
-          </select>
         </div>
       )}
 

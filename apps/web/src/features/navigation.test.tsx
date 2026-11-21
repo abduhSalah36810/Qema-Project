@@ -175,7 +175,8 @@ describe('Navigation gated by server permissions (GET /api/v1/auth/me)', () => {
     expect(screen.getByRole('button', { name: /^المشتريات/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^المبيعات/ })).toBeInTheDocument();
     for (const name of [
-      'فواتير الشراء والاستلام',
+      'الموردون',
+      'فواتير الشراء',
       'مخزن الخامات',
       'مخزن المنتج التام',
       'الجرد',
@@ -244,7 +245,7 @@ describe('Navigation gated by server permissions (GET /api/v1/auth/me)', () => {
       ['العهد والمصروفات', 'العهد المالية المؤقتة'],
       ['العملاء وطلبات البيع', 'العملاء وطلبات البيع'],
       ['الأصناف المباعة', 'الأصناف المباعة'],
-      ['فواتير الشراء والاستلام', 'فواتير الشراء واستلام الخامات'],
+      ['فواتير الشراء', 'فواتير الشراء'],
       ['الأصناف المشتراة', 'الأصناف المشتراة'],
       ['الرواتب', 'الرواتب والأجور المالية'],
       ['التقارير', 'التقارير المالية ومؤشرات السيولة'],
@@ -275,7 +276,8 @@ describe('Navigation gated by server permissions (GET /api/v1/auth/me)', () => {
     expect(screen.getByRole('button', { name: /^المشتريات/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^المبيعات/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^الخزينة والنقدية/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'فواتير الشراء والموردين' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'الموردون' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'فواتير الشراء' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'العملاء والطلبات والتحصيل' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'الخزينة والاعتمادات' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'التقارير' })).toBeInTheDocument();

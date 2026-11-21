@@ -127,7 +127,7 @@ const GENERAL_NAV: NavEntry[] = [
     children: [
       { id: 'purchase-orders', name: 'أوامر الشراء (PO)', requiredPermission: 'purchase_orders:view' },
       { id: 'suppliers', name: 'الموردون', requiredPermission: 'suppliers:view' },
-      { id: 'finance-suppliers', name: 'فواتير الشراء والاستلام', requiredPermission: 'suppliers:view' },
+      { id: 'finance-suppliers', name: 'فواتير الشراء', requiredPermission: 'suppliers:view' },
       { id: 'finance-purchased-items', name: 'الأصناف المشتراة', requiredPermission: 'suppliers:view' },
     ],
   },
@@ -250,7 +250,7 @@ const FINANCE_NAV: NavEntry[] = [
     children: [
       { id: 'purchase-orders', name: 'أوامر الشراء (PO)', requiredPermission: 'purchase_orders:view' },
       { id: 'suppliers', name: 'الموردون', requiredPermission: 'suppliers:view' },
-      { id: 'finance-suppliers', name: 'فواتير الشراء والموردين', requiredPermission: 'suppliers:view' },
+      { id: 'finance-suppliers', name: 'فواتير الشراء', requiredPermission: 'suppliers:view' },
       { id: 'finance-purchased-items', name: 'الأصناف المشتراة', requiredPermission: 'suppliers:view' },
     ],
   },
@@ -405,7 +405,7 @@ function getHeaderInfo(nav: string): { kicker: string; title: string } {
     case 'suppliers':
       return { kicker: 'المشتريات والحسابات · سجل الموردين ومتابعة التعامل', title: 'الموردون' };
     case 'finance-suppliers':
-      return { kicker: 'المشتريات · من الفاتورة إلى الاستلام والسداد', title: 'فواتير الشراء واستلام الخامات' };
+      return { kicker: 'المشتريات · من الفاتورة إلى الاستلام والسداد', title: 'فواتير الشراء' };
     case 'purchase-orders':
       return { kicker: 'المشتريات · دورة أوامر الشراء والاستلام المخزني وعجز الإنتاج', title: 'أوامر الشراء (PO) وتوريدات الخامات' };
     case 'finance-purchased-items':
