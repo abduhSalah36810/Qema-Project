@@ -223,49 +223,50 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
   return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 1100 }}>
       <div
-        className="modal modal--wide modal--scrollable"
+        className="modal-card modal-card--xl"
+        dir="rtl"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: '1050px', width: '95%' }}
+        style={{ maxWidth: '1080px', width: '95%' }}
       >
-        <div className="modal__header">
+        <div className="modal-header">
           <div>
-            <h2 className="modal__title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span>📦</span> خامات العملاء الموردة أمانة (التشغيل للغير / Toll Manufacturing)
             </h2>
-            <p className="modal__subtitle">
+            <p className="modal-subtitle">
               تتبع خامات الأقمشة والمستلزمات المملوكة للعملاء وفصلها الصارم عن أصول مخزون المصنع (MFG-DEC-02).
             </p>
           </div>
-          <button type="button" className="modal__close" onClick={onClose} aria-label="إغلاق">
+          <button type="button" className="modal-close" onClick={onClose} aria-label="إغلاق">
             ✕
           </button>
         </div>
 
         {/* تنبيهات النجاح والخطأ */}
         {actionError && (
-          <div className="notice notice--error" style={{ margin: '12px 24px' }}>
+          <div className="modal-alert modal-alert--danger" style={{ margin: '12px 24px 0' }}>
             <span>⚠️ {actionError}</span>
           </div>
         )}
         {successMessage && (
-          <div className="notice notice--success" style={{ margin: '12px 24px' }}>
+          <div className="modal-alert modal-alert--success" style={{ margin: '12px 24px 0' }}>
             <span>✓ {successMessage}</span>
           </div>
         )}
 
         {/* شريط الأدوات والتبويبات */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', borderBottom: '1px solid var(--color-border)', flexWrap: 'wrap', gap: '12px' }}>
-          <div className="tab-group" style={{ display: 'flex', gap: '8px' }}>
+        <div className="modal-tabs" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', padding: '0 24px' }}>
+          <div style={{ display: 'flex', gap: '4px' }}>
             <button
               type="button"
-              className={`btn btn--sm ${activeTab === 'balances' ? 'btn--primary' : 'btn--ghost'}`}
+              className={`tab-btn ${activeTab === 'balances' ? 'tab-btn--active' : ''}`}
               onClick={() => setActiveTab('balances')}
             >
               📊 أرصدة الخامات المتاحة
             </button>
             <button
               type="button"
-              className={`btn btn--sm ${activeTab === 'receipts' ? 'btn--primary' : 'btn--ghost'}`}
+              className={`tab-btn ${activeTab === 'receipts' ? 'tab-btn--active' : ''}`}
               onClick={() => setActiveTab('receipts')}
             >
               📜 سجل سندات الاستلام
@@ -274,35 +275,35 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
               <>
                 <button
                   type="button"
-                  className={`btn btn--sm ${activeTab === 'new_receipt' ? 'btn--primary' : 'btn--ghost'}`}
+                  className={`tab-btn ${activeTab === 'new_receipt' ? 'tab-btn--active' : ''}`}
                   onClick={() => {
                     setActiveTab('new_receipt');
                     setActionError(null);
                     setSuccessMessage(null);
                   }}
                 >
-                  ＋ سند استلام خامة جديد
+                  ＋ سند استلام جديد
                 </button>
                 <button
                   type="button"
-                  className={`btn btn--sm ${activeTab === 'new_return' ? 'btn--primary' : 'btn--ghost'}`}
+                  className={`tab-btn ${activeTab === 'new_return' ? 'tab-btn--active' : ''}`}
                   onClick={() => {
                     setActiveTab('new_return');
                     setActionError(null);
                     setSuccessMessage(null);
                   }}
                 >
-                  ↩️ إرجاع فائض خامات للعميل
+                  ↩️ إرجاع فائض خامات
                 </button>
               </>
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <label style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>تصفية حسب العميل:</label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 0' }}>
+            <label style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0, whiteSpace: 'nowrap' }}>تصفية حسب العميل:</label>
             <select
-              className="form-control"
-              style={{ minWidth: '180px', padding: '4px 8px', fontSize: '0.85rem' }}
+              className="form-input"
+              style={{ minWidth: '180px', padding: '6px 10px', fontSize: '13px', height: '36px' }}
               value={selectedCustomerId}
               onChange={(e) => setSelectedCustomerId(e.target.value)}
             >
@@ -315,34 +316,35 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
             </select>
             <button
               type="button"
-              className="btn btn--ghost btn--sm"
+              className="tool"
               onClick={() => void loadData()}
               disabled={isLoading}
               title="تحديث البيانات"
+              style={{ height: '36px', padding: '0 10px' }}
             >
               🔄
             </button>
           </div>
         </div>
 
-        <div className="modal__body" style={{ padding: '24px' }}>
-          {isLoading && <div style={{ textAlign: 'center', padding: '32px' }}>جاري تحميل البيانات...</div>}
+        <div className="modal-body" style={{ padding: '20px 24px' }}>
+          {isLoading && <div style={{ textAlign: 'center', padding: '32px', fontSize: '14px', color: 'var(--text-muted)' }}>جاري تحميل البيانات...</div>}
 
           {/* تبويب 1: أرصدة الخامات */}
           {!isLoading && activeTab === 'balances' && (
             <div>
               <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>أرصدة خامات العملاء الحالية (أمانة في المخزن)</h3>
+                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>أرصدة خامات العملاء الحالية (أمانة في المخزن)</h3>
                 <span className="badge badge--info">{balances.length} صنف مسجل</span>
               </div>
 
               {balances.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '48px', color: 'var(--color-text-muted)' }}>
-                  لا توجد خامات عملاء مسجلة حالياً. استخدم «سند استلام خامة جديد» لتسجيل خامات واردة للتشغيل.
+                <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)', fontSize: '14px' }}>
+                  لا توجد خامات عملاء مسجلة حالياً. استخدم «سند استلام جديد» لتسجيل خامات واردة للتشغيل.
                 </div>
               ) : (
-                <div className="table-responsive">
-                  <table className="table">
+                <div className="order-table-wrap">
+                  <table className="order-detail-table" style={{ width: '100%', minWidth: '880px', fontSize: '14px' }}>
                     <thead>
                       <tr>
                         <th>العميل</th>
@@ -365,8 +367,8 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                           <td>{b.unit_name}</td>
                           <td style={{ textAlign: 'right' }}>{Number(b.total_received).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
                           <td style={{ textAlign: 'right' }}>{Number(b.total_consumed).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
-                          <td style={{ textAlign: 'right', color: 'var(--color-danger)' }}>{Number(b.total_wasted).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
-                          <td style={{ textAlign: 'right', color: 'var(--color-warning)' }}>{Number(b.total_returned).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--status-red-tx, #b91c1c)' }}>{Number(b.total_wasted).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
+                          <td style={{ textAlign: 'right', color: 'var(--status-amber-tx, #d97706)' }}>{Number(b.total_returned).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
                           <td style={{ textAlign: 'right' }}>
                             <span className={`badge ${Number(b.current_balance) > 0 ? 'badge--success' : 'badge--secondary'}`}>
                               {Number(b.current_balance).toLocaleString('ar-EG', { maximumFractionDigits: 3 })} {b.unit_name}
@@ -385,18 +387,18 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
           {!isLoading && activeTab === 'receipts' && (
             <div>
               <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>سجل سندات استلام خامات العملاء</h3>
+                <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>سجل سندات استلام خامات العملاء</h3>
                 <span className="badge badge--info">{receipts.length} سند</span>
               </div>
 
               {receipts.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '48px', color: 'var(--color-text-muted)' }}>
+                <div style={{ textAlign: 'center', padding: '48px', color: 'var(--text-muted)', fontSize: '14px' }}>
                   لا توجد سندات استلام خامات مسجلة.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   {receipts.map((r) => (
-                    <div key={r.id} className="card" style={{ padding: '16px', border: '1px solid var(--color-border)' }}>
+                    <div key={r.id} className="card" style={{ padding: '16px', border: '1px solid var(--border-subtle)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                         <div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -404,19 +406,19 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                             <span className="badge badge--primary">عميل: {r.customer_name}</span>
                             <span className="badge badge--secondary">{r.status}</span>
                           </div>
-                          <span style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                             تاريخ الاستلام: {new Date(r.received_date).toLocaleDateString('ar-EG')} · المستلم: {r.received_by}
                           </span>
                         </div>
                         {r.notes && (
-                          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', maxWidth: '350px' }}>
+                          <div style={{ fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '350px' }}>
                             ملاحظات: {r.notes}
                           </div>
                         )}
                       </div>
 
-                      <div className="table-responsive">
-                        <table className="table table--compact" style={{ margin: 0 }}>
+                      <div className="order-table-wrap" style={{ margin: 0 }}>
+                        <table className="order-detail-table" style={{ width: '100%', minWidth: '780px', fontSize: '14px', margin: 0 }}>
                           <thead>
                             <tr>
                               <th>كود الخامة</th>
@@ -435,8 +437,8 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                                 <td>{l.item_name_ar}</td>
                                 <td style={{ textAlign: 'right' }}>{Number(l.quantity_received).toLocaleString('ar-EG', { maximumFractionDigits: 3 })} {l.unit_name}</td>
                                 <td style={{ textAlign: 'right' }}>{Number(l.quantity_consumed).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
-                                <td style={{ textAlign: 'right', color: 'var(--color-danger)' }}>{Number(l.quantity_wasted).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
-                                <td style={{ textAlign: 'right', color: 'var(--color-warning)' }}>{Number(l.quantity_returned).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
+                                <td style={{ textAlign: 'right', color: 'var(--status-red-tx, #b91c1c)' }}>{Number(l.quantity_wasted).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
+                                <td style={{ textAlign: 'right', color: 'var(--status-amber-tx, #d97706)' }}>{Number(l.quantity_returned).toLocaleString('ar-EG', { maximumFractionDigits: 3 })}</td>
                                 <td style={{ textAlign: 'right' }}>
                                   <strong>{Number(l.quantity_remaining).toLocaleString('ar-EG', { maximumFractionDigits: 3 })} {l.unit_name}</strong>
                                 </td>
@@ -457,9 +459,10 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
             <form onSubmit={handleSubmitReceipt}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div>
-                  <label className="form-label">العميل المورد للخامة *</label>
+                  <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>العميل المورد للخامة *</label>
                   <select
-                    className="form-control"
+                    className="form-input"
+                    style={{ height: '40px', fontSize: '14px' }}
                     required
                     value={newReceiptCustomer}
                     onChange={(e) => setNewReceiptCustomer(e.target.value)}
@@ -474,10 +477,11 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="form-label">تاريخ الاستلام الفعلي بالمخزن</label>
+                  <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>تاريخ الاستلام الفعلي بالمخزن</label>
                   <input
                     type="date"
-                    className="form-control"
+                    className="form-input"
+                    style={{ height: '40px', fontSize: '14px' }}
                     value={newReceiptDate}
                     onChange={(e) => setNewReceiptDate(e.target.value)}
                   />
@@ -486,14 +490,14 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
 
               <div style={{ marginBottom: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <label className="form-label" style={{ margin: 0 }}>بنود الخامات المستلمة أمانة *</label>
-                  <button type="button" className="btn btn--ghost btn--sm" onClick={addReceiptLine}>
+                  <label className="form-label" style={{ margin: 0, fontSize: '13px', fontWeight: 600 }}>بنود الخامات المستلمة أمانة *</label>
+                  <button type="button" className="btn btn--secondary" style={{ padding: '4px 12px', fontSize: '13px' }} onClick={addReceiptLine}>
                     ＋ إضافة خامة أخرى
                   </button>
                 </div>
 
-                <div className="table-responsive">
-                  <table className="table">
+                <div className="order-table-wrap">
+                  <table className="order-detail-table" style={{ width: '100%', minWidth: '780px', fontSize: '14px' }}>
                     <thead>
                       <tr>
                         <th style={{ width: '40%' }}>صنف الخامة / القماش</th>
@@ -507,7 +511,8 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                         <tr key={idx}>
                           <td>
                             <select
-                              className="form-control"
+                              className="form-input"
+                              style={{ height: '36px', fontSize: '14px' }}
                               required
                               value={line.item_id}
                               onChange={(e) => updateReceiptLine(idx, 'item_id', e.target.value)}
@@ -516,7 +521,7 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                               {catalogItems
                                 .filter((it) => it.is_active && it.item_type !== 'finished_garment')
                                 .map((it) => (
-                                  <option key={it.id} value={it.id}>
+                                   <option key={it.id} value={it.id}>
                                     {it.code} — {it.name_ar} ({it.unit_name_ar})
                                   </option>
                                 ))}
@@ -528,7 +533,8 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                               step="0.001"
                               min="0.001"
                               required
-                              className="form-control"
+                              className="form-input"
+                              style={{ height: '36px', fontSize: '14px' }}
                               placeholder="الكمية"
                               value={line.quantity}
                               onChange={(e) => updateReceiptLine(idx, 'quantity', e.target.value)}
@@ -539,7 +545,8 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                               type="number"
                               step="0.01"
                               min="0"
-                              className="form-control"
+                              className="form-input"
+                              style={{ height: '36px', fontSize: '14px' }}
                               placeholder="سعر تقديري (للتأمين/الهالك)"
                               value={line.unit_cost_estimate}
                               onChange={(e) => updateReceiptLine(idx, 'unit_cost_estimate', e.target.value)}
@@ -548,8 +555,8 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                           <td style={{ textAlign: 'center' }}>
                             <button
                               type="button"
-                              className="btn btn--ghost btn--sm"
-                              style={{ color: 'var(--color-danger)' }}
+                              className="tool"
+                              style={{ color: 'var(--status-red-tx, #b91c1c)', padding: '4px 8px' }}
                               onClick={() => removeReceiptLine(idx)}
                               disabled={receiptLines.length <= 1}
                               title="حذف السطر"
@@ -565,10 +572,11 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
               </div>
 
               <div style={{ marginBottom: '20px' }}>
-                <label className="form-label">ملاحظات الاستلام والفحص الأولي</label>
+                <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>ملاحظات الاستلام والفحص الأولي</label>
                 <textarea
-                  className="form-control"
+                  className="form-input"
                   rows={2}
+                  style={{ fontSize: '14px', width: '100%' }}
                   placeholder="رقم إذن توريد العميل أو حالة الطرود والأثواب..."
                   value={newReceiptNotes}
                   onChange={(e) => setNewReceiptNotes(e.target.value)}
@@ -579,7 +587,7 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                 <button type="button" className="btn btn--secondary" onClick={() => setActiveTab('balances')}>
                   إلغاء
                 </button>
-                <button type="submit" className="btn btn--primary" disabled={isLoading}>
+                <button type="submit" className="btn btn--primary" disabled={isLoading} style={{ minHeight: '38px', padding: '0 18px', fontSize: '14px' }}>
                   حفظ واعتماد سند الاستلام أمانة
                 </button>
               </div>
@@ -590,9 +598,10 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
           {!isLoading && activeTab === 'new_return' && (
             <form onSubmit={handleSubmitReturn} style={{ maxWidth: '650px', margin: '0 auto' }}>
               <div style={{ marginBottom: '16px' }}>
-                <label className="form-label">العميل المستلم للمرتجع *</label>
+                <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>العميل المستلم للمرتجع *</label>
                 <select
-                  className="form-control"
+                  className="form-input"
+                  style={{ height: '40px', fontSize: '14px' }}
                   required
                   value={returnCustomer}
                   onChange={(e) => {
@@ -612,9 +621,10 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
 
               {returnCustomer && (
                 <div style={{ marginBottom: '16px' }}>
-                  <label className="form-label">سطر استلام الخامة المتبقية *</label>
+                  <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>سطر استلام الخامة المتبقية *</label>
                   <select
-                    className="form-control"
+                    className="form-input"
+                    style={{ height: '40px', fontSize: '14px' }}
                     required
                     value={returnReceiptLineId}
                     onChange={(e) => {
@@ -632,7 +642,7 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                     ))}
                   </select>
                   {activeReceiptLinesForReturn.length === 0 && (
-                    <span style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', display: 'block', marginTop: '4px' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
                       لا توجد أسطر استلام بخامات متبقية لهذا العميل.
                     </span>
                   )}
@@ -641,7 +651,7 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
 
               {returnReceiptLineId && (
                 <div style={{ marginBottom: '16px' }}>
-                  <label className="form-label">
+                  <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>
                     الكمية المراد إرجاعها * (الحد الأقصى المتاح للإرجاع: {selectedLineRemaining})
                   </label>
                   <input
@@ -650,7 +660,8 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                     min="0.001"
                     max={selectedLineRemaining}
                     required
-                    className="form-control"
+                    className="form-input"
+                    style={{ height: '40px', fontSize: '14px' }}
                     placeholder="الكمية"
                     value={returnQuantity}
                     onChange={(e) => setReturnQuantity(e.target.value)}
@@ -659,10 +670,11 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
               )}
 
               <div style={{ marginBottom: '20px' }}>
-                <label className="form-label">ملاحظات ومسوغ الإرجاع</label>
+                <label className="form-label" style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>ملاحظات ومسوغ الإرجاع</label>
                 <textarea
-                  className="form-control"
+                  className="form-input"
                   rows={2}
+                  style={{ fontSize: '14px', width: '100%' }}
                   placeholder="سبب إرجاع الفائض للعميل أو رقم إذن الخروج..."
                   value={returnNotes}
                   onChange={(e) => setReturnNotes(e.target.value)}
@@ -676,6 +688,7 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
                 <button
                   type="submit"
                   className="btn btn--primary"
+                  style={{ minHeight: '38px', padding: '0 18px', fontSize: '14px' }}
                   disabled={isLoading || !returnReceiptLineId || Number(returnQuantity) <= 0}
                 >
                   حفظ وتأكيد إرجاع الخامات
@@ -683,6 +696,12 @@ export const CustomerMaterialsModal: React.FC<CustomerMaterialsModalProps> = ({
               </div>
             </form>
           )}
+        </div>
+
+        <div className="modal-footer">
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
+            إغلاق النافذة
+          </button>
         </div>
       </div>
     </div>

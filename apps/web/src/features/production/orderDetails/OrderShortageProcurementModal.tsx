@@ -165,23 +165,22 @@ export const OrderShortageProcurementModal: React.FC<OrderShortageProcurementMod
   return (
     <div className="modal-backdrop" style={{ zIndex: 1100 }}>
       <div
-        className="modal-container"
+        className="modal-card modal-card--xl"
         dir="rtl"
-        style={{ maxWidth: '980px', width: '95%', maxHeight: '90vh', overflowY: 'auto' }}
+        style={{ maxWidth: '980px', width: '95%' }}
       >
-        <header className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <header className="modal-header">
           <div>
-            <span style={{ fontSize: '0.85rem', color: '#64748b' }}>إدارة مشتريات خامات الإنتاج · Phase 5 (T5)</span>
-            <h2 style={{ margin: '0.25rem 0 0', fontSize: '1.35rem', color: '#0f172a' }}>
+            <span className="modal-subtitle" style={{ fontSize: '12px' }}>إدارة مشتريات خامات الإنتاج · Phase 5 (T5)</span>
+            <h2 className="modal-title" style={{ marginTop: '4px' }}>
               عجز خامات أمر التشغيل #{report?.order_number || orderId}
             </h2>
           </div>
           <button
             type="button"
-            className="btn-icon"
+            className="modal-close"
             onClick={onClose}
             aria-label="إغلاق"
-            style={{ fontSize: '1.25rem', border: 'none', background: 'transparent', cursor: 'pointer' }}
           >
             ✕
           </button>

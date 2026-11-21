@@ -118,50 +118,46 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
   };
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" style={{ zIndex: 1100 }}>
       <div
-        className="modal-container"
-        style={{ maxWidth: '960px', width: '95%' }}
+        className="modal-card modal-card--xl"
+        dir="rtl"
+        style={{ maxWidth: '980px', width: '95%' }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
           <div>
-            <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>
-              📊 تحليل الاختناقات التشغيلية وتقويم المصنع
+            <h2 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>📊</span> تحليل الاختناقات التشغيلية وتقويم المصنع
             </h2>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', color: '#64748b' }}>
+            <p className="modal-subtitle">
               متابعة أزمنة مراحل الإنتاج (TIME-DEC-01..04)، كشف الاختناقات وتأثير الورديات على دورة التشغيل.
             </p>
           </div>
-          <button className="btn-close" onClick={onClose} aria-label="إغلاق">
+          <button className="modal-close" onClick={onClose} aria-label="إغلاق">
             ✕
           </button>
         </div>
 
         {statusMessage && (
           <div
-            style={{
-              padding: '10px 16px',
-              margin: '12px 20px 0 20px',
-              borderRadius: '6px',
-              backgroundColor: statusMessage.type === 'error' ? '#fef2f2' : '#f0fdf4',
-              color: statusMessage.type === 'error' ? '#991b1b' : '#166534',
-              border: `1px solid ${statusMessage.type === 'error' ? '#fecaca' : '#bbf7d0'}`,
-              fontSize: '0.9rem',
-            }}
+            className={`modal-alert ${statusMessage.type === 'error' ? 'modal-alert--danger' : 'modal-alert--success'}`}
+            style={{ margin: '12px 24px 0' }}
           >
-            {statusMessage.text}
+            <span>{statusMessage.type === 'error' ? '⚠️ ' : '✓ '}{statusMessage.text}</span>
           </div>
         )}
 
-        <div className="modal-tabs" style={{ padding: '0 20px', marginTop: '12px', borderBottom: '1px solid #e2e8f0' }}>
+        <div className="modal-tabs">
           <button
+            type="button"
             className={`tab-btn ${activeTab === 'bottlenecks' ? 'tab-btn--active' : ''}`}
             onClick={() => setActiveTab('bottlenecks')}
           >
             ⏱️ تحليل اختناقات المراحل
           </button>
           <button
+            type="button"
             className={`tab-btn ${activeTab === 'calendar' ? 'tab-btn--active' : ''}`}
             onClick={() => setActiveTab('calendar')}
           >
@@ -169,43 +165,43 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
           </button>
         </div>
 
-        <div className="modal-body" style={{ padding: '20px', maxHeight: '72vh', overflowY: 'auto' }}>
+        <div className="modal-body" style={{ padding: '20px 24px' }}>
           {loading ? (
-            <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>
+            <div style={{ textAlign: 'center', padding: '40px', fontSize: '14px', color: 'var(--text-muted)' }}>
               جاري تحميل إحصائيات التوقيت والاختناقات...
             </div>
           ) : activeTab === 'bottlenecks' && analysis ? (
             <div>
               {/* شريط المؤشرات السريعة */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '20px' }}>
-                <div style={{ padding: '14px', background: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                  <div style={{ fontSize: '0.8rem', color: '#64748b' }}>حالة تقويم المصنع</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '4px', color: analysis.calendar_approved ? '#047857' : '#d97706' }}>
+                <div style={{ padding: '14px', background: 'var(--surface-alt, #f8fafc)', borderRadius: '8px', border: '1px solid var(--border-subtle, #e2e8f0)' }}>
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary, #64748b)' }}>حالة تقويم المصنع</div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 700, marginTop: '4px', color: analysis.calendar_approved ? 'var(--status-green-tx, #047857)' : 'var(--status-amber-tx, #d97706)' }}>
                     {analysis.calendar_approved ? '✓ معتمد رسمياً' : '⚠️ تقديري (قيد الاعتماد)'}
                   </div>
-                  <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted, #64748b)', marginTop: '2px' }}>
                     {analysis.calendar_approved ? 'ساعات العمل الرسمية مفعلة' : 'الحساب يتم تقويمياً لحين الاعتماد'}
                   </div>
                 </div>
 
-                <div style={{ padding: '14px', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fee2e2' }}>
-                  <div style={{ fontSize: '0.8rem', color: '#991b1b' }}>أوامر قيد التشغيل متجاوزة للمدة</div>
-                  <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: '4px', color: '#b91c1c' }}>
+                <div style={{ padding: '14px', background: 'var(--status-red-bg, #fef2f2)', borderRadius: '8px', border: '1px solid var(--status-red-bd, #fee2e2)' }}>
+                  <div style={{ fontSize: '13px', color: 'var(--status-red-tx, #991b1b)' }}>أوامر قيد التشغيل متجاوزة للمدة</div>
+                  <div style={{ fontSize: '1.25rem', fontWeight: 700, marginTop: '4px', color: 'var(--status-red-tx, #b91c1c)' }}>
                     {analysis.active_bottlenecks_count} أمر تشغيل
                   </div>
-                  <div style={{ fontSize: '0.75rem', color: '#b91c1c', marginTop: '2px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--status-red-tx, #b91c1c)', marginTop: '2px' }}>
                     مراحل حالية تجاوزت وقت الوردية المتوقع
                   </div>
                 </div>
               </div>
 
               {/* جدول أزمنة المراحل الخمس واختناقاتها */}
-              <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', padding: '16px', marginBottom: '20px' }}>
-                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '12px' }}>
+              <div style={{ background: 'var(--surface-white, #fff)', borderRadius: '8px', border: '1px solid var(--border-subtle, #e2e8f0)', padding: '16px', marginBottom: '20px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, marginBottom: '12px' }}>
                   أداء المراحل الخمس ومعدل الاختناق (TIME-DEC-01 & TIME-DEC-04)
                 </h3>
-                <div className="table-responsive">
-                  <table className="preview-table table--compact" style={{ width: '100%' }}>
+                <div className="order-table-wrap">
+                  <table className="order-detail-table" style={{ width: '100%', minWidth: '820px', fontSize: '14px' }}>
                     <thead>
                       <tr>
                         <th>المرحلة الفنية</th>
@@ -228,8 +224,8 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
                             <td style={{ textAlign: 'center' }}>{st.total_completed_orders}</td>
                             <td style={{ textAlign: 'right' }}>{formatMinutes(st.avg_expected_minutes)}</td>
                             <td style={{ textAlign: 'right' }}>{formatMinutes(st.avg_working_minutes)}</td>
-                            <td style={{ textAlign: 'right', color: '#64748b' }}>{formatMinutes(st.avg_elapsed_minutes)}</td>
-                            <td style={{ textAlign: 'right', color: isExcess ? '#dc2626' : '#16a34a', fontWeight: 600 }}>
+                            <td style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{formatMinutes(st.avg_elapsed_minutes)}</td>
+                            <td style={{ textAlign: 'right', color: isExcess ? 'var(--status-red-tx, #dc2626)' : 'var(--status-green-tx, #16a34a)', fontWeight: 600 }}>
                               {isExcess ? `+${formatMinutes(st.variance_minutes)}` : `${formatMinutes(Math.abs(st.variance_minutes))} توفير`}
                             </td>
                             <td style={{ textAlign: 'center' }}>
@@ -250,17 +246,17 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
               </div>
 
               {/* أسباب التأخير وتوزيعها */}
-              <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0', padding: '16px', marginBottom: '20px' }}>
-                <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '12px' }}>
+              <div style={{ background: 'var(--surface-white, #fff)', borderRadius: '8px', border: '1px solid var(--border-subtle, #e2e8f0)', padding: '16px', marginBottom: '20px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, marginBottom: '12px' }}>
                   أكثر أسباب التأخير المسجلة (TIME-DEC-04)
                 </h3>
                 {analysis.top_delay_reasons.length === 0 ? (
-                  <p style={{ color: '#64748b', fontSize: '0.875rem' }}>لم تُسجل أي حالات تأخير مع أسباب حتى الآن.</p>
+                  <p style={{ color: 'var(--text-muted, #64748b)', fontSize: '14px' }}>لم تُسجل أي حالات تأخير مع أسباب حتى الآن.</p>
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
                     {analysis.top_delay_reasons.map((d) => (
-                      <div key={d.reason_code} style={{ padding: '10px 14px', background: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>{d.reason_name_ar}</span>
+                      <div key={d.reason_code} style={{ padding: '10px 14px', background: 'var(--surface-alt, #f8fafc)', borderRadius: '6px', border: '1px solid var(--border-subtle, #e2e8f0)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '14px', fontWeight: 600 }}>{d.reason_name_ar}</span>
                         <span className="badge badge--primary">{d.count} مرة</span>
                       </div>
                     ))}
@@ -270,12 +266,12 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
 
               {/* الاختناقات الجارية حالياً */}
               {analysis.active_bottlenecks.length > 0 && (
-                <div style={{ background: '#fff', borderRadius: '8px', border: '1px solid #fecaca', padding: '16px' }}>
-                  <h3 style={{ fontSize: '1rem', fontWeight: 600, color: '#991b1b', marginBottom: '12px' }}>
+                <div style={{ background: 'var(--surface-white, #fff)', borderRadius: '8px', border: '1px solid var(--status-red-bd, #fecaca)', padding: '16px' }}>
+                  <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--status-red-tx, #991b1b)', marginBottom: '12px' }}>
                     ⚠️ أوامر تشغيل متوقفة ومتجاوزة للمدة حالياً
                   </h3>
-                  <div className="table-responsive">
-                    <table className="preview-table table--compact" style={{ width: '100%' }}>
+                  <div className="order-table-wrap">
+                    <table className="order-detail-table" style={{ width: '100%', minWidth: '680px', fontSize: '14px' }}>
                       <thead>
                         <tr>
                           <th>رقم الأمر</th>
@@ -291,7 +287,7 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
                             <td><strong>{ab.order_number}</strong></td>
                             <td>{ab.stage_name_ar}</td>
                             <td>{formatMinutes(ab.expected_minutes)}</td>
-                            <td style={{ color: '#dc2626', fontWeight: 600 }}>{formatMinutes(ab.current_working_minutes)}</td>
+                            <td style={{ color: 'var(--status-red-tx, #dc2626)', fontWeight: 600 }}>{formatMinutes(ab.current_working_minutes)}</td>
                             <td>{ab.delay_reason_ar || 'لم يحدد سبب'}</td>
                           </tr>
                         ))}
@@ -304,18 +300,19 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
           ) : activeTab === 'calendar' ? (
             <form onSubmit={handleSaveCalendar} style={{ maxWidth: '650px' }}>
               <div style={{ marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '1.05rem', fontWeight: 600 }}>تهيئة تقويم ورديات المصنع (TIME-DEC-02)</h3>
-                <p style={{ color: '#64748b', fontSize: '0.85rem' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: 700 }}>تهيئة تقويم ورديات المصنع (TIME-DEC-02)</h3>
+                <p style={{ color: 'var(--text-secondary, #64748b)', fontSize: '13px' }}>
                   يستخدم هذا التقويم لتصفية ساعات العمل الفعلية واستبعاد أوقات الراحة وأيام العطلات الأسبوعية من زمن تنفيذ المراحل.
                 </p>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '14px', marginBottom: '16px' }}>
-                <label className="form-label">
+                <label className="form-label" style={{ display: 'grid', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
                   <span>اسم الوردية الأساسية</span>
                   <input
                     type="text"
                     className="form-input"
+                    style={{ height: '38px', fontSize: '14px' }}
                     value={shiftName}
                     onChange={(e) => setShiftName(e.target.value)}
                     required
@@ -323,21 +320,23 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
                 </label>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                  <label className="form-label">
+                  <label className="form-label" style={{ display: 'grid', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
                     <span>بداية الوردية</span>
                     <input
                       type="time"
                       className="form-input"
+                      style={{ height: '38px', fontSize: '14px' }}
                       value={shiftStart}
                       onChange={(e) => setShiftStart(e.target.value)}
                       required
                     />
                   </label>
-                  <label className="form-label">
+                  <label className="form-label" style={{ display: 'grid', gap: '6px', fontSize: '13px', fontWeight: 600 }}>
                     <span>نهاية الوردية</span>
                     <input
                       type="time"
                       className="form-input"
+                      style={{ height: '38px', fontSize: '14px' }}
                       value={shiftEnd}
                       onChange={(e) => setShiftEnd(e.target.value)}
                       required
@@ -346,7 +345,7 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
                 </div>
 
                 <div>
-                  <span style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, marginBottom: '8px' }}>
+                  <span style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>
                     أيام العمل الأسبوعية
                   </span>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '8px' }}>
@@ -359,12 +358,13 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
                             display: 'flex',
                             alignItems: 'center',
                             gap: '6px',
-                            padding: '8px',
-                            border: '1px solid #e2e8f0',
+                            padding: '8px 12px',
+                            border: `1px solid ${isChecked ? 'var(--teal-primary, #0d9488)' : 'var(--border-subtle, #e2e8f0)'}`,
                             borderRadius: '6px',
-                            background: isChecked ? '#eff6ff' : '#fff',
+                            background: isChecked ? 'var(--teal-light, #eff6ff)' : '#fff',
                             cursor: 'pointer',
-                            fontSize: '0.85rem',
+                            fontSize: '13px',
+                            fontWeight: isChecked ? 600 : 400,
                           }}
                         >
                           <input
@@ -379,7 +379,7 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
                   </div>
                 </div>
 
-                <div style={{ padding: '14px', background: isApproved ? '#f0fdf4' : '#fffbeb', borderRadius: '8px', border: `1px solid ${isApproved ? '#bbf7d0' : '#fde68a'}`, marginTop: '8px' }}>
+                <div style={{ padding: '14px', background: isApproved ? 'var(--status-green-bg, #f0fdf4)' : 'var(--status-amber-bg, #fffbeb)', borderRadius: '8px', border: `1px solid ${isApproved ? 'var(--status-green-bd, #bbf7d0)' : 'var(--status-amber-bd, #fde68a)'}`, marginTop: '8px' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
@@ -388,8 +388,8 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
                       disabled={!canManageStages}
                     />
                     <div>
-                      <strong style={{ fontSize: '0.9rem' }}>اعتماد تقويم الورديات رسمياً من إدارة المصنع</strong>
-                      <p style={{ margin: '2px 0 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                      <strong style={{ fontSize: '14px' }}>اعتماد تقويم الورديات رسمياً من إدارة المصنع</strong>
+                      <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted, #64748b)' }}>
                         عند تفعيل هذا الخيار، يتم إلغاء صفة &quot;التقديري&quot; وتعتبر إحصائيات زمن الوردية رسمية ومعتمدة.
                       </p>
                     </div>
@@ -399,7 +399,7 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
 
               {canManageStages && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-                  <button type="submit" className="btn btn--primary" disabled={saving}>
+                  <button type="submit" className="btn btn--primary" disabled={saving} style={{ minHeight: '38px', padding: '0 18px', fontSize: '14px' }}>
                     {saving ? 'جاري الحفظ…' : 'حفظ إعدادات التقويم'}
                   </button>
                 </div>
@@ -408,8 +408,8 @@ export const BottleneckCalendarModal: React.FC<BottleneckCalendarModalProps> = (
           ) : null}
         </div>
 
-        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', padding: '12px 20px', borderTop: '1px solid #e2e8f0' }}>
-          <button className="btn btn--secondary" onClick={onClose}>
+        <div className="modal-footer">
+          <button type="button" className="btn btn--secondary" onClick={onClose}>
             إغلاق
           </button>
         </div>
