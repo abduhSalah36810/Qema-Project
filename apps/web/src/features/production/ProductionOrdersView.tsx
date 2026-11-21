@@ -13,7 +13,6 @@ import {
 } from './productionApi';
 import { NewOrderModal } from './NewOrderModal';
 import { OrderDetailsPage } from './OrderDetailsPage';
-import { CustomerMaterialsModal } from './CustomerMaterialsModal';
 import { BottleneckCalendarModal } from './BottleneckCalendarModal';
 import { nextStep, ORDER_STATUS_LABEL } from './orderWorkflow';
 import type { NavFocus, OrderDetailTab } from '@/lib/navigation';
@@ -67,7 +66,6 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
 
   // حالة النوافذ المنبثقة
   const [isNewModalOpen, setIsNewModalOpen] = useState<boolean>(false);
-  const [isCustomerMaterialsOpen, setIsCustomerMaterialsOpen] = useState<boolean>(false);
   const [isBottleneckCalendarOpen, setIsBottleneckCalendarOpen] = useState<boolean>(false);
   const [selectedOrder, setSelectedOrder] = useState<ProductionOrder | null>(null);
   const [selectedTab, setSelectedTab] = useState<OrderDetailTab | undefined>(undefined);
@@ -328,17 +326,6 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
             <button
               type="button"
               className="tool"
-              onClick={() => setIsCustomerMaterialsOpen(true)}
-              title="خامات الأمانة المستلمة من العملاء للتشغيل للغير (MFG-DEC-02)"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-            >
-              📦 خامات العملاء والأمانات
-            </button>
-          )}
-          {canManageProduction && (
-            <button
-              type="button"
-              className="tool"
               onClick={() => setIsBottleneckCalendarOpen(true)}
               title="تحليل الاختناقات وتقويم المصنع (TIME-DEC-01..04)"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
@@ -503,13 +490,6 @@ export const ProductionOrdersView: React.FC<ProductionOrdersViewProps> = ({ focu
           </article>
         </aside>
       </div>
-
-      {/* النافذة المنبثقة لخامات العملاء الموردة أمانة (Phase 6) */}
-      <CustomerMaterialsModal
-        isOpen={isCustomerMaterialsOpen}
-        onClose={() => setIsCustomerMaterialsOpen(false)}
-        catalogItems={catalogItems}
-      />
 
       {/* النافذة المنبثقة لتحليل الاختناقات وتقويم المصنع (Phase 7) */}
       <BottleneckCalendarModal

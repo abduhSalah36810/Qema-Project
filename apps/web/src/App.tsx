@@ -26,6 +26,8 @@ const CustomerReturnsView = lazy(() =>
   import('@/features/customers/CustomerReturnsView').then((m) => ({ default: m.CustomerReturnsView })));
 const MainWarehouseView = lazy(() =>
   import('@/features/inventory/MainWarehouseView').then((m) => ({ default: m.MainWarehouseView })));
+const CustomerMaterialsView = lazy(() =>
+  import('@/features/inventory/CustomerMaterialsView').then((m) => ({ default: m.CustomerMaterialsView })));
 const MachineryView = lazy(() =>
   import('@/features/inventory/MachineryView').then((m) => ({ default: m.MachineryView })));
 const FinishedGoodsView = lazy(() =>
@@ -79,31 +81,31 @@ type ServerConnectionState =
 
 type NavEntry =
   | {
-      type: 'item';
-      id: string;
-      name: string;
-      icon: string;
-      badge?: string;
-      badgeVariant?: 'teal' | 'amber' | 'slate';
-      requiredPermission?: string;
-    }
+    type: 'item';
+    id: string;
+    name: string;
+    icon: string;
+    badge?: string;
+    badgeVariant?: 'teal' | 'amber' | 'slate';
+    requiredPermission?: string;
+  }
   | {
-      type: 'group';
+    type: 'group';
+    id: string;
+    name: string;
+    icon: string;
+    badge?: string;
+    badgeVariant?: 'teal' | 'amber' | 'slate';
+    requiredPermission?: string;
+    children: Array<{
       id: string;
       name: string;
-      icon: string;
+      icon?: string;
       badge?: string;
       badgeVariant?: 'teal' | 'amber' | 'slate';
       requiredPermission?: string;
-      children: Array<{
-        id: string;
-        name: string;
-        icon?: string;
-        badge?: string;
-        badgeVariant?: 'teal' | 'amber' | 'slate';
-        requiredPermission?: string;
-      }>;
-    };
+    }>;
+  };
 
 /**
  * القائمة الجانبية حسب الدور: كل موظف يرى أولاً ما يعمل عليه يومياً، وبأسماء عملية لا بأسماء الوحدات.
@@ -133,6 +135,7 @@ const GENERAL_NAV: NavEntry[] = [
     icon: '📦',
     children: [
       { id: 'warehouse-raw', name: 'مخزن الخامات', requiredPermission: 'inventory:view' },
+      { id: 'warehouse-customer-materials', name: 'أمانات خامات العملاء (CMT)', requiredPermission: 'inventory:view' },
       { id: 'warehouse-finished', name: 'مخزن المنتج التام', requiredPermission: 'inventory:view' },
       { id: 'warehouse-stocktake', name: 'الجرد', requiredPermission: 'inventory:stocktake:view' },
     ],
@@ -204,6 +207,7 @@ const WAREHOUSE_NAV: NavEntry[] = [
     icon: '📦',
     children: [
       { id: 'warehouse-raw', name: 'مخزن الخامات', requiredPermission: 'inventory:view' },
+      { id: 'warehouse-customer-materials', name: 'أمانات خامات العملاء (CMT)', requiredPermission: 'inventory:view' },
       { id: 'warehouse-finished', name: 'مخزن المنتج التام', requiredPermission: 'inventory:view' },
       { id: 'warehouse-stocktake', name: 'الجرد', requiredPermission: 'inventory:stocktake:view' },
     ],
@@ -288,6 +292,7 @@ const FINANCE_NAV: NavEntry[] = [
     name: 'اعتماد الأصناف والجرد',
     icon: '✅',
     children: [
+      { id: 'warehouse-customer-materials', name: 'أمانات خامات العملاء (CMT)', requiredPermission: 'inventory:view' },
       { id: 'warehouse-catalog', name: 'دليل الخامات والأصناف', requiredPermission: 'catalog:view' },
       { id: 'warehouse-stocktake', name: 'الجرد', requiredPermission: 'inventory:stocktake:view' },
     ],
@@ -313,6 +318,7 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   orders: ['customers:deliveries:manage'],
   'customer-returns': ['customers:deliveries:manage', 'customers:view'],
   'warehouse-raw': ['inventory:view'],
+  'warehouse-customer-materials': ['inventory:view'],
   'warehouse-machinery': ['inventory:view'],
   'warehouse-finished': ['inventory:view'],
   'warehouse-catalog': ['catalog:view'],
@@ -365,6 +371,8 @@ function getHeaderInfo(nav: string): { kicker: string; title: string } {
     case 'warehouse-raw':
     case 'inventory':
       return { kicker: 'المخازن · الخامات والمستلزمات ومواد التعبئة', title: 'مخزن الخامات والمستلزمات' };
+    case 'warehouse-customer-materials':
+      return { kicker: 'المخازن والأمانات · التشغيل للغير', title: 'أمانات خامات العملاء (CMT)' };
     case 'warehouse-machinery':
       return { kicker: 'المخازن · معدات التشغيل وخطوط الإنتاج', title: 'الماكينات ومعدات التشغيل' };
     case 'warehouse-finished':
@@ -805,8 +813,8 @@ function AppContent() {
                 {user
                   ? (user.email ? `${user.email}` : 'مستخدم موثق')
                   : authState === 'unverified'
-                  ? 'جلسة غير مؤكدة من الخادم'
-                  : 'بيئة تجريبية · غير متصل بالمصنع'}
+                    ? 'جلسة غير مؤكدة من الخادم'
+                    : 'بيئة تجريبية · غير متصل بالمصنع'}
               </span>
             </div>
           </div>
@@ -818,12 +826,12 @@ function AppContent() {
             {user
               ? 'إدارة الجلسة / الخروج'
               : authState === 'unverified'
-              ? 'تأكيد الجلسة / الخروج'
-              : isConfigured
-              ? 'تسجيل الدخول'
-              : isDevAuthAvailable
-              ? 'تسجيل دخول المطور'
-              : 'إعداد Supabase'}
+                ? 'تأكيد الجلسة / الخروج'
+                : isConfigured
+                  ? 'تسجيل الدخول'
+                  : isDevAuthAvailable
+                    ? 'تسجيل دخول المطور'
+                    : 'إعداد Supabase'}
           </button>
         </div>
       </aside>
@@ -867,20 +875,19 @@ function AppContent() {
             {/* شارة حالة المصادقة */}
             <button
               type="button"
-              className={`top-header__auth-badge ${
-                user
-                  ? 'top-header__auth-badge--active'
-                  : authState === 'unverified'
+              className={`top-header__auth-badge ${user
+                ? 'top-header__auth-badge--active'
+                : authState === 'unverified'
                   ? 'top-header__auth-badge--amber'
                   : ''
-              }`}
+                }`}
               onClick={() => setAuthModalOpen(true)}
               title={
                 user
                   ? `مستخدم موثق (${user.email || user.id})${activeRoleLabel ? ` — الدور: ${activeRoleLabel}` : ''}`
                   : authState === 'unverified'
-                  ? 'جلسة غير مؤكدة خادمياً'
-                  : 'تسجيل الدخول للنظام'
+                    ? 'جلسة غير مؤكدة خادمياً'
+                    : 'تسجيل الدخول للنظام'
               }
             >
               <span aria-hidden>{user ? '✓' : authState === 'unverified' ? '⚠️' : '🔒'}</span>
@@ -888,8 +895,8 @@ function AppContent() {
                 {user
                   ? `${activeRoleLabel ? `${activeRoleLabel} · ` : ''}${user.email || 'مستخدم موثق'}`
                   : authState === 'unverified'
-                  ? 'جلسة غير مؤكدة'
-                  : 'تسجيل الدخول'}
+                    ? 'جلسة غير مؤكدة'
+                    : 'تسجيل الدخول'}
               </span>
             </button>
 
@@ -950,109 +957,111 @@ function AppContent() {
           {/* محتوى الشاشة المحدد بحسب المسار ومحمي بـ Route Guard (الشاشات المُقيَّلة تُحمَّل عند الطلب) */}
           <Suspense fallback={<ScreenLoader />}>
             {!user ? (
-            authState === 'loading' ? (
-              <AccessStateNotice icon="⏳" title="جاري التحقق من الجلسة" message="يتم التحقق من هوية المستخدم وصلاحياته مع خادم المصنع..." />
-            ) : (
+              authState === 'loading' ? (
+                <AccessStateNotice icon="⏳" title="جاري التحقق من الجلسة" message="يتم التحقق من هوية المستخدم وصلاحياته مع خادم المصنع..." />
+              ) : (
+                <AccessStateNotice
+                  icon="🔒"
+                  title={authState === 'unverified' ? 'تعذر تأكيد الجلسة مع الخادم' : 'سجّل الدخول لعرض شاشات المصنع'}
+                  message={
+                    authState === 'unverified'
+                      ? 'توجد جلسة دخول لكن الخادم لم يؤكدها، لذلك لا تُعرض أي شاشة محمية. أعد محاولة التحقق أو سجّل الخروج.'
+                      : 'لا تُعرض المهام أو بيانات المخازن والإنتاج والمالية قبل تسجيل الدخول والتحقق من صلاحياتك.'
+                  }
+                  tone={authState === 'unverified' ? 'error' : 'info'}
+                  actionLabel={authState === 'unverified' ? 'إدارة الجلسة' : 'تسجيل الدخول'}
+                  onAction={() => setAuthModalOpen(true)}
+                />
+              )
+            ) : permissionsStatus === 'loading' || permissionsStatus === 'idle' ? (
+              <AccessStateNotice icon="⏳" title="جاري تحميل الصلاحيات" message="يتم تحميل صلاحيات حسابك من الخادم. لن تظهر أي شاشة محمية قبل اكتمال التحميل." />
+            ) : permissionsStatus === 'error' ? (
               <AccessStateNotice
-                icon="🔒"
-                title={authState === 'unverified' ? 'تعذر تأكيد الجلسة مع الخادم' : 'سجّل الدخول لعرض شاشات المصنع'}
-                message={
-                  authState === 'unverified'
-                    ? 'توجد جلسة دخول لكن الخادم لم يؤكدها، لذلك لا تُعرض أي شاشة محمية. أعد محاولة التحقق أو سجّل الخروج.'
-                    : 'لا تُعرض المهام أو بيانات المخازن والإنتاج والمالية قبل تسجيل الدخول والتحقق من صلاحياتك.'
-                }
-                tone={authState === 'unverified' ? 'error' : 'info'}
-                actionLabel={authState === 'unverified' ? 'إدارة الجلسة' : 'تسجيل الدخول'}
-                onAction={() => setAuthModalOpen(true)}
+                icon="⚠️"
+                title="تعذر تحميل صلاحيات الحساب"
+                message={permissionsError || 'تعذر تحميل الصلاحيات من الخادم. لا تُعرض الشاشات المحمية حتى يتم التحميل بنجاح.'}
+                tone="error"
+                actionLabel="إعادة المحاولة"
+                onAction={() => void retryVerification()}
               />
-            )
-          ) : permissionsStatus === 'loading' || permissionsStatus === 'idle' ? (
-            <AccessStateNotice icon="⏳" title="جاري تحميل الصلاحيات" message="يتم تحميل صلاحيات حسابك من الخادم. لن تظهر أي شاشة محمية قبل اكتمال التحميل." />
-          ) : permissionsStatus === 'error' ? (
-            <AccessStateNotice
-              icon="⚠️"
-              title="تعذر تحميل صلاحيات الحساب"
-              message={permissionsError || 'تعذر تحميل الصلاحيات من الخادم. لا تُعرض الشاشات المحمية حتى يتم التحميل بنجاح.'}
-              tone="error"
-              actionLabel="إعادة المحاولة"
-              onAction={() => void retryVerification()}
-            />
-          ) : !hasAnyPermission ? (
-            <AccessStateNotice
-              icon="🚫"
-              title="لا توجد صلاحيات مسندة لحسابك"
-              message="تم تسجيل دخولك بنجاح، لكن حسابك لا يملك أي صلاحية في النظام حالياً. تواصل مع المدير العام لإسناد الدور المناسب."
-            />
-          ) : !canAccessRoute(activeNav) ? (
-            <AccessDeniedView
-              routeTitle={headerInfo.title}
-              requiredPermissions={ROUTE_PERMISSIONS[activeNav]}
-              roleLabel={activeRoleLabel}
-              onReturnToInbox={() => setActiveNav('inbox')}
-            />
-          ) : activeNav === 'inbox' ? (
-            <TaskInboxView onNavigate={setActiveNav} />
-          ) : activeNav === 'master-data' ? (
-            <MasterDataView onNavigate={(id) => setActiveNav(id)} />
-          ) : activeNav === 'batches' ? (
-            <ProductionOrdersView focus={navFocus} onFocusHandled={() => setNavFocus(undefined)} />
-          ) : activeNav === 'production-claims' ? (
-            <DiscrepancyClaimsView onOpenOrder={(orderId) => setActiveNav('batches', { orderId })} />
-          ) : activeNav === 'demand-pool' ? (
-            <DemandPoolView onOpenOrder={(orderId) => setActiveNav('batches', { orderId })} />
-          ) : activeNav === 'orders' ? (
-            <CustomerDeliveriesView />
-          ) : activeNav === 'customer-returns' ? (
-            <CustomerReturnsView />
-          ) : activeNav === 'warehouse-guide' ? (
-            <WarehouseGuideView />
-          ) : activeNav === 'warehouse-catalog' || activeNav === 'catalog' ? (
-            <CatalogManagementView />
-          ) : activeNav === 'warehouse-raw' || activeNav === 'inventory' ? (
-            <MainWarehouseView />
-          ) : activeNav === 'warehouse-machinery' ? (
-            <MachineryView />
-          ) : activeNav === 'warehouse-finished' ? (
-            <FinishedGoodsView />
-          ) : activeNav === 'warehouse-stocktake' ? (
-            <StocktakeView />
-          ) : activeNav === 'warehouse-reports' || activeNav === 'inventory-reports' ? (
-            <FinancialReportsView initialTab="inventory" />
-          ) : activeNav === 'finance-treasury' || activeNav === 'finance' ? (
-            <TreasuryView />
-          ) : activeNav === 'finance-operations' || activeNav === 'finance-revenues' || activeNav === 'finance-expenses' ? (
-            <ReceiptsDisbursementsView />
-          ) : activeNav === 'finance-custody' ? (
-            <CustodyView />
-          ) : activeNav === 'finance-customers' || activeNav === 'customers' ? (
-            <CustomersView />
-          ) : activeNav === 'finance-sold-items' ? (
-            <SoldItemsView />
-          ) : activeNav === 'finance-suppliers' ? (
-            <SuppliersView />
-          ) : activeNav === 'purchase-orders' ? (
-            <PurchaseOrdersView />
-          ) : activeNav === 'finance-purchased-items' ? (
-            <PurchasedItemsView />
-          ) : activeNav === 'finance-payments' ? (
-            <PaymentsCollectionsView />
-          ) : activeNav === 'finance-payroll' || activeNav === 'payroll' ? (
-            <PayrollFinanceView />
-          ) : activeNav === 'report-income-statement' ? (
-            <IncomeStatementView />
-          ) : activeNav === 'report-balance-sheet' ? (
-            <BalanceSheetView />
-          ) : activeNav === 'report-account-statements' ? (
-            <AccountStatementsView />
-          ) : activeNav === 'report-management' ? (
-            <ManagementReportsView />
-          ) : activeNav === 'finance-reports' || activeNav === 'reports' ? (
-            <FinancialReportsView initialTab="summary" />
-          ) : activeNav === 'dashboard' ? (
-            <OperationsBoard />
-          ) : (
-            <TaskInboxView onNavigate={setActiveNav} />
-          )}
+            ) : !hasAnyPermission ? (
+              <AccessStateNotice
+                icon="🚫"
+                title="لا توجد صلاحيات مسندة لحسابك"
+                message="تم تسجيل دخولك بنجاح، لكن حسابك لا يملك أي صلاحية في النظام حالياً. تواصل مع المدير العام لإسناد الدور المناسب."
+              />
+            ) : !canAccessRoute(activeNav) ? (
+              <AccessDeniedView
+                routeTitle={headerInfo.title}
+                requiredPermissions={ROUTE_PERMISSIONS[activeNav]}
+                roleLabel={activeRoleLabel}
+                onReturnToInbox={() => setActiveNav('inbox')}
+              />
+            ) : activeNav === 'inbox' ? (
+              <TaskInboxView onNavigate={setActiveNav} />
+            ) : activeNav === 'master-data' ? (
+              <MasterDataView onNavigate={(id) => setActiveNav(id)} />
+            ) : activeNav === 'batches' ? (
+              <ProductionOrdersView focus={navFocus} onFocusHandled={() => setNavFocus(undefined)} />
+            ) : activeNav === 'production-claims' ? (
+              <DiscrepancyClaimsView onOpenOrder={(orderId) => setActiveNav('batches', { orderId })} />
+            ) : activeNav === 'demand-pool' ? (
+              <DemandPoolView onOpenOrder={(orderId) => setActiveNav('batches', { orderId })} />
+            ) : activeNav === 'orders' ? (
+              <CustomerDeliveriesView />
+            ) : activeNav === 'customer-returns' ? (
+              <CustomerReturnsView />
+            ) : activeNav === 'warehouse-guide' ? (
+              <WarehouseGuideView />
+            ) : activeNav === 'warehouse-catalog' || activeNav === 'catalog' ? (
+              <CatalogManagementView />
+            ) : activeNav === 'warehouse-raw' || activeNav === 'inventory' ? (
+              <MainWarehouseView />
+            ) : activeNav === 'warehouse-customer-materials' ? (
+              <CustomerMaterialsView />
+            ) : activeNav === 'warehouse-machinery' ? (
+              <MachineryView />
+            ) : activeNav === 'warehouse-finished' ? (
+              <FinishedGoodsView />
+            ) : activeNav === 'warehouse-stocktake' ? (
+              <StocktakeView />
+            ) : activeNav === 'warehouse-reports' || activeNav === 'inventory-reports' ? (
+              <FinancialReportsView initialTab="inventory" />
+            ) : activeNav === 'finance-treasury' || activeNav === 'finance' ? (
+              <TreasuryView />
+            ) : activeNav === 'finance-operations' || activeNav === 'finance-revenues' || activeNav === 'finance-expenses' ? (
+              <ReceiptsDisbursementsView />
+            ) : activeNav === 'finance-custody' ? (
+              <CustodyView />
+            ) : activeNav === 'finance-customers' || activeNav === 'customers' ? (
+              <CustomersView />
+            ) : activeNav === 'finance-sold-items' ? (
+              <SoldItemsView />
+            ) : activeNav === 'finance-suppliers' ? (
+              <SuppliersView />
+            ) : activeNav === 'purchase-orders' ? (
+              <PurchaseOrdersView />
+            ) : activeNav === 'finance-purchased-items' ? (
+              <PurchasedItemsView />
+            ) : activeNav === 'finance-payments' ? (
+              <PaymentsCollectionsView />
+            ) : activeNav === 'finance-payroll' || activeNav === 'payroll' ? (
+              <PayrollFinanceView />
+            ) : activeNav === 'report-income-statement' ? (
+              <IncomeStatementView />
+            ) : activeNav === 'report-balance-sheet' ? (
+              <BalanceSheetView />
+            ) : activeNav === 'report-account-statements' ? (
+              <AccountStatementsView />
+            ) : activeNav === 'report-management' ? (
+              <ManagementReportsView />
+            ) : activeNav === 'finance-reports' || activeNav === 'reports' ? (
+              <FinancialReportsView initialTab="summary" />
+            ) : activeNav === 'dashboard' ? (
+              <OperationsBoard />
+            ) : (
+              <TaskInboxView onNavigate={setActiveNav} />
+            )}
           </Suspense>
         </main>
       </div>

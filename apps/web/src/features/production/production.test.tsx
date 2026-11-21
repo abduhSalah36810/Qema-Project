@@ -422,13 +422,13 @@ describe('Production Orders Feature — Frontend Tests', () => {
     expect(screen.queryByText(/تقويم واختناقات التشغيل/)).not.toBeInTheDocument();
   });
 
-  it('T1.4 shows the tools again for the production manager role permissions', async () => {
+  it('T1.4 shows the bottleneck calendar tool for the production manager and keeps customer materials separated in warehouse', async () => {
     t1BaseMocks(PROVISIONAL_FALLBACK_ORDERS);
     grantedPermissions.clear();
     ['production:orders:view', 'production:orders:manage', 'production:stages:manage'].forEach((p) => grantedPermissions.add(p));
     render(<ProductionOrdersView />);
     await waitFor(() => expect(screen.getByText(/PO-2026-0001/i)).toBeInTheDocument());
-    expect(screen.getByText(/خامات العملاء والأمانات/)).toBeInTheDocument();
+    expect(screen.queryByText(/خامات العملاء والأمانات/)).not.toBeInTheDocument();
     expect(screen.getByText(/تقويم واختناقات التشغيل/)).toBeInTheDocument();
   });
 
