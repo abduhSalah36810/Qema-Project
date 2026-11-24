@@ -11,3 +11,10 @@ for p in (str(api_dir), str(repo_root)):
         sys.path.insert(0, p)
 
 from app.main import app
+
+@app.middleware("http")
+async def log_path(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Debug-Path"] = request.url.path
+    return response
+
