@@ -1,0 +1,7 @@
+{
+  "name": "qemma-root",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-web.js"
+  }
+}

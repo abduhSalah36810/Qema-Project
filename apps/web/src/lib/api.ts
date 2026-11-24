@@ -45,6 +45,10 @@ function getApiBaseUrl(): string {
   if (typeof envUrl === 'string' && envUrl.trim().length > 0) {
     return envUrl.trim().replace(/\/+$/, '');
   }
+  // في بيئة الإنتاج السحابية (Cloudflare Pages)، الاعتماد التلقائي على خادم Vercel المعتمد للمشروع
+  if (import.meta.env.PROD) {
+    return 'https://qemma-api.vercel.app';
+  }
   return '';
 }
 

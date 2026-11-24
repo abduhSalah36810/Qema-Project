@@ -11,8 +11,15 @@
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+const DEFAULT_SUPABASE_URL = 'https://kreuvfphivdwpijqbxlt.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtyZXV2ZnBoaXZkd3BpanFieGx0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU0NzUzOTQsImV4cCI6MjExMTA1MTM5NH0.Cgysc5BgEqwDWCVc3Ej5uSsHuot8WmuqgEQCSRC-Zwk';
+
+const envUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
+const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+
+const supabaseUrl = envUrl || (import.meta.env.PROD ? DEFAULT_SUPABASE_URL : '');
+const supabaseAnonKey = envKey || (import.meta.env.PROD ? DEFAULT_SUPABASE_ANON_KEY : '');
 
 /**
  * التحقق مما إذا كانت إعدادات Supabase العامة محددة في ملف البيئة
