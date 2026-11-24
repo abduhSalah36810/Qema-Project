@@ -14,7 +14,12 @@ from app.main import app
 
 @app.middleware("http")
 async def log_path(request, call_next):
+    # Restore original path if Vercel rewrote it to /api/index.py
+    matched = request.headers.get("x-matched-path") or request.headers.get("x-vercel-matched-path") or request.headers.get("x-real-path")
+    if matched:
+        request.scope["path"] = matched
     response = await call_next(request)
     response.headers["X-Debug-Path"] = request.url.path
+    response.headers["X-Matched-Header"] = str(matched)
     return response
 
