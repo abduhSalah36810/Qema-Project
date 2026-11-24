@@ -8,8 +8,6 @@ import '@/styles/workflow.css';
  * الشاشات تُحمَّل عند الطلب (code splitting) حتى لا يُجمَّع التطبيق كله في حزمة واحدة ضخمة؛
  * شاشة المهام تبقى استيراداً مباشراً لأنها نقطة الهبوط الأولى لكل مستخدم.
  */
-const OperationsBoard = lazy(() =>
-  import('@/features/operations-board/OperationsBoard').then((m) => ({ default: m.OperationsBoard })));
 const ProductionOrdersView = lazy(() =>
   import('@/features/production/ProductionOrdersView').then((m) => ({ default: m.ProductionOrdersView })));
 const DiscrepancyClaimsView = lazy(() =>
@@ -71,7 +69,7 @@ const MasterDataView = lazy(() =>
 
 import { TaskInboxView } from '@/features/inbox/TaskInboxView';
 import { apiClient, ApiError } from '@/lib/api';
-import { AuthProvider, isDemoStripVisible, useAuth } from '@/features/auth/AuthContext';
+import { AuthProvider, useAuth } from '@/features/auth/AuthContext';
 import { SignInModal } from '@/features/auth/SignInModal';
 import { DialogProvider } from '@/components/feedback/DialogProvider';
 import type { NavFocus } from '@/lib/navigation';
@@ -117,7 +115,6 @@ const HOME_ITEM: NavEntry = { type: 'item', id: 'inbox', name: 'الرئيسية
 
 const GENERAL_NAV: NavEntry[] = [
   HOME_ITEM,
-  { type: 'item', id: 'dashboard', name: 'لوحة التشغيل', icon: '📊', requiredPermission: 'reports:view' },
   // ترتيب القائمة يتبع دورة العمل في المصنع: شراء ← تخزين ← تشغيل ← بيع وتسليم ← مالية
   {
     type: 'group',
@@ -237,7 +234,6 @@ const PRODUCTION_NAV: NavEntry[] = [
   { type: 'item', id: 'warehouse-raw', name: 'أرصدة الخامات', icon: '📦', requiredPermission: 'inventory:view' },
   { type: 'item', id: 'master-data', name: 'الموديلات والمقاسات', icon: '👕' },
   { type: 'item', id: 'warehouse-catalog', name: 'دليل الخامات والأصناف', icon: '📚', requiredPermission: 'catalog:view' },
-  { type: 'item', id: 'dashboard', name: 'لوحة التشغيل', icon: '📊', requiredPermission: 'reports:view' },
 ];
 
 const FINANCE_NAV: NavEntry[] = [
@@ -429,9 +425,8 @@ function getHeaderInfo(nav: string): { kicker: string; title: string } {
     case 'master-data':
       return { kicker: 'البيانات الأساسية · تُضاف وتُعدل من هنا دون تدخل المطور', title: 'البيانات الأساسية' };
     case 'dashboard':
-      return { kicker: 'متابعة تشغيل المصنع · مؤشرات القياس والرقابة التنفيذية', title: 'لوحة متابعة تشغيل المصنع' };
     default:
-      return { kicker: 'متابعة تشغيل المصنع', title: 'لوحة متابعة تشغيل المصنع' };
+      return { kicker: 'مهامك اليوم حسب دورك', title: 'الرئيسية' };
   }
 }
 
@@ -814,14 +809,14 @@ function AppContent() {
               <span className="sidebar__user-name">
                 {user
                   ? (activeRoleLabel ? `${activeRoleLabel}` : user.email || 'مستخدم موثق')
-                  : 'حساب تجريبي (غير مسجل)'}
+                  : 'غير مسجل الدخول'}
               </span>
               <span className="sidebar__user-role">
                 {user
                   ? (user.email ? `${user.email}` : 'مستخدم موثق')
                   : authState === 'unverified'
                     ? 'جلسة غير مؤكدة من الخادم'
-                    : 'بيئة تجريبية · غير متصل بالمصنع'}
+                    : 'يرجى تسجيل الدخول'}
               </span>
             </div>
           </div>
@@ -928,17 +923,6 @@ function AppContent() {
 
         {/* مساحة لوحة التشغيل الفسيحة (Spacious Dashboard Area) */}
         <main className="dashboard-canvas">
-          {/* نسخة العرض: تمييز واضح للبيانات التجريبية عن بيانات المصنع الفعلية — بناء التطوير فقط، لا يظهر في الإنتاج */}
-          {isDemoStripVisible(authMode, import.meta.env.DEV) && (
-            <div className="demo-strip" role="status">
-              <span className="demo-strip__icon" aria-hidden>🧪</span>
-              <span className="demo-strip__text">
-                نسخة العرض التجريبي — البيانات المعروضة تجريبية (أكوادها تبدأ بـ DEMO وأسماؤها تنتهي بـ «تجريبي») ولا تمثل حسابات المصنع الفعلية.
-                {activeRoleLabel ? ` أنت تعمل الآن بصفة: ${activeRoleLabel}.` : ''}
-              </span>
-            </div>
-          )}
-
           {/* شريط تنبيه تعذر الاتصال بالخادم الخلفي */}
           {serverState.status === 'error' && (
             <div className="api-error-strip" role="alert">
@@ -1067,7 +1051,7 @@ function AppContent() {
             ) : activeNav === 'finance-reports' || activeNav === 'reports' ? (
               <FinancialReportsView initialTab="summary" />
             ) : activeNav === 'dashboard' ? (
-              <OperationsBoard />
+              <TaskInboxView onNavigate={setActiveNav} />
             ) : (
               <TaskInboxView onNavigate={setActiveNav} />
             )}

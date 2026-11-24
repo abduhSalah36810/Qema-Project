@@ -107,7 +107,7 @@ describe('صندوق المهام: مطالبات عجز استلام الخام
     const { tasks } = await fetchInboxTasks(['production:orders:view', 'warehouse:claims:resolve'], 'user-receiver');
     expect(tasks.map((t) => t.id)).toEqual(['claim-waiting-claim-1']);
     expect(tasks[0].awaitingOther).toBe(true);
-    expect(tasks[0].nextRole).toBe('أمين المخزن أو المدير العام');
+    expect(tasks[0].nextRole).toBe('أمين المخزن');
   });
 
   it('مدير الإنتاج (بلا صلاحية الحسم) يرى مهمة متابعة بلا إجراء حسم', async () => {

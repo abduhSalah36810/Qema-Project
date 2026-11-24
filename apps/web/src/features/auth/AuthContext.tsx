@@ -31,8 +31,8 @@ export type AuthMode = 'supabase' | 'local_dev' | 'none';
  * في بناء الإنتاج (import.meta.env.DEV = false) لا يظهر إطلاقاً حتى لو استُعيد
  * توكن تطوير قديم من التخزين المحلي، حتى لا يُخلط بين بيانات العرض وبيانات المصنع الفعلية.
  */
-export function isDemoStripVisible(authMode: AuthMode, isDevBuild: boolean): boolean {
-  return isDevBuild && authMode === 'local_dev';
+export function isDemoStripVisible(_authMode: AuthMode, _isDevBuild: boolean): boolean {
+  return false;
 }
 
 /** حالة تحميل الصلاحيات الخادمية من GET /api/v1/auth/me */

@@ -854,9 +854,9 @@ describe('Supabase Auth Integration & Token Handling', () => {
     });
   });
 
-  describe('Demo Strip Visibility (بند 7: شريط النسخة التجريبية لا يظهر في الإنتاج)', () => {
-    it('shows the demo strip only in a dev build running in local_dev mode', () => {
-      expect(isDemoStripVisible('local_dev', true)).toBe(true);
+  describe('Demo Strip Visibility (شريط النسخة التجريبية تم إيقافه تماماً للنشر)', () => {
+    it('never shows the demo strip even in local_dev mode', () => {
+      expect(isDemoStripVisible('local_dev', true)).toBe(false);
     });
 
     it('never shows the demo strip in a production build even with a restored local_dev session', () => {

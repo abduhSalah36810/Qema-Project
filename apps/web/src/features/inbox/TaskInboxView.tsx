@@ -29,10 +29,10 @@ const ROLE_HOME: Record<string, { title: string; focus: string; shortcuts: Short
     title: 'المدير العام',
     focus: 'متابعة التشغيل كاملاً، مؤشرات الأداء، والتقارير التنفيذية.',
     shortcuts: [
-      { navId: 'dashboard', label: 'لوحة التشغيل', icon: '📊', permission: 'reports:view' },
       { navId: 'batches', label: 'أوامر التشغيل', icon: '🧵', permission: 'production:orders:view' },
       { navId: 'report-management', label: 'تقارير الإدارة', icon: '📈', permission: 'finance:reports:view' },
       { navId: 'finance-customers', label: 'العملاء والطلبات', icon: '👥', permission: 'customers:view' },
+      { navId: 'finance-treasury', label: 'الخزينة والسيولة', icon: '🏦', permission: 'finance:cash:view' },
     ],
   },
   warehouse_manager: {

@@ -143,8 +143,8 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                 {user
                   ? 'بيانات المستخدم الموثق'
                   : authState === 'unverified'
-                  ? 'تعذر تأكيد الجلسة مع الخادم'
-                  : 'تسجيل الدخول للنظام'}
+                    ? 'تعذر تأكيد الجلسة مع الخادم'
+                    : 'تسجيل الدخول للنظام'}
               </h2>
               <span className="auth-modal__sub">مصنع القمة للملابس · نظام ERP</span>
             </div>
@@ -192,7 +192,7 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                 {isDevAuthAvailable && (
                   <div>
                     <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.5rem' }}>
-                      تبديل الدور (نسخة العرض): كل عملية مالية يعتمدها شخص غير الذي أنشأها، فبدّل الدور لتجربة الاعتماد.
+                      تبديل الدور السريع:
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem' }}>
                       {Object.entries(roleLabels).map(([rKey, rInfo]) => (
@@ -297,7 +297,7 @@ export function SignInModal({ isOpen, onClose }: SignInModalProps) {
                   <span className="auth-alert__icon" aria-hidden>💻</span>
                   <div className="auth-alert__content" style={{ width: '100%' }}>
                     <strong style={{ color: '#0f766e', fontSize: '1rem', display: 'block', marginBottom: '0.25rem' }}>
-                      اختر دورك في نسخة العرض:
+                      تسجيل الدخول السريع بحسب الدور:
                     </strong>
                     <p style={{ margin: '0 0 0.75rem', fontSize: '0.825rem', color: '#334155' }}>
                       كل دور يرى الشاشات والعمليات المسموح بها له فقط.
