@@ -129,11 +129,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // عداد تتابعي لإعطاء كل حدث هوية فريدة، وضمان مبدأ "الحدث الأحدث هو الفائز" (latest-event-wins)
   const syncSequenceRef = useRef(0);
   const isMountedRef = useRef(true);
+  const verifiedUserIdRef = useRef<string | null>(null);
+  const authzReadyRef = useRef(false);
 
   const clearError = useCallback(() => setError(null), []);
 
   /** إخلاء كامل للهوية والتوكن والصلاحيات محلياً */
   const clearLocalIdentity = useCallback(() => {
+    verifiedUserIdRef.current = null;
+    authzReadyRef.current = false;
     apiClient.setAccessToken(null);
     setUser(null);
     setSession(null);
@@ -163,9 +167,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    const sessionUserId = activeSession.user?.id ?? null;
+    const isSameVerifiedUser =
+      authzReadyRef.current &&
+      verifiedUserIdRef.current !== null &&
+      sessionUserId !== null &&
+      verifiedUserIdRef.current === sessionUserId;
+
     const syncId = ++syncSequenceRef.current;
-    // Fail closed: لا صلاحيات حتى تصل استجابة الخادم
-    setAuthz(LOADING_AUTHZ);
+    // Fail closed: لا صلاحيات حتى تصل استجابة الخادم، إلا عند تحديث التوكن بصمت لنفس المستخدم الموثق
+    if (!isSameVerifiedUser) {
+      verifiedUserIdRef.current = null;
+      authzReadyRef.current = false;
+      setAuthz(LOADING_AUTHZ);
+    }
 
     try {
       apiClient.setAccessToken(activeSession.access_token);
@@ -175,6 +190,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      verifiedUserIdRef.current = identity.id;
+      authzReadyRef.current = true;
       apiClient.setAccessToken(activeSession.access_token);
       setUser(identity);
       setSession(activeSession);
@@ -188,6 +205,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       // إخلاء التوكن المعتمد وعدم إبقاء الواجهة في حالة توثيق زائف
+      verifiedUserIdRef.current = null;
+      authzReadyRef.current = false;
       const errorMsg = describeAuthMeError(err);
       apiClient.setAccessToken(null);
       setUser(null);
