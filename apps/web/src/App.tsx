@@ -634,6 +634,20 @@ function AppContent() {
         app: health.app,
       });
     } catch (err: unknown) {
+      // إعادة محاولة صامتة مرة واحدة لتفادي ظهور رسالة الخطأ أثناء استيقاظ الخادم (Cold Start)
+      if (err instanceof ApiError && (err.isTimeout || err.isNetworkError)) {
+        try {
+          const retryHealth = await apiClient.getHealth();
+          setServerState({
+            status: 'connected',
+            version: retryHealth.version,
+            app: retryHealth.app,
+          });
+          return;
+        } catch {
+          // نتابع لعرض رسالة الخطأ أدناه إذا فشل الاستيقاظ أيضاً
+        }
+      }
       const message =
         err instanceof ApiError
           ? err.message

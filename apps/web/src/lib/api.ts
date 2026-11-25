@@ -129,7 +129,7 @@ export function isApiTarget(targetUrl: string): boolean {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_TIMEOUT_MS = 12000;
 
 /**
  * دالة الاستدعاء الشبكي المركزية مع دعم المهلة والتحقق من الأخطاء وتضمين التوكن المحمي
