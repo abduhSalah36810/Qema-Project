@@ -6,66 +6,70 @@ import '@/styles/workflow.css';
 
 /**
  * الشاشات تُحمَّل عند الطلب (code splitting) حتى لا يُجمَّع التطبيق كله في حزمة واحدة ضخمة؛
- * شاشة المهام تبقى استيراداً مباشراً لأنها نقطة الهبوط الأولى لكل مستخدم.
+ * شاشة المهام تبقى استيراداً مباشراً لأنها نقطة الهبوط الأولى لكل مستخدم،
+ * وبعد تسجيل الدخول تُحمَّل الشاشات المسموح بها في الخلفية لتفتح لحظياً عند الضغط.
  */
-const ProductionOrdersView = lazy(() =>
-  import('@/features/production/ProductionOrdersView').then((m) => ({ default: m.ProductionOrdersView })));
-const DiscrepancyClaimsView = lazy(() =>
-  import('@/features/production/DiscrepancyClaimsView').then((m) => ({ default: m.DiscrepancyClaimsView })));
-const DemandPoolView = lazy(() =>
-  import('@/features/production/DemandPoolView').then((m) => ({ default: m.DemandPoolView })));
-const CustomersView = lazy(() =>
-  import('@/features/customers/CustomersView').then((m) => ({ default: m.CustomersView })));
-const SoldItemsView = lazy(() =>
-  import('@/features/customers/SoldItemsView').then((m) => ({ default: m.SoldItemsView })));
-const CustomerDeliveriesView = lazy(() =>
-  import('@/features/customers/CustomerDeliveriesView').then((m) => ({ default: m.CustomerDeliveriesView })));
-const CustomerReturnsView = lazy(() =>
-  import('@/features/customers/CustomerReturnsView').then((m) => ({ default: m.CustomerReturnsView })));
-const MainWarehouseView = lazy(() =>
-  import('@/features/inventory/MainWarehouseView').then((m) => ({ default: m.MainWarehouseView })));
-const CustomerMaterialsView = lazy(() =>
-  import('@/features/inventory/CustomerMaterialsView').then((m) => ({ default: m.CustomerMaterialsView })));
-const MachineryView = lazy(() =>
-  import('@/features/inventory/MachineryView').then((m) => ({ default: m.MachineryView })));
-const FinishedGoodsView = lazy(() =>
-  import('@/features/inventory/FinishedGoodsView').then((m) => ({ default: m.FinishedGoodsView })));
-const StocktakeView = lazy(() =>
-  import('@/features/inventory/StocktakeView').then((m) => ({ default: m.StocktakeView })));
-const WarehouseGuideView = lazy(() =>
-  import('@/features/inventory/WarehouseGuideView').then((m) => ({ default: m.WarehouseGuideView })));
-const CatalogManagementView = lazy(() =>
-  import('@/features/catalog/CatalogManagementView').then((m) => ({ default: m.CatalogManagementView })));
-const TreasuryView = lazy(() =>
-  import('@/features/finance/TreasuryView').then((m) => ({ default: m.TreasuryView })));
-const ReceiptsDisbursementsView = lazy(() =>
-  import('@/features/finance/ReceiptsDisbursementsView').then((m) => ({ default: m.ReceiptsDisbursementsView })));
-const CustodyView = lazy(() =>
-  import('@/features/finance/CustodyView').then((m) => ({ default: m.CustodyView })));
-const SuppliersView = lazy(() =>
-  import('@/features/finance/SuppliersView').then((m) => ({ default: m.SuppliersView })));
-const SuppliersDirectoryView = lazy(() =>
-  import('@/features/purchasing/SuppliersDirectoryView').then((m) => ({ default: m.SuppliersDirectoryView })));
-const PurchasedItemsView = lazy(() =>
-  import('@/features/finance/PurchasedItemsView').then((m) => ({ default: m.PurchasedItemsView })));
-const PurchaseOrdersView = lazy(() =>
-  import('@/features/purchasing/PurchaseOrdersView').then((m) => ({ default: m.PurchaseOrdersView })));
-const PaymentsCollectionsView = lazy(() =>
-  import('@/features/finance/PaymentsCollectionsView').then((m) => ({ default: m.PaymentsCollectionsView })));
-const PayrollFinanceView = lazy(() =>
-  import('@/features/finance/PayrollFinanceView').then((m) => ({ default: m.PayrollFinanceView })));
-const FinancialReportsView = lazy(() =>
-  import('@/features/finance/FinancialReportsView').then((m) => ({ default: m.FinancialReportsView })));
-const IncomeStatementView = lazy(() =>
-  import('@/features/finance/reports/IncomeStatementView').then((m) => ({ default: m.IncomeStatementView })));
-const BalanceSheetView = lazy(() =>
-  import('@/features/finance/reports/BalanceSheetView').then((m) => ({ default: m.BalanceSheetView })));
-const AccountStatementsView = lazy(() =>
-  import('@/features/finance/reports/AccountStatementsView').then((m) => ({ default: m.AccountStatementsView })));
-const ManagementReportsView = lazy(() =>
-  import('@/features/finance/reports/ManagementReportsView').then((m) => ({ default: m.ManagementReportsView })));
-const MasterDataView = lazy(() =>
-  import('@/features/master-data/MasterDataView').then((m) => ({ default: m.MasterDataView })));
+const SCREEN_LOADERS = {
+  productionOrders: () => import('@/features/production/ProductionOrdersView').then((m) => ({ default: m.ProductionOrdersView })),
+  discrepancyClaims: () => import('@/features/production/DiscrepancyClaimsView').then((m) => ({ default: m.DiscrepancyClaimsView })),
+  demandPool: () => import('@/features/production/DemandPoolView').then((m) => ({ default: m.DemandPoolView })),
+  customers: () => import('@/features/customers/CustomersView').then((m) => ({ default: m.CustomersView })),
+  soldItems: () => import('@/features/customers/SoldItemsView').then((m) => ({ default: m.SoldItemsView })),
+  customerDeliveries: () => import('@/features/customers/CustomerDeliveriesView').then((m) => ({ default: m.CustomerDeliveriesView })),
+  customerReturns: () => import('@/features/customers/CustomerReturnsView').then((m) => ({ default: m.CustomerReturnsView })),
+  mainWarehouse: () => import('@/features/inventory/MainWarehouseView').then((m) => ({ default: m.MainWarehouseView })),
+  customerMaterials: () => import('@/features/inventory/CustomerMaterialsView').then((m) => ({ default: m.CustomerMaterialsView })),
+  machinery: () => import('@/features/inventory/MachineryView').then((m) => ({ default: m.MachineryView })),
+  finishedGoods: () => import('@/features/inventory/FinishedGoodsView').then((m) => ({ default: m.FinishedGoodsView })),
+  stocktake: () => import('@/features/inventory/StocktakeView').then((m) => ({ default: m.StocktakeView })),
+  warehouseGuide: () => import('@/features/inventory/WarehouseGuideView').then((m) => ({ default: m.WarehouseGuideView })),
+  catalogManagement: () => import('@/features/catalog/CatalogManagementView').then((m) => ({ default: m.CatalogManagementView })),
+  treasury: () => import('@/features/finance/TreasuryView').then((m) => ({ default: m.TreasuryView })),
+  receiptsDisbursements: () => import('@/features/finance/ReceiptsDisbursementsView').then((m) => ({ default: m.ReceiptsDisbursementsView })),
+  custody: () => import('@/features/finance/CustodyView').then((m) => ({ default: m.CustodyView })),
+  suppliers: () => import('@/features/finance/SuppliersView').then((m) => ({ default: m.SuppliersView })),
+  suppliersDirectory: () => import('@/features/purchasing/SuppliersDirectoryView').then((m) => ({ default: m.SuppliersDirectoryView })),
+  purchasedItems: () => import('@/features/finance/PurchasedItemsView').then((m) => ({ default: m.PurchasedItemsView })),
+  purchaseOrders: () => import('@/features/purchasing/PurchaseOrdersView').then((m) => ({ default: m.PurchaseOrdersView })),
+  paymentsCollections: () => import('@/features/finance/PaymentsCollectionsView').then((m) => ({ default: m.PaymentsCollectionsView })),
+  payrollFinance: () => import('@/features/finance/PayrollFinanceView').then((m) => ({ default: m.PayrollFinanceView })),
+  financialReports: () => import('@/features/finance/FinancialReportsView').then((m) => ({ default: m.FinancialReportsView })),
+  incomeStatement: () => import('@/features/finance/reports/IncomeStatementView').then((m) => ({ default: m.IncomeStatementView })),
+  balanceSheet: () => import('@/features/finance/reports/BalanceSheetView').then((m) => ({ default: m.BalanceSheetView })),
+  accountStatements: () => import('@/features/finance/reports/AccountStatementsView').then((m) => ({ default: m.AccountStatementsView })),
+  managementReports: () => import('@/features/finance/reports/ManagementReportsView').then((m) => ({ default: m.ManagementReportsView })),
+  masterData: () => import('@/features/master-data/MasterDataView').then((m) => ({ default: m.MasterDataView })),
+};
+
+const ProductionOrdersView = lazy(SCREEN_LOADERS.productionOrders);
+const DiscrepancyClaimsView = lazy(SCREEN_LOADERS.discrepancyClaims);
+const DemandPoolView = lazy(SCREEN_LOADERS.demandPool);
+const CustomersView = lazy(SCREEN_LOADERS.customers);
+const SoldItemsView = lazy(SCREEN_LOADERS.soldItems);
+const CustomerDeliveriesView = lazy(SCREEN_LOADERS.customerDeliveries);
+const CustomerReturnsView = lazy(SCREEN_LOADERS.customerReturns);
+const MainWarehouseView = lazy(SCREEN_LOADERS.mainWarehouse);
+const CustomerMaterialsView = lazy(SCREEN_LOADERS.customerMaterials);
+const MachineryView = lazy(SCREEN_LOADERS.machinery);
+const FinishedGoodsView = lazy(SCREEN_LOADERS.finishedGoods);
+const StocktakeView = lazy(SCREEN_LOADERS.stocktake);
+const WarehouseGuideView = lazy(SCREEN_LOADERS.warehouseGuide);
+const CatalogManagementView = lazy(SCREEN_LOADERS.catalogManagement);
+const TreasuryView = lazy(SCREEN_LOADERS.treasury);
+const ReceiptsDisbursementsView = lazy(SCREEN_LOADERS.receiptsDisbursements);
+const CustodyView = lazy(SCREEN_LOADERS.custody);
+const SuppliersView = lazy(SCREEN_LOADERS.suppliers);
+const SuppliersDirectoryView = lazy(SCREEN_LOADERS.suppliersDirectory);
+const PurchasedItemsView = lazy(SCREEN_LOADERS.purchasedItems);
+const PurchaseOrdersView = lazy(SCREEN_LOADERS.purchaseOrders);
+const PaymentsCollectionsView = lazy(SCREEN_LOADERS.paymentsCollections);
+const PayrollFinanceView = lazy(SCREEN_LOADERS.payrollFinance);
+const FinancialReportsView = lazy(SCREEN_LOADERS.financialReports);
+const IncomeStatementView = lazy(SCREEN_LOADERS.incomeStatement);
+const BalanceSheetView = lazy(SCREEN_LOADERS.balanceSheet);
+const AccountStatementsView = lazy(SCREEN_LOADERS.accountStatements);
+const ManagementReportsView = lazy(SCREEN_LOADERS.managementReports);
+const MasterDataView = lazy(SCREEN_LOADERS.masterData);
 
 import { TaskInboxView } from '@/features/inbox/TaskInboxView';
 import { apiClient, ApiError } from '@/lib/api';
@@ -662,6 +666,17 @@ function AppContent() {
   useEffect(() => {
     void checkServerHealth();
   }, [checkServerHealth]);
+
+  // التحميل المسبق لملفات الشاشات في الخلفية بعد تسجيل الدخول لفتحها لحظياً عند التنقل
+  useEffect(() => {
+    if (!isAuthorizedSession || import.meta.env.MODE === 'test') return;
+    const timer = window.setTimeout(() => {
+      for (const loadScreen of Object.values(SCREEN_LOADERS)) {
+        void loadScreen().catch(() => undefined);
+      }
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [isAuthorizedSession]);
 
   const toggleGroup = (groupId: string) => {
     setOpenGroups((prev) => ({
