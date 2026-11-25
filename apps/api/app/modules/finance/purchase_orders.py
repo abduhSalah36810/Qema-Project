@@ -400,6 +400,7 @@ async def list_purchase_orders(
     supplier_id: Optional[str] = None,
     production_order_id: Optional[str] = None,
     search: Optional[str] = None,
+    limit: int = 100,
     user_roles: Optional[Set[str]] = None,
 ) -> list[PurchaseOrderRead]:
     """استعراض قائمة أوامر الشراء مع الفلاتر وتطبيق حجب الأسعار لمن ليس له صلاحية مالية."""
@@ -423,7 +424,7 @@ async def list_purchase_orders(
             (PurchaseOrder.order_number.ilike(term)) | (Supplier.name.ilike(term)) | (Supplier.code.ilike(term))
         )
 
-    pos = (await db.scalars(stmt)).all()
+    pos = (await db.scalars(stmt.limit(limit))).all()
     results: list[PurchaseOrderRead] = []
     for po in pos:
         results.append(await _serialize_po(db, po, user_roles))
